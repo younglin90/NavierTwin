@@ -1,0 +1,113 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "naviertwin"
+version = "0.1.0"
+description = "CFD 후처리 결과를 AI/ROM 디지털 트윈으로 변환하는 툴"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [{ name = "NavierTwin Contributors" }]
+keywords = ["CFD", "digital-twin", "ROM", "AI", "fluid-dynamics"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+]
+
+[project.optional-dependencies]
+core = [
+    "PySide6>=6.6",
+    "pyvista>=0.43",
+    "pyvistaqt>=0.11",
+    "meshio>=5.3",
+    "h5py>=3.10",
+    "numpy>=1.26",
+    "scipy>=1.12",
+    "torch>=2.2",
+    "scikit-learn>=1.4",
+    "smt>=2.3",
+    "pysindy>=1.7",
+    "pyspod>=1.0",
+    "pydmd>=1.0",
+    "SALib>=1.5",
+    "shap>=0.45",
+    "jinja2>=3.1",
+    "weasyprint>=61",
+    "onnx>=1.16",
+    "fastapi>=0.111",
+    "uvicorn>=0.29",
+]
+full = [
+    "naviertwin[core]",
+    "foamlib>=0.6",
+    "pycgns>=6.1",
+    "fluidsimfoam>=0.1",
+    "mamba-ssm>=2.2",
+    "torch-geometric>=2.5",
+    "e3nn>=0.5",
+    "escnn>=1.0",
+    "torchdiffeq>=0.2",
+    "deepxde>=1.11",
+    "neuraloperator>=0.3",
+    "dapper>=1.2",
+    "filterpy>=1.4",
+    "uqpy>=4.1",
+    "openturns>=1.22",
+    "pysr>=0.18",
+    "openmdao>=3.28",
+    "pygmo>=2.19",
+    "pymeshlab>=2023.12",
+    "gmsh>=4.12",
+    "dedalus>=3.1",
+]
+dev = [
+    "pytest>=8.1",
+    "pytest-cov>=5.0",
+    "ruff>=0.4",
+    "isort>=5.13",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+naviertwin = "naviertwin.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["naviertwin"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+known_first_party = ["naviertwin"]
+src_paths = ["src"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
