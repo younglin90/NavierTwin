@@ -18,9 +18,10 @@ CFD 후처리 결과 데이터 → AI/ROM/Operator Learning → 디지털 트윈
 |--------|------|
 | GUI | PySide6 (Qt6), QSS 다크테마, i18n(한/영) |
 | 3D 시각화 | PyVista + pyvistaqt, pvpython(ParaView 배치 렌더링) |
-| CFD I/O | meshio, foamlib(OpenFOAM 현대적 래퍼), fluidfoam, pyCGNS, h5py, SU2 Python Wrapper |
+| CFD I/O | meshio, foamlib(OpenFOAM 현대적 래퍼), ofpp(MIT, 경량 OpenFOAM 파서), fluidfoam, pyCGNS, h5py, SU2 Python Wrapper |
 | OpenFOAM 자동화 | fluidsimfoam (케이스 생성·실행·후처리 자동화) |
 | 내부 포맷 | HDF5 (.ntwin) — 메쉬+필드+메타+모델가중치 |
+| POD/ROM | modred(BSD-2, MPI 병렬 POD/BPOD), pyMOR(BSD-2, 종합 ROM 프레임워크) |
 | 차원축소(선형) | NumPy/SciPy |
 | 차원축소(비선형) | PyTorch |
 | ROM/모달 | PyDMD, PySPOD(SPOD 병렬), NumPy |
@@ -45,7 +46,7 @@ CFD 후처리 결과 데이터 → AI/ROM/Operator Learning → 디지털 트윈
 | 설명가능성 | SHAP, captum |
 | 모델 내보내기 | ONNX, TorchScript |
 | API 서버 | FastAPI (선택) |
-| 패키징 | PyInstaller + Inno Setup |
+| 패키징 | PyInstaller + pyinstaller-hooks-contrib(Apache 2.0, torch/PySide6 훅) + Inno Setup |
 | 벤치마크 데이터셋 | PDEBench, AirfRANS, CFDBench, FlowBench |
 
 ---
@@ -438,3 +439,220 @@ NavierTwin/
 | CFDBench | Luo et al., arXiv 2023 |
 | FlowBench | arXiv:2409.18032, 2024 |
 | escnn | Cesa et al., QUVA-Lab/escnn |
+| ofpp | xu-xianghua/ofpp, GitHub (MIT) |
+| modred | Belson et al., GitHub belson17/modred (BSD-2) |
+| pyMOR | Milk et al., SIAM J. Sci. Comput. 2016; pymor/pymor (BSD-2) |
+| VTKHDF 포맷 | Kitware Blog, "How to write time-dependent data in VTKHDF files", 2023 |
+| pyinstaller-hooks-contrib | pyinstaller/pyinstaller-hooks-contrib (Apache 2.0) |
+
+---
+
+## 9. 모듈 구현 전략
+
+핵심 모듈의 구현 방법과 라이브러리 선택 근거를 정리한다.
+
+### 9.1 CFD Reader — OpenFOAM 폴백 체인
+
+```
+pv.POpenFOAMReader (VTK 내장, 가장 안정)
+  └── 실패 시 → ofpp (MIT, ASCII/binary 양쪽, numpy 직반환)
+                └── 실패 시 → foamlib (GPL-3.0, 격리 필요)
+```
+
+- `pv.POpenFOAMReader`: `.foam` 더미 파일이 케이스 루트에 있어야 함. 병렬 분해(decomposedCase) 지원. `mesh.point_data["U"]`로 직접 필드 접근.
+- `ofpp.FoamMesh`: MIT 라이선스로 직접 포함 가능. `points`, `faces`, `owner`, `neighbour`를 읽어 PyVista `UnstructuredGrid`로 재조립.
+- `foamlib`: GPL-3.0이므로 서브프로세스 격리 또는 오픈소스 전용 사용.
+
+### 9.2 CFD Reader — Fluent / CGNS
+
+| 포맷 | 리더 | 비고 |
+|------|------|------|
+| Fluent `.cas.h5` | `pv.FLUENTCFFReader` | PyVista 내장 (MIT) |
+| Fluent `.cas/.dat` | `pv.FluentReader` | PyVista 내장 (MIT) |
+| CGNS | `pv.CGNSReader` | VTK 9.0+ 내장 |
+| CGNS (변환) | `meshio` (`src/meshio/cgns/`) | MIT, CGNS → VTK 브릿지 |
+
+### 9.3 POD/SVD 구현
+
+```python
+# pod.py 핵심 — sklearn randomized SVD (대용량 스냅샷)
+from sklearn.utils.extmath import randomized_svd
+import numpy as np
+
+def compute_pod(snapshots: np.ndarray, n_modes: int):
+    """snapshots: (n_features, n_snapshots)"""
+    U, s, Vt = randomized_svd(snapshots, n_components=n_modes)
+    energy = np.cumsum(s**2) / np.sum(s**2)  # 에너지 누적 기여율
+    return U, s, Vt, energy
+```
+
+- **modred** (`modred/pod.py`): MPI 병렬화 필요 시 사용. `InnerProductArray`로 임의 데이터 타입 지원.
+- **pyMOR** (`src/pymor/algorithms/svd_ei.py`): Gram-Schmidt POD 기반, `singular_values` 직접 노출. 아키텍처 참고.
+- 대용량 단순 케이스: `torch.linalg.svd` (GPU 가속 가능).
+
+### 9.4 Q-criterion / λ₂ 구현
+
+```python
+# q_criterion.py
+def compute_q_criterion(mesh: pv.UnstructuredGrid) -> pv.UnstructuredGrid:
+    """PyVista VTK GradientFilter 기반 — cell-centered velocity 주의"""
+    if "U" in mesh.cell_data:
+        mesh = mesh.cell_data_to_point_data()
+    return mesh.compute_derivative(scalars="U", qcriterion=True, vorticity=True)
+
+# lambda2.py — numpy 직접 구현
+def compute_lambda2(grad_u: np.ndarray) -> np.ndarray:
+    """grad_u: (N_cells, 3, 3) 속도 구배 텐서"""
+    S = 0.5 * (grad_u + grad_u.transpose(0, 2, 1))     # 변형률 텐서
+    O = 0.5 * (grad_u - grad_u.transpose(0, 2, 1))     # 회전률 텐서
+    M = S @ S + O @ O
+    eigvals = np.linalg.eigvalsh(M)                     # (N, 3) — 오름차순
+    return eigvals[:, 1]                                # λ₂ = 두 번째 고유값
+```
+
+### 9.5 y+ 벽면 분석 구현
+
+```python
+# yplus.py
+import numpy as np
+from numpy.typing import NDArray
+
+def compute_yplus(
+    wall_shear_stress: NDArray,  # shape (N_wall_cells, 3) [Pa]
+    rho: float,                  # 밀도 [kg/m³]
+    nu: float,                   # 동점성계수 [m²/s]
+    y_wall: NDArray,             # 첫 번째 셀 중심까지 거리 [m]
+) -> NDArray:
+    tau_w = np.linalg.norm(wall_shear_stress, axis=-1)
+    u_tau = np.sqrt(tau_w / rho)   # friction velocity
+    return u_tau * y_wall / nu
+
+def estimate_first_cell_height(
+    y_plus_target: float, Re: float, L: float,
+    nu: float, rho: float, U_inf: float
+) -> float:
+    """Schlichting 경계층 상관식 기반 첫 번째 셀 높이 추정"""
+    Cf = 0.026 * Re**(-1/7)
+    tau_w = 0.5 * Cf * rho * U_inf**2
+    u_tau = np.sqrt(tau_w / rho)
+    return y_plus_target * nu / u_tau
+```
+
+- OpenFOAM 케이스의 경우 `postProcess -func wallShearStress` 결과를 ofpp/foamlib로 직접 읽어 사용.
+- 결과 없으면 속도 구배 텐서의 벽면 법선 성분에서 Python으로 직접 계산.
+
+### 9.6 .ntwin 내부 포맷 (VTKHDF 기반)
+
+ParaView 직접 호환을 위해 VTKHDF 표준을 기반으로 확장:
+
+```
+project.ntwin  (HDF5)
+├── VTKHDF/                      ← ParaView VTKHDF 표준 그룹
+│   ├── attrs: Version=(2,0), Type="UnstructuredGrid"
+│   ├── Points                   shape (N_total, 3), resizable
+│   ├── Connectivity
+│   ├── Offsets
+│   ├── Types                    VTK cell type codes
+│   ├── NumberOfPoints           per-timestep
+│   ├── NumberOfCells
+│   ├── PointData/
+│   │   ├── U                   velocity, shape (N_total, 3)
+│   │   └── p                   pressure, shape (N_total,)
+│   └── Steps/
+│       ├── Values               time values array
+│       ├── PointOffsets         per-timestep pointer into Points
+│       └── PointDataOffsets/
+│           ├── U
+│           └── p
+└── NavierTwin/                  ← 확장 그룹 (NavierTwin 전용)
+    ├── Metadata/
+    │   ├── project_info         JSON string (이름, 작성자, 날짜)
+    │   └── cfd_params           JSON string (Re, 경계조건 등)
+    ├── Models/
+    │   ├── POD/
+    │   │   ├── modes            shape (n_features, n_modes)
+    │   │   ├── singular_values
+    │   │   └── energy
+    │   └── FNO/
+    │       └── weights          TorchScript 직렬화 bytes
+    └── Sessions/
+        └── last_state           JSON string (GUI 상태)
+```
+
+**구현 원칙:**
+- 메쉬 토폴로지(Points, Connectivity)는 첫 타임스텝에만 저장, 이후 `PointOffsets`으로 포인터만 이동
+- field는 `dset.resize()` + `dset[n:]` append 패턴으로 스트리밍 저장
+- ParaView에서 `VTKHDF/` 그룹만 읽으면 타임스텝 시각화 즉시 가능
+
+### 9.7 PySide6 + pyvistaqt Qt 뷰어 패턴
+
+```python
+# widgets/vtk_viewer.py
+import os
+os.environ["QT_API"] = "pyside6"
+from pyvistaqt import QtInteractor
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QSlider, QComboBox
+from PySide6.QtCore import Qt, Signal
+
+class VtkViewer(QWidget):
+    timestep_changed = Signal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+
+        self.plotter = QtInteractor(self)
+        layout.addWidget(self.plotter, stretch=9)
+
+        # 타임스텝 슬라이더
+        self.slider = QSlider(Qt.Horizontal)
+        self.slider.valueChanged.connect(self.timestep_changed)
+        layout.addWidget(self.slider, stretch=1)
+
+        # 컬러맵 선택기
+        self.cmap_box = QComboBox()
+        self.cmap_box.addItems(["coolwarm", "viridis", "jet", "rainbow"])
+        self.cmap_box.currentTextChanged.connect(self._rerender)
+        layout.addWidget(self.cmap_box)
+
+    def show_mesh(self, mesh, scalars: str):
+        self.plotter.clear()
+        self.plotter.add_mesh(mesh, scalars=scalars, cmap=self.cmap_box.currentText())
+        self.plotter.reset_camera()
+
+    def _rerender(self, _):
+        self.plotter.render()
+```
+
+- `QtInteractor`를 `QVBoxLayout`에 직접 임베드 (독립 창 모드는 `BackgroundPlotter` 사용)
+- VTK 내장 위젯(`add_slider_widget`)과 Qt 위젯을 혼용하지 말 것 — UI 일관성 저하
+
+### 9.8 PyInstaller + PyTorch/CUDA 패키징 전략
+
+```python
+# installer/naviertwin.spec  (핵심 부분)
+from PyInstaller.utils.hooks import collect_all
+
+torch_datas, torch_bins, torch_hidden   = collect_all("torch")
+pyside6_datas, pyside6_bins, pyside6_h  = collect_all("PySide6")
+pyvista_datas, _, pyvista_h             = collect_all("pyvista")
+
+a = Analysis(
+    ["main.py"],
+    datas=[*torch_datas, *pyside6_datas, *pyvista_datas,
+           ("src/naviertwin/gui/styles/*.qss", "styles")],
+    binaries=[*torch_bins, *pyside6_bins],
+    hiddenimports=[
+        *torch_hidden, *pyside6_h, *pyvista_h,
+        "vtkmodules.all",          # PyVista 동적 VTK 로드
+        "torch._C._jit",
+    ],
+    excludes=["tkinter", "matplotlib", "torch.distributions"],
+)
+```
+
+**필수 규칙:**
+- `--onedir` 사용 (`--onefile`은 CUDA DLL 경로 문제로 실패)
+- `vtkmodules.all` hiddenimport 필수
+- `--copy-metadata torch` 추가 (일부 PyTorch 기능이 패키지 메타데이터를 읽음)
+- Windows Defender 오탐지 방지를 위해 Inno Setup + 코드 서명 권장
