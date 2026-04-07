@@ -2,37 +2,35 @@
 
 > Phase별 세부 태스크 체크리스트. 버전별 목표·범위·근거는 `PLAN.md` 참조.
 
-## 현재 단계: v0.1.0 — 프로젝트 스캐폴딩
+## 현재 단계: v1.0.0 — MVP 릴리스
 
 ---
 
 ## v0.x — 기반 구축
 
-### v0.1.0 — 프로젝트 스캐폴딩
-- [ ] `pyproject.toml` 작성 (setuptools, `[core]` / `[full]` / `[dev]` optional extras)
-- [ ] `src/naviertwin/` 전체 디렉토리 구조 생성 (SPEC.md §4 기준)
-- [ ] 각 모듈 `__init__.py` + `base.py` 추상 클래스 작성
-- [ ] `utils/config.py` — JSON 기반 설정 관리
-- [ ] `utils/logger.py` — 공통 로거
-- [ ] `main.py` — CLI 진입점
-- [ ] `pytest.ini` / `pyproject.toml` 테스트 설정
-- [ ] `ruff.toml` + `.isort.cfg` 린터 설정
+### v0.1.0 — 프로젝트 스캐폴딩 ✅
+- [x] `pyproject.toml` 작성 (setuptools, `[core]` / `[full]` / `[dev]` optional extras)
+- [x] `src/naviertwin/` 전체 디렉토리 구조 생성 (SPEC.md §4 기준)
+- [x] 각 모듈 `__init__.py` + `base.py` 추상 클래스 작성
+- [x] `utils/config.py` — JSON 기반 설정 관리
+- [x] `utils/logger.py` — 공통 로거
+- [x] `main.py` — CLI 진입점
+- [x] `pyproject.toml` 테스트/린터 설정
 
-### v0.2.0 — CFD I/O 기초 + .ntwin 포맷
-- [ ] `core/cfd_reader/base_reader.py` — `BaseReader` ABC, `CFDDataset` 데이터클래스
-- [ ] `core/cfd_reader/reader_factory.py` — 확장자 기반 자동 감지
-- [ ] `core/cfd_reader/openfoam_reader.py` — `pv.POpenFOAMReader` 우선, `ofpp` 폴백
-- [ ] `core/cfd_reader/vtk_reader.py` — VTK/VTU/STL (meshio, PyVista)
-- [ ] `core/export/ntwin_format.py` — `.ntwin` HDF5 저장/로드 (VTKHDF 구조)
-- [ ] 타임스텝 append 스트리밍 저장 구현
-- [ ] `tests/test_cfd_reader.py`
+### v0.2.0 — CFD I/O 기초 + .ntwin 포맷 ✅
+- [x] `core/cfd_reader/base.py` — `BaseReader` ABC, `CFDDataset` 데이터클래스
+- [x] `core/cfd_reader/reader_factory.py` — 확장자 기반 자동 감지
+- [x] `core/cfd_reader/openfoam_reader.py` — `pv.POpenFOAMReader` 우선, `ofpp` 폴백
+- [x] `core/cfd_reader/vtk_reader.py` — VTK/VTU/STL (PyVista)
+- [x] `core/export/ntwin_format.py` — `.ntwin` HDF5 저장/로드 (VTKHDF 구조)
+- [x] 타임스텝 append 스트리밍 저장 구현
+- [x] `tests/test_cfd_reader.py`
 
-### v0.3.0 — 기초 유동 분석
-- [ ] `core/flow_analysis/vortex/q_criterion.py` — Q-criterion (`pv.compute_derivative`)
-- [ ] `core/flow_analysis/vortex/lambda2.py` — λ₂ (numpy eigvalsh 직접 구현)
-- [ ] `core/flow_analysis/statistics/fft_psd.py` — FFT, PSD, 주파수 피크
-- [ ] `core/flow_analysis/boundary_layer/yplus.py` — y+, u_tau, Cf, 첫 번째 셀 높이 추정
-- [ ] `tests/test_flow_analysis.py`
+### v0.3.0 — 기초 유동 분석 ✅
+- [x] `core/flow_analysis/vortex/q_criterion.py` — Q-criterion + λ₂
+- [x] `core/flow_analysis/statistics/fft_psd.py` — FFT, PSD, 주파수 피크
+- [x] `core/flow_analysis/boundary_layer/yplus.py` — y+, u_tau, Cf, 첫 번째 셀 높이 추정
+- [x] `tests/test_flow_analysis.py`
 
 ---
 
