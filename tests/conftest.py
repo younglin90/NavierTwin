@@ -5,9 +5,29 @@ pyvista 없이도 실행 가능하도록 numpy만 사용하여 가짜 메쉬 객
 
 Usage:
     모든 테스트에서 ``sample_mesh`` 픽스처를 자동으로 사용 가능.
+
+Marks:
+    optional: pyCGNS, gmsh 등 optional 의존성이 필요한 테스트.
+              CI 기본 실행: ``pytest -m "not optional"``
+    slow: 실행 시간이 긴 테스트.
 """
 
 from __future__ import annotations
+
+import pytest
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """커스텀 pytest 마커 등록."""
+    config.addinivalue_line(
+        "markers",
+        "optional: pyCGNS, gmsh 등 optional 의존성이 필요한 테스트 "
+        "(CI 기본 실행에서 제외: pytest -m 'not optional')",
+    )
+    config.addinivalue_line(
+        "markers",
+        "slow: 실행 시간이 긴 테스트",
+    )
 
 from typing import Any
 

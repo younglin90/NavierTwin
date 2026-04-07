@@ -57,15 +57,18 @@
 - [x] `installer/naviertwin.spec` — PyInstaller `--onedir` 설정
 - [x] `tests/test_reduction.py`, `tests/test_surrogate.py`, `tests/test_twin.py`
 
-### v1.1.0 — CFD I/O 확장 + 검증 강화
-- [ ] `core/cfd_reader/fluent_reader.py` — `.cas/.dat`, `.cas.h5/.dat.h5`
-- [ ] `core/cfd_reader/cgns_reader.py` — CGNS (`pv.CGNSReader`, pyCGNS)
-- [ ] `core/cfd_reader/su2_reader.py` — SU2 Python Wrapper
-- [ ] `core/tools/mesh_generator.py` — 채널/실린더/익형 파라미터 메쉬 (Gmsh)
-- [ ] `core/tools/mesh_processor.py` — 단순화, 스무딩, 품질 검사 (PyMeshLab)
-- [ ] `core/validation/analytic_solutions.py` — Couette, Poiseuille (Dedalus)
-- [ ] 해석해 vs 수치해 자동 비교 GUI 패널 연동
-- [ ] `tests/test_analytic.py`
+### v1.1.0 — CFD I/O 확장 (3 리더) ✅ (부분 완료 — 3 리더 구현)
+- [x] `core/cfd_reader/fluent_reader.py` — `.cas/.dat` ASCII (pv.FluentReader → meshio → FluentASCIIParser, sibling .dat 자동 감지)
+- [x] `core/cfd_reader/cgns_reader.py` — CGNS (`pv.CGNSReader` → pyCGNS → h5py → meshio)
+- [x] `core/cfd_reader/gmsh_reader.py` — `.msh` v2.2/v4.1 (gmsh probe → meshio)
+- [x] `core/cfd_reader/_mesh_utils.py` — 공통 메쉬 변환 헬퍼
+- [x] `tests/test_cfd_io_expansion.py` — 26 테스트 (25 passed, 1 skipped/optional)
+- [ ] `core/cfd_reader/su2_reader.py` — SU2 Python Wrapper (v1.1.x)
+- [ ] `core/tools/mesh_generator.py` — 채널/실린더/익형 파라미터 메쉬 (Gmsh) (v1.1.x)
+- [ ] `core/tools/mesh_processor.py` — 단순화, 스무딩, 품질 검사 (PyMeshLab) (v1.1.x)
+- [ ] `core/validation/analytic_solutions.py` — Couette, Poiseuille (Dedalus) (v1.1.x)
+- [ ] 해석해 vs 수치해 자동 비교 GUI 패널 연동 (v1.1.x)
+- [ ] `tests/test_analytic.py` (v1.1.x)
 
 ### v1.2.0 — 비선형 차원축소 + SPOD + 고급 유동분석
 - [ ] `core/dimensionality_reduction/nonlinear/autoencoder.py` — AE (PyTorch)
