@@ -26,7 +26,7 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="naviertwin",
         description=(
             "NavierTwin — CFD 후처리 결과를 AI/ROM 디지털 트윈으로 변환하는 툴\n"
-            "버전: 0.1.0"
+            "버전: 1.0.0"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -39,7 +39,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version",
         action="version",
-        version="%(prog)s 0.1.0",
+        version="%(prog)s 1.0.0",
     )
     parser.add_argument(
         "--config",
@@ -78,18 +78,12 @@ def _run_gui(config_path: str | None) -> int:
 
     app = QApplication(sys.argv)
     app.setApplicationName("NavierTwin")
-    app.setApplicationVersion("0.1.0")
+    app.setApplicationVersion("1.0.0")
     app.setOrganizationName("NavierTwin")
 
-    # TODO(v1.0): MainWindow 구현 후 연결
-    from PySide6.QtWidgets import QLabel, QMainWindow  # noqa: PLC0415
+    from naviertwin.gui.main_window import MainWindow  # noqa: PLC0415
 
-    window = QMainWindow()
-    window.setWindowTitle("NavierTwin v0.1.0")
-    window.resize(1280, 800)
-    label = QLabel("NavierTwin — 스캐폴딩 단계 (v0.1.0)\nGUI는 v1.0에서 구현됩니다.")
-    label.setAlignment(label.alignment())
-    window.setCentralWidget(label)
+    window = MainWindow()
     window.show()
 
     return app.exec()

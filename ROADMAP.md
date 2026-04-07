@@ -2,7 +2,7 @@
 
 > Phase별 세부 태스크 체크리스트. 버전별 목표·범위·근거는 `PLAN.md` 참조.
 
-## 현재 단계: v1.0.0 — MVP 릴리스
+## 현재 단계: v1.1.0 — CFD I/O 확장 + 검증 강화
 
 ---
 
@@ -36,26 +36,26 @@
 
 ## v1.x — MVP & 핵심 ROM
 
-### v1.0.0 — MVP 릴리스
-- [ ] `core/dimensionality_reduction/linear/pod.py` — Snapshot POD, 에너지 누적 곡선 (modred)
-- [ ] `core/dimensionality_reduction/linear/randomized_svd.py`
-- [ ] `core/flow_analysis/modal/dmd.py` — DMD, FbDMD (PyDMD)
-- [ ] `core/surrogate/rbf_surrogate.py` (SMT)
-- [ ] `core/surrogate/kriging_surrogate.py` (SMT)
-- [ ] `core/digital_twin/twin_engine.py` — `predict(params) → field` 파이프라인
-- [ ] `core/validation/metrics.py` — RMSE, R², L2 norm
-- [ ] `gui/main_window.py` — 6패널 탭 호스트
-- [ ] `gui/panels/import_panel.py`
-- [ ] `gui/panels/analyze_panel.py`
-- [ ] `gui/panels/reduce_panel.py`
-- [ ] `gui/panels/model_panel.py`
-- [ ] `gui/panels/twin_panel.py`
-- [ ] `gui/panels/export_panel.py`
-- [ ] `gui/widgets/vtk_viewer.py` — `QtInteractor` 임베드, 타임스텝 슬라이더, 컬러맵 선택기
-- [ ] `gui/styles/dark_theme.qss`
-- [ ] `.ntwin` 프로젝트 저장/복원 연동
-- [ ] `installer/naviertwin.spec` — PyInstaller `--onedir` 설정
-- [ ] `tests/test_reduction.py`, `tests/test_surrogate.py`, `tests/test_twin.py`
+### v1.0.0 — MVP 릴리스 ✅
+- [x] `core/dimensionality_reduction/linear/pod.py` — Snapshot POD, 에너지 누적 곡선 (modred)
+- [x] `core/dimensionality_reduction/linear/randomized_svd.py`
+- [x] `core/flow_analysis/modal/dmd.py` — DMD, FbDMD (PyDMD)
+- [x] `core/surrogate/rbf_surrogate.py` (SMT)
+- [x] `core/surrogate/kriging_surrogate.py` (SMT)
+- [x] `core/digital_twin/twin_engine.py` — `predict(params) → field` 파이프라인
+- [x] `core/validation/metrics.py` — RMSE, R², L2 norm
+- [x] `gui/main_window.py` — 6패널 탭 호스트
+- [x] `gui/panels/import_panel.py`
+- [x] `gui/panels/analyze_panel.py`
+- [x] `gui/panels/reduce_panel.py`
+- [x] `gui/panels/model_panel.py`
+- [x] `gui/panels/twin_panel.py`
+- [x] `gui/panels/export_panel.py`
+- [x] `gui/widgets/vtk_viewer.py` — `QtInteractor` 임베드, 타임스텝 슬라이더, 컬러맵 선택기
+- [x] `gui/styles/dark_theme.qss`
+- [x] `.ntwin` 프로젝트 저장/복원 연동
+- [x] `installer/naviertwin.spec` — PyInstaller `--onedir` 설정
+- [x] `tests/test_reduction.py`, `tests/test_surrogate.py`, `tests/test_twin.py`
 
 ### v1.1.0 — CFD I/O 확장 + 검증 강화
 - [ ] `core/cfd_reader/fluent_reader.py` — `.cas/.dat`, `.cas.h5/.dat.h5`
