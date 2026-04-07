@@ -32,6 +32,8 @@
 | PINN | PhysicsNEMO | NVIDIA 공식 지원으로 CUDA 통합 용이 |
 | 디지털 트윈 | predict(params)→field 엔진 | MVP 핵심 기능 |
 | 검증 | RMSE, R², L2 norm | 모든 모델에 공통 적용 가능한 최소 지표 |
+| 검증 참조 해 | Dedalus (GPL-3.0) | Couette/Poiseuille 고정밀 해석해 생성 — FEniCSx 대비 설치 간단 |
+| 메쉬 생성 | Gmsh Python API (GPL-2.0+) | 파라미터화 메쉬 생성, FEniCSx/.vtk 내보내기 |
 | 내보내기 | .ntwin 프로젝트 저장/복원 | 세션 재현성 확보 |
 | GUI | 기본 6패널 + 3D VTK 뷰어 | 워크플로우 전체 흐름 확인 |
 | 패키징 | PyInstaller | Windows 배포 최소 요건 |
@@ -66,6 +68,10 @@
 | PINN | Domain Decomposition PINN | 복잡 도메인 수렴 안정화 |
 | 방정식 발견 | PySINDy | 데이터→방정식 자동 추출 |
 | UQ | UQpy, OpenTURNS | AI 예측 불확실성 정량화 |
+| 메쉬 처리 | PyMeshLab (GPL-3.0) | 표면 메쉬 단순화·품질관리, 디지털 트윈 경량화 |
+| 단일목적 최적화 | NLopt (LGPL-2.1) | Surrogate-based Optimization (Kriging/RBF + NLopt) |
+| 데이터동화 고도화 | pyPDAF (LGPL-3.0) | DAPPER 보완 — 대규모 앙상블 DA (Fortran 수준 효율) |
+| CFD 솔버 민감도 | SU2 Discrete Adjoint (LGPL-2.1) | 형상 파라미터 민감도 → SALib Sobol과 결합 |
 
 ### v2.0 — 고급 모델 전체 통합
 
@@ -93,6 +99,10 @@
 | 보정 | Hybrid ROM (POD-Galerkin + NN) |
 | 학습 | Active learning, Online learning |
 | 최적화 | 역문제, 위상최적화(DL4TO), UQ(MC, PCE), MDO(OpenMDAO), Causal inference |
+| 다목적 최적화 | pygmo2 (GPL-3.0, ESA) — NSGA-II/파레토 프런트, 항력↓+양력↑ 동시 최적화 |
+| 인증 ROM | RBniCSx + dlrbnicsx (LGPL-3.0) — FEniCSx 기반 Certified RB, 오차 상한 정량화 |
+| FEM 역문제 | Firedrake + pyadjoint (LGPL-3.0) — 자동 미분 기반 파라미터 역추정 |
+| GPU 가속 LBM | flowtorch (GPL-3.0) + Lettuce (MIT) — PyTorch 텐서 기반 스냅샷 생성 |
 | 설명 | Attention visualization, KANO symbolic recovery, PySR symbolic recovery |
 | 검증 | 모델간 비교 대시보드 |
 | 내보내기 | FastAPI 서버 모드 |
@@ -124,6 +134,11 @@
 | DAPPER | DA 알고리즘 벤치마크 표준, 2024 JOSS | filterpy (기본 EnKF만 지원) |
 | SALib | Sobol/Morris/FAST 통합, 2022 SESMO | 자체 구현 (검증 비용 큼) |
 | PySR | Julia 백엔드로 속도 탁월, 2024 학술지 게재 | gplearn (성능 낮음) |
+| Dedalus (검증) | 스펙트럼법 고정밀, 설치 간단, GPL-3.0 호환 | FEniCSx (더 무거움), 자체 구현 (검증 비용) |
+| Gmsh | OCC 기반 최고 품질 비정형 메쉬, Python API 완비 | SALOME (GUI 의존), netgen (제한적) |
+| NLopt | 30+ 알고리즘 단일 인터페이스, LGPL-2.1 | scipy.optimize (알고리즘 수 적음) |
+| pygmo2 | ESA 주도 다목적 최적화 표준, NSGA-II 포함 | pymoo (MIT이지만 기능 적음) |
+| pyPDAF | Fortran 수준 DA 효율, LGPL-3.0, 2025 GMD 게재 | DAPPER (프로토타이핑용, 대규모 부적합) |
 
 ---
 
@@ -136,3 +151,6 @@
 | PySR Julia 런타임 번들링 어려움 | PyInstaller 배포 시 선택적 플러그인으로 분리 |
 | neuraloperator 대형 모델 GPU 메모리 | 배치 크기 자동 조정, gradient checkpointing 옵션 |
 | 상업 포맷(Fluent .cas.h5) 스펙 비공개 | meshio + h5py 조합으로 역공학, 공개 스펙 최대 활용 |
+| GPL 의존성 Windows 배포 복잡도 | optional extra로 분리 (`pip install naviertwin[full]`), 핵심 배포판은 MIT/BSD만 포함 |
+| Gmsh/SU2/FEniCSx 설치 복잡 (Windows) | conda-forge 경로 우선, 설치 실패 시 기능 비활성화 + 안내 메시지 |
+| pyPDAF Fortran 컴파일 필요 | conda 설치 경로 권장, 실패 시 DAPPER로 자동 폴백 |

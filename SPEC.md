@@ -18,13 +18,16 @@ CFD 후처리 결과 데이터 → AI/ROM/Operator Learning → 디지털 트윈
 |--------|------|
 | GUI | PySide6 (Qt6), QSS 다크테마, i18n(한/영) |
 | 3D 시각화 | PyVista + pyvistaqt, pvpython(ParaView 배치 렌더링) |
-| CFD I/O | meshio, foamlib(OpenFOAM 현대적 래퍼), ofpp(MIT, 경량 OpenFOAM 파서), fluidfoam, pyCGNS, h5py, SU2 Python Wrapper |
-| OpenFOAM 자동화 | fluidsimfoam (케이스 생성·실행·후처리 자동화) |
-| 내부 포맷 | HDF5 (.ntwin) — 메쉬+필드+메타+모델가중치 |
+| CFD I/O | meshio, foamlib(GPL-3.0, OpenFOAM 현대적 래퍼), ofpp(MIT, 경량 OpenFOAM 파서), fluidfoam, pyCGNS, h5py, SU2 Python Wrapper(LGPL-2.1) |
+| OpenFOAM 자동화 | fluidsimfoam(GPL-3.0, 케이스 생성·실행·후처리 자동화) |
+| CFD 메쉬 생성 | Gmsh Python API (GPL-2.0+, OCC 기반 파라미터화 메쉬 생성) |
+| 메쉬 처리 | PyMeshLab (GPL-3.0, 300+ 메쉬 필터, 단순화/스무딩/복구) |
+| 내부 포맷 | HDF5 (.ntwin) — 메쉬+필드+메타+모델가중치 (VTKHDF 기반) |
 | POD/ROM | modred(BSD-2, MPI 병렬 POD/BPOD), pyMOR(BSD-2, 종합 ROM 프레임워크) |
+| 인증 ROM | RBniCSx(LGPL-3.0, FEniCSx 기반 Certified RB), dlrbnicsx(LGPL-3.0, DL+RB 하이브리드) |
 | 차원축소(선형) | NumPy/SciPy |
 | 차원축소(비선형) | PyTorch |
-| ROM/모달 | PyDMD, PySPOD(SPOD 병렬), NumPy |
+| ROM/모달 | PyDMD, PySPOD(SPOD 병렬), flowtorch(GPL-3.0, PyTorch 텐서 기반 POD/DMD), NumPy |
 | 데이터 기반 방정식 발견 | PySINDy (SINDy, PDE 발견) |
 | Koopman 분석 | PyKoopman, pykoop (scikit-learn 호환 Koopman 연산자) |
 | Surrogate | SMT, scikit-learn, PyTorch |
@@ -37,16 +40,17 @@ CFD 후처리 결과 데이터 → AI/ROM/Operator Learning → 디지털 트윈
 | 시계열 | PyTorch (LSTM, Transformer, Neural ODE — torchdiffeq, Mamba) |
 | Equivariant NN | e3nn, escnn(Steerable CNN, SO(3)/SE(3)), PyTorch |
 | PINN | NVIDIA PhysicsNEMO, PINA (PyTorch+Lightning 경량 대안) |
-| PINN 검증 참조 솔버 | FEniCSx/DOLFINx (고정밀 FEM) |
+| PINN/ROM 검증 참조 솔버 | FEniCSx/DOLFINx(LGPL), Firedrake(LGPL-3.0, Adjoint 기반 역문제), Dedalus(GPL-3.0, 스펙트럼법) |
 | 미분가능 CFD | JAX-Fluids (JAX 기반, end-to-end 미분 가능) |
-| 데이터동화 | DAPPER(EnKF/파티클필터 벤치마크), filterpy, NumPy |
-| 불확실성 정량화(UQ) | UQpy(PyTorch 통합), OpenTURNS(PCE/Sobol), SALib(Sobol/Morris/FAST) |
-| 최적화 | OpenMDAO(MDO, NASA), DL4TO/PyTopo3D(위상최적화) |
+| 데이터동화 | DAPPER(EnKF/파티클필터), pyPDAF(LGPL-3.0, Fortran 수준 앙상블 DA), filterpy, NumPy |
+| 불확실성 정량화(UQ) | UQpy(PyTorch 통합), OpenTURNS(LGPL-3.0, PCE/Sobol), SALib(Sobol/Morris/FAST) |
+| 최적화(단일목적) | OpenMDAO(MDO, NASA), NLopt(LGPL-2.1, 30+ 알고리즘), DL4TO/PyTopo3D(위상최적화) |
+| 최적화(다목적) | pygmo2(GPL-3.0, ESA, NSGA-II/파레토 프런트) |
 | 심볼릭 회귀 | PySR (Julia 백엔드, 방정식 자동 발견) |
 | 설명가능성 | SHAP, captum |
 | 모델 내보내기 | ONNX, TorchScript |
 | API 서버 | FastAPI (선택) |
-| 패키징 | PyInstaller + pyinstaller-hooks-contrib(Apache 2.0, torch/PySide6 훅) + Inno Setup |
+| 패키징 | PyInstaller + pyinstaller-hooks-contrib(Apache 2.0) + Inno Setup |
 | 벤치마크 데이터셋 | PDEBench, AirfRANS, CFDBench, FlowBench |
 
 ---
@@ -387,6 +391,7 @@ NavierTwin/
 
 ## 7. 설계 원칙
 
+- **라이선스 정책:** NavierTwin은 GPL-3.0 비상업용 오픈소스. GPL/LGPL 라이브러리 모두 사용 가능. 무거운 선택적 의존성(Gmsh, SU2, FEniCSx 계열, PySR)은 `pip install naviertwin[full]` 등 optional extra로 분리.
 - **팩토리 패턴 통일:** Reader, 차원축소, Surrogate, Operator 모두 통일 인터페이스 (`fit/predict` 또는 `fit/encode/decode`)
 - **core↔gui 분리:** core 모듈은 Qt 의존 금지. GUI는 시그널/슬롯으로 core와 통신
 - **프로젝트 파일 (.ntwin):** HDF5 기반 세션 저장/복원, 모델 가중치+설정 이력 포함
@@ -439,6 +444,18 @@ NavierTwin/
 | CFDBench | Luo et al., arXiv 2023 |
 | FlowBench | arXiv:2409.18032, 2024 |
 | escnn | Cesa et al., QUVA-Lab/escnn |
+| Gmsh | Geuzaine & Remacle, Int. J. Numer. Meth. Engng 2009; gmsh.info (GPL-2.0+) |
+| PyMeshLab | Muntoni & Cignoni, SoftwareX 2021; cnr-isti-vclab/PyMeshLab (GPL-3.0) |
+| Dedalus | Burns et al., Phys. Rev. Research 2020; DedalusProject/dedalus (GPL-3.0) |
+| flowtorch | FlowModelingControl/flowtorch (GPL-3.0) |
+| RBniCSx | RBniCS/RBniCSx (LGPL-3.0) |
+| dlrbnicsx | Wells-Group/dlrbnicsx (LGPL-3.0) |
+| Firedrake | Rathgeber et al., ACM TOMS 2016; firedrakeproject/firedrake (LGPL-3.0) |
+| NLopt | Johnson, github.com/stevengj/nlopt (LGPL-2.1) |
+| pygmo2 | Biscani & Izzo, JOSS 2020; esa/pygmo2 (GPL-3.0) |
+| pyPDAF | Tödter & Ahrens, GMD 2025; yumengch/pyPDAF (LGPL-3.0) |
+| SU2 | Economon et al., AIAA J. 2016; su2code/SU2 (LGPL-2.1) |
+| fluidsimfoam | fluiddyn/fluidsimfoam (GPL-3.0) |
 | ofpp | xu-xianghua/ofpp, GitHub (MIT) |
 | modred | Belson et al., GitHub belson17/modred (BSD-2) |
 | pyMOR | Milk et al., SIAM J. Sci. Comput. 2016; pymor/pymor (BSD-2) |
