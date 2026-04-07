@@ -1,424 +1,75 @@
-# NavierTwin 프로젝트 계획서
+# NavierTwin 구현 계획서 (PLAN)
 
-## 1. 개요
-
-CFD 후처리 결과 데이터 → AI/ROM/Operator Learning → 디지털 트윈 변환 Windows 데스크톱 툴.
-비상업용(오픈소스). PySide6 GUI + PyVista 3D + 로컬 GPU 학습. 타겟: 엔지니어 일반 사용자.
+> 시스템을 **어떻게** 만들지 정의하는 문서. 프로젝트 목표, 버전별 범위, 우선순위 기준, 기술 선택 근거를 포함한다.
+> 기술 명세(스택·기법 목록)는 `SPEC.md`, Phase별 진행 현황은 `ROADMAP.md` 참조.
 
 ---
 
-## 2. 기술 스택
+## 1. 프로젝트 목표
 
-| 레이어 | 기술 |
-|--------|------|
-| GUI | PySide6 (Qt6), QSS 다크테마, i18n(한/영) |
-| 3D 시각화 | PyVista + pyvistaqt |
-| CFD I/O | meshio, fluidfoam, h5py |
-| 내부 포맷 | HDF5 (.ntwin) — 메쉬+필드+메타+모델가중치 |
-| 차원축소(선형) | NumPy/SciPy |
-| 차원축소(비선형) | PyTorch |
-| ROM/모달 | PyDMD, NumPy |
-| Surrogate | SMT, scikit-learn, PyTorch |
-| Operator Learning | neuraloperator(FNO/TFNO), deepxde(DeepONet), PyTorch(U-Net) |
-| 잠재공간 연산자 | PyTorch (L-DeepONet, PI-Latent-NO) |
-| Koopman | PyTorch (KNO, IKNO, FlowDMD) |
-| State Space Model | mamba-ssm, PyTorch (MNO, DeepOMamba) |
-| 생성 모델 | PyTorch (Diffusion Model, Score-based) |
-| GNN | PyTorch Geometric (GNN surrogate, MeshGraphNets, EGNO) |
-| 시계열 | PyTorch (LSTM, Transformer, Neural ODE — torchdiffeq, Mamba) |
-| Equivariant NN | e3nn, PyTorch (E(n)-equivariant) |
-| PINN | NVIDIA PhysicsNEMO |
-| 데이터동화 | filterpy, NumPy |
-| 설명가능성 | SHAP, captum |
-| 모델 내보내기 | ONNX, TorchScript |
-| API 서버 | FastAPI (선택) |
-| 패키징 | PyInstaller + Inno Setup |
-
----
-
-## 3. 지원 CFD 포맷
-
-- **비상업:** OpenFOAM (polyMesh+field), SU2 (.su2+.vtk), Code_Saturne/Nektar++ (XDMF/HDF5)
-- **상업:** Fluent (.cas/.dat, .cas.h5/.dat.h5), CFX (.res→EnSight), STAR-CCM+ (VTK/CGNS/EnSight), Tecplot (.dat/.plt/.szplt)
-- **범용:** VTK/VTU, CGNS, EnSight Gold, HDF5/XDMF
-
-**전략:** 전체 → VTK UnstructuredGrid → 내부 HDF5 정규화
-
----
-
-## 4. 디렉토리 구조
-
-```
-NavierTwin/
-├── src/naviertwin/
-│   ├── core/
-│   │   ├── cfd_reader/                # 포맷별 Reader + 팩토리
-│   │   │
-│   │   ├── dimensionality_reduction/
-│   │   │   ├── linear/                # POD, Randomized SVD, BPOD, ICA
-│   │   │   └── nonlinear/             # AE, VAE, CNN-AE, GNN-AE, Diffusion Maps, CPOD, Tucker
-│   │   │
-│   │   ├── flow_analysis/
-│   │   │   ├── modal/                 # DMD, SPOD, PGD
-│   │   │   ├── vortex/                # Q-criterion, λ₂, LCS
-│   │   │   ├── statistics/            # FFT, PSD, Wavelet, 두점상관
-│   │   │   ├── boundary_layer/        # y+, Cf, δ/θ/H
-│   │   │   └── thermofluids/          # Nu, Re, Pr, 엔트로피생성
-│   │   │
-│   │   ├── surrogate/                 # RBF, Kriging, NN, Ensemble, MoE
-│   │   │
-│   │   ├── operator_learning/
-│   │   │   ├── fno/                   # FNO, TFNO, Adaptive FNO, WNO, LNO
-│   │   │   ├── deeponet/              # DeepONet, PI-DeepONet, MIONet
-│   │   │   ├── latent_operator/       # L-DeepONet, PI-Latent-NO
-│   │   │   ├── koopman/               # KNO, IKNO, FlowDMD
-│   │   │   ├── kan/                   # KANO (Kolmogorov-Arnold Neural Operator)
-│   │   │   └── unet/                  # U-Net
-│   │   │
-│   │   ├── gnn/
-│   │   │   ├── gnn_surrogate/         # GNN surrogate (비정형 메쉬)
-│   │   │   ├── meshgraphnets/         # MeshGraphNets (시간발전 포함)
-│   │   │   ├── egno/                  # E(n)-Equivariant GNN Operator
-│   │   │   └── graph_transformer/     # HAMLET (Graph Transformer Neural Operator)
-│   │   │
-│   │   ├── state_space/
-│   │   │   ├── mamba_neural_op/       # MNO (Mamba Neural Operator)
-│   │   │   └── deepomamba/            # DeepOMamba (DeepONet + Mamba)
-│   │   │
-│   │   ├── generative/
-│   │   │   ├── diffusion_pde/         # Score-based Diffusion PDE solver
-│   │   │   ├── wavelet_diffusion/     # Wavelet Diffusion Neural Operator
-│   │   │   └── conditional_gen/       # 조건부 유동장 생성
-│   │   │
-│   │   ├── time_series/
-│   │   │   ├── lstm/                  # LSTM
-│   │   │   ├── transformer/           # Temporal Transformer
-│   │   │   ├── temporal_no/           # TNO (Temporal Neural Operator)
-│   │   │   ├── neural_ode/            # Neural ODE (torchdiffeq)
-│   │   │   └── latent_dynamics/       # 잠재공간 동역학 (AE + Neural ODE)
-│   │   │
-│   │   ├── equivariant/
-│   │   │   ├── group_equiv_fno/       # Group Equivariant FNO
-│   │   │   └── physics_embedded/      # Physics-embedded E(n)-equivariant GNN
-│   │   │
-│   │   ├── physnemo/                  # PhysicsNEMO PINN
-│   │   │
-│   │   ├── multi_fidelity/            # 멀티피델리티, 전이학습
-│   │   ├── data_augmentation/         # 물리기반 증강, 합성 스냅샷
-│   │   ├── physics_correction/        # 보존법칙 사후보정, Hybrid ROM
-│   │   ├── online_learning/           # Active learning, 온라인 업데이트
-│   │   │
-│   │   ├── data_assimilation/         # EnKF, 4D-Var, Particle Filter
-│   │   ├── optimization/              # Bayesian Opt, 역문제, 위상최적화, UQ
-│   │   ├── sensitivity/               # Sobol indices, 인과분석
-│   │   │
-│   │   ├── digital_twin/             # 실시간 예측 엔진
-│   │   ├── validation/               # RMSE/R²/L2, 해석해비교, 모델간비교
-│   │   ├── explainability/           # SHAP, Attention viz, KANO symbolic
-│   │   ├── export/                    # ONNX, TorchScript
-│   │   └── report/                    # Jinja2→HTML/PDF 자동보고서
-│   │
-│   ├── gui/
-│   │   ├── main_window.py
-│   │   ├── panels/                    # 6단계 워크플로우 패널
-│   │   ├── widgets/                   # VTK뷰어, 슬라이더, 비교대시보드
-│   │   ├── wizard/                    # 튜토리얼 위자드
-│   │   └── styles/                    # QSS, i18n
-│   └── utils/                         # 설정, 로거, Undo/Redo
-│
-├── tests/
-├── resources/                         # 아이콘, 샘플데이터
-├── installer/                         # Inno Setup
-├── CLAUDE.md
-├── PLAN.md
-├── ROADMAP.md
-├── pyproject.toml
-└── main.py
-```
-
----
-
-## 5. GUI 워크플로우
-
-```
-[1.Import] → [2.Analyze] → [3.Reduce] → [4.Model] → [5.Twin] → [6.Export]
-```
-
-| 패널 | 기능 |
+| 구분 | 내용 |
 |------|------|
-| 1. Import | 파일/폴더 선택, 포맷 자동감지, 타임스텝/변수 선택, HDF5 변환 |
-| 2. Analyze | 유동분석 (Q-crit, DMD, SPOD, FFT, y+, Nu), 민감도(Sobol), 시각화 |
-| 3. Reduce | 차원축소 (POD/AE/GNN-AE), 에너지 누적 그래프, 모드 선택 |
-| 4. Model | 모델 선택 트리(§5.1), 하이퍼파라미터, GPU, 학습모니터링, 멀티피델리티, 증강, 물리보정 |
-| 5. Twin | 파라미터→실시간예측→3D시각화, 데이터동화, 시계열예측, 온라인학습, 오차지표, SHAP |
-| 6. Export | ONNX/TorchScript, 자동보고서(PDF), .ntwin 저장, 모델비교대시보드 |
-
-**레이아웃:** 좌측 설정패널 + 우측 3D뷰어 + 하단 로그/진행률 + 모델비교 대시보드
-
-### 5.1 Model 패널 선택 트리
-
-```
-모델 유형 선택
-├── Classical Surrogate
-│   └── RBF, Kriging, NN, Ensemble, MoE
-├── Operator Learning
-│   ├── Fourier 계열: FNO, TFNO, Adaptive FNO, WNO, LNO, Spectral-Refiner
-│   ├── DeepONet 계열: DeepONet, PI-DeepONet, MIONet, Sequential DeepONet, NFNO-DeepONet
-│   ├── 잠재공간 연산자: L-DeepONet, PI-Latent-NO
-│   ├── Koopman 계열: KNO, IKNO, FlowDMD
-│   ├── KAN 계열: KANO (해석가능 연산자)
-│   └── U-Net
-├── GNN 계열
-│   └── GNN Surrogate, MeshGraphNets, EGNO, HAMLET
-├── State Space Model
-│   └── MNO (Mamba Neural Operator), DeepOMamba
-├── 생성 모델
-│   └── Diffusion PDE, Wavelet Diffusion NO, 조건부 유동장 생성
-├── 시계열/동역학
-│   └── LSTM, Transformer, TNO, Neural ODE, Latent Space Dynamics
-├── Equivariant
-│   └── Group Equivariant FNO, Physics-embedded E(n)-GNN, Lie Algebra Canonicalization
-└── PINN
-    └── PhysicsNEMO, Domain Decomposition PINN
-```
+| 핵심 목표 | CFD 엔지니어가 시뮬레이션 결과를 AI/ROM으로 즉시 디지털 트윈화할 수 있는 로컬 GUI 툴 제공 |
+| 타겟 사용자 | CFD 코드를 직접 짜기 어려운 엔지니어 일반 사용자 (연구자·산업체) |
+| 핵심 가치 | 로컬 실행(데이터 외부 유출 없음), 오픈소스, 설치 즉시 사용 가능 |
+| 비목표 | 클라우드 SaaS, CFD 솔버 자체 개발, 상업 라이선스 |
 
 ---
 
-## 6. 전체 기법 목록
+## 2. 버전별 범위 및 근거
 
-### 6.1 차원축소
+### v1.0 (MVP) — 핵심 파이프라인 검증
 
-| 기법 | 분류 | 설명 |
+**목표:** 가장 흔한 CFD 포맷(OpenFOAM, Fluent, VTK)을 읽고, 기본 ROM+Surrogate로 디지털 트윈을 완성하는 end-to-end 파이프라인 동작 확인.
+
+| 영역 | 항목 | 근거 |
 |------|------|------|
-| POD/PCA | 선형 | SVD 기반 에너지 최대 보존 모드 |
-| Randomized SVD | 선형 | 대용량 스냅샷 고속 POD 근사 |
-| BPOD | 선형 | 관측/제어 가능성 기반, 제어계 연동 |
-| ICA | 선형 | 통계적 독립 성분 분리 |
-| Autoencoder | 비선형 | NN 기반 비선형 압축 |
-| VAE | 비선형 | 잠재공간 샘플링 → 새 유동장 생성 |
-| CNN-AE | 비선형 | 정형격자 이미지 기반 |
-| GNN-AE | 비선형 | 비정형 메쉬 그래프 기반 |
-| Diffusion Maps | 비선형 | 데이터 기하구조 보존 |
-| Tucker Decomposition | 텐서 | 3D 텐서 직접 분해, 메쉬 구조 보존 |
-| CPOD | 하이브리드 | 물리 보존법칙 제약 POD |
+| I/O | OpenFOAM, Fluent, VTK Reader | 산업·학계 가장 널리 쓰이는 3종 |
+| 차원축소 | POD, Randomized SVD | 선형 방법이 가장 안정적이고 디버깅 쉬움 |
+| 모달 | DMD | 시계열 ROM의 사실상 표준 |
+| 유동분석 | Q-criterion, FFT/PSD, y+ | 와류·스펙트럼·벽면 — 가장 많이 요청되는 3종 |
+| Surrogate | RBF, Kriging | 구현 단순, 소량 데이터에서도 동작 |
+| PINN | PhysicsNEMO | NVIDIA 공식 지원으로 CUDA 통합 용이 |
+| 디지털 트윈 | predict(params)→field 엔진 | MVP 핵심 기능 |
+| 검증 | RMSE, R², L2 norm | 모든 모델에 공통 적용 가능한 최소 지표 |
+| 내보내기 | .ntwin 프로젝트 저장/복원 | 세션 재현성 확보 |
+| GUI | 기본 6패널 + 3D VTK 뷰어 | 워크플로우 전체 흐름 확인 |
+| 패키징 | PyInstaller | Windows 배포 최소 요건 |
 
-### 6.2 Surrogate
+### v1.5 — 신경 연산자 + DA + 보고서
 
-| 기법 | 설명 |
-|------|------|
-| RBF | 방사기저함수 보간 |
-| Kriging/GP | 가우시안 프로세스, 불확실성 정량화 포함 |
-| NN Surrogate | 다층 퍼셉트론 기반 |
-| Model Ensemble | 다중 모델 평균 → 정확도↑ 불확실성↓ |
-| Mixture of Experts (MoE) | 영역별 전문 모델 자동 선택 |
+**목표:** 연구자가 실제로 논문에 쓸 수 있는 수준의 모델(FNO, DeepONet)과 데이터 동화, 자동 보고서 추가.
 
-### 6.3 Operator Learning — Fourier 계열
+| 영역 | 항목 | 근거 |
+|------|------|------|
+| I/O | CGNS, STAR-CCM+ | 항공우주·자동차 산업 대응 |
+| 차원축소 | Autoencoder, GNN-AE | 비정형 메쉬 비선형 압축 |
+| 모달 | SPOD (PySPOD) | 난류 비정상 유동 분석 표준 |
+| 유동분석 | Wavelet, 두점상관 | 과도현상·난류 스케일 분석 |
+| Surrogate | NN Surrogate, Ensemble | 고차원 입출력 대응 |
+| FNO 계열 | FNO, TFNO, WNO | neuraloperator v2.0 기반, 해상도 독립 |
+| DeepONet 계열 | DeepONet, PI-DeepONet, MIONet | 비균일 격자 직접 처리 |
+| 잠재공간 | L-DeepONet | 고차원 실시간 예측 |
+| Koopman | KNO | 장기 예측 ROM |
+| GNN | GNN Surrogate | 비정형 메쉬 직접 입력 |
+| 시계열 | LSTM | 기본 순환 시계열 예측 |
+| 데이터동화 | EnKF (DAPPER) | 실시간 센서 융합 |
+| 보정 | Physics correction | 보존법칙 만족 보장 |
+| 증강 | 물리기반 Data augmentation | 소량 데이터 문제 완화 |
+| 최적화 | Bayesian Opt, Sobol indices (SALib) | 파라미터 탐색 + 민감도 분석 |
+| 설명 | SHAP | 모델 해석 기본 요건 |
+| 검증 | 해석해 자동비교 (Couette, Poiseuille) | 구현 정확도 자동 검증 |
+| 내보내기 | ONNX export | 타 플랫폼 배포 |
+| 보고서 | Jinja2→PDF 자동보고서 | 결과 공유 자동화 |
+| GUI | 튜토리얼 위자드, i18n(한/영) | 진입 장벽 낮춤 |
+| 패키징 | Inno Setup 설치파일 | Windows 정식 설치 |
+| PINN | Domain Decomposition PINN | 복잡 도메인 수렴 안정화 |
+| 방정식 발견 | PySINDy | 데이터→방정식 자동 추출 |
+| UQ | UQpy, OpenTURNS | AI 예측 불확실성 정량화 |
 
-| 기법 | 설명 |
-|------|------|
-| FNO | 주파수 도메인 PDE 연산자, 해상도 독립적 |
-| TFNO | Tucker-factorized FNO — 파라미터 90% 절감 |
-| Adaptive FNO | 적응적 주파수 모드 선택 |
-| WNO (Wavelet Neural Operator) | 웨이블릿 기반, 공간 국소 신호 포착에 강점 |
-| LNO (Laplace Neural Operator) | 라플라스 변환 기반, 과도 응답 정확 근사 |
-| Spectral-Refiner | FNO 파인튜닝으로 난류 정확도 향상 (ICLR 2025) |
+### v2.0 — 고급 모델 전체 통합
 
-### 6.4 Operator Learning — DeepONet 계열
-
-| 기법 | 설명 |
-|------|------|
-| DeepONet | 함수→함수 연산자 학습, 비균일 그리드 지원 |
-| PI-DeepONet | 물리법칙 내장 DeepONet, 학습 데이터 5-10배 절약 |
-| MIONet | 다중 입력 연산자 (복수 파라미터 함수 동시 입력) |
-| Sequential DeepONet | 시간 의존 하중의 순차 예측 |
-| NFNO-DeepONet | 비균일 Fourier 변환 + DeepONet, 불규칙 격자 직접 처리 |
-
-### 6.5 Operator Learning — 잠재공간 (Latent)
-
-| 기법 | 설명 |
-|------|------|
-| L-DeepONet | AE 잠재공간에서 DeepONet 학습 → 고차원 실시간 예측 |
-| PI-Latent-NO | 물리 제약 잠재 연산자 — 라벨 데이터 불필요, 학습시간 15-67% 단축 (CMAME 2026) |
-
-### 6.6 Operator Learning — Koopman 계열
-
-| 기법 | 설명 |
-|------|------|
-| KNO (Koopman Neural Operator) | 비선형 PDE를 선형 예측으로 변환, 장기 예측에 강점 |
-| IKNO (Invertible KNO) | 가역 신경망 기반 Koopman, 비데카르트 도메인 확장 가능 (2025) |
-| FlowDMD | Coupling Flow INN 기반 Koopman 임베딩 학습 |
-
-### 6.7 Operator Learning — KAN 계열
-
-| 기법 | 설명 |
-|------|------|
-| KANO | Kolmogorov-Arnold Neural Operator — 학습된 연산자의 해석적(symbolic) 복원 가능, 해석성 극대화 |
-
-### 6.8 GNN 기반
-
-| 기법 | 설명 |
-|------|------|
-| GNN Surrogate | 메쉬→그래프 직접 입력, 메쉬 변경에도 재학습 불필요 |
-| MeshGraphNets | 시간발전 포함 GNN 시뮬레이터 (DeepMind) |
-| EGNO | E(n)-Equivariant GNN Operator — 3D 동역학 대칭성 보존 (ICML 2024) |
-| HAMLET | Graph Transformer Neural Operator — Transformer + GNN 결합 |
-| Graph Neural PDE Solver | 보존법칙/유사성-등변 GNN 솔버 |
-
-### 6.9 State Space Model (SSM) 기반
-
-| 기법 | 설명 |
-|------|------|
-| MNO (Mamba Neural Operator) | Mamba SSM + 양방향 스캔, Transformer 대비 최대 90% 오차 감소, 선형 복잡도 (JCP 2025) |
-| DeepOMamba | DeepONet + Mamba 최적 조합 — 고차원 장기 적분, FNO 대비 10배 빠름 (JCP 2025) |
-
-### 6.10 생성 모델 기반
-
-| 기법 | 설명 |
-|------|------|
-| Score-based Diffusion PDE | 확산 모델로 PDE 해 생성, 불확실성 자연 포함 |
-| Wavelet Diffusion NO | 웨이블릿 확산 신경 연산자 (ICLR 2025) |
-| 조건부 유동장 생성 | 파라미터 조건부로 다양한 유동장 샘플 생성 |
-
-### 6.11 시계열 / 동역학
-
-| 기법 | 설명 |
-|------|------|
-| DMD | 시계열→주파수·성장률 모드 분리, 시간예측 |
-| SPOD | 주파수 도메인 POD, 비정상 유동 분석 |
-| LSTM | 순환 신경망 기반 시계열 예측 |
-| Transformer | 어텐션 기반 장거리 시계열 |
-| TNO (Temporal Neural Operator) | FNO 인코더 + 시간 브랜치 → 시간 외삽 오차 누적 거의 없음 (Nature Sci. Rep. 2025) |
-| Neural ODE | 연속 시간 동역학, 불균일 타임스텝에 강건 |
-| Latent Space Dynamics | AE 잠재공간에서 Neural ODE로 시간적분 (Gonzalez & Balajewicz, Lee & Carlberg) |
-
-### 6.12 Equivariant (대칭성 보존)
-
-| 기법 | 설명 |
-|------|------|
-| Group Equivariant FNO | 회전/반사 대칭 보존 FNO (ICML 2023) |
-| Physics-embedded E(n)-GNN | 물리 보존법칙 + E(n)-등변 GNN PDE 솔버 (NeurIPS 2022) |
-| Lie Algebra Canonicalization | 임의 리 군 하의 등변 신경 연산자 (ICLR 2025) |
-
-### 6.13 PINN
-
-| 기법 | 설명 |
-|------|------|
-| PhysicsNEMO | NVIDIA PINN 프레임워크, 로컬 GPU 학습 |
-| Domain Decomposition PINN | 도메인 분할 순차 학습 → 비선형 전달방정식 수렴 안정화 |
-
-### 6.14 디지털 트윈 핵심
-
-| 기법 | 설명 |
-|------|------|
-| Data Assimilation (EnKF) | 실측 센서 + 모델 실시간 융합 |
-| 4D-Var | 시공간 최적화 기반 데이터 동화 |
-| Particle Filter | 비선형/비가우시안 시스템 |
-| Multi-fidelity modeling | coarse mesh→fine mesh 전이학습, CFD 고해상도 데이터 비용 절감 |
-| Transfer learning | 유사 형상/조건의 기존 모델을 새 케이스에 적응 |
-| Active learning | 모델 불확실성 높은 영역에서 추가 CFD 시뮬레이션 자동 요청 |
-| Online learning | 새 데이터 유입 시 모델 점진적 업데이트 (재학습 없이) |
-| Physics correction | surrogate/ROM 출력이 보존법칙(질량, 운동량, 에너지) 만족하도록 사후 보정 |
-| Hybrid ROM | POD-Galerkin + NN 잔차 보정 결합 |
-| Data augmentation | 물리적 대칭성/갈릴레이 불변성 기반 증강, 합성 스냅샷 생성 |
-
-### 6.15 유동 분석 (후처리)
-
-| 기법 | 설명 |
-|------|------|
-| Q-criterion / λ₂ | 와류 코어 자동 식별 |
-| LCS (Lagrangian Coherent Structures) | 라그랑지안 입자 궤적 기반 유동 분리선 |
-| FFT / PSD | 주파수 분석, 압력 맥동/진동 |
-| Wavelet Transform | 시간-주파수 동시 분석, 과도 현상 |
-| 두점 상관 (Two-point correlation) | 공간 상관 길이 스케일, 난류 정량화 |
-| y+ / Cf / δ·θ·H | 벽면 분석 (y+ 분포, 마찰계수, 경계층 두께) |
-| Nu / Re / Pr | 무차원수 자동 계산 및 분포 시각화 |
-| 엔트로피 생성 (Entropy generation) | 비가역 손실 공간 분포, 열역학 최적화 |
-| PGD (Proper Generalized Decomposition) | 다파라미터 공간 분리 텐서 분해 |
-
-### 6.16 최적화 / 불확실성
-
-| 기법 | 설명 |
-|------|------|
-| Bayesian Optimization | 최소 샘플로 최적 파라미터 탐색 |
-| 역문제 (Inverse Problem) | 출력(압력분포 등)→입력(형상, 경계조건) 역추정 |
-| 위상 최적화 (Topology Optimization) | 유동 경로 최적 형상 도출 |
-| UQ - Monte Carlo | 입력 불확실성 전파 분석 |
-| UQ - PCE (Polynomial Chaos Expansion) | 다항식 카오스 전개 |
-| Sobol indices | 전역 민감도 분석, 중요 파라미터 순위 |
-| Causal inference | 입출력 간 인과관계 자동 추출 및 정량화 |
-
-### 6.17 설명가능성
-
-| 기법 | 설명 |
-|------|------|
-| SHAP | 모델 입출력 기여도 해석 |
-| Attention visualization | Transformer/HAMLET 집중 영역 시각화 |
-| Feature importance | surrogate 변수 중요도 순위 |
-| KANO symbolic recovery | 학습된 연산자의 수식 자동 복원 (해석적 표현) |
-
----
-
-## 7. 설계 원칙
-
-- **팩토리 패턴 통일:** Reader, 차원축소, Surrogate, Operator 모두 통일 인터페이스 (`fit/predict` 또는 `fit/encode/decode`)
-- **core↔gui 분리:** core 모듈은 Qt 의존 금지. GUI는 시그널/슬롯으로 core와 통신
-- **프로젝트 파일 (.ntwin):** HDF5 기반 세션 저장/복원, 모델 가중치+설정 이력 포함
-- **GPU 폴백:** NVIDIA GPU 미탑재 시 CPU 모드 동작 (PINN/GNN/SSM 등 일부 제외), CUDA 버전 자동 체크
-- **Undo/Redo 스택:** 전 패널 공통 명령 스택
-- **튜토리얼 위자드:** 첫 사용자가 샘플 데이터로 전체 파이프라인을 따라가는 가이드 모드
-- **i18n:** 한국어/영어 최소 지원
-- **벤치마크 프레임워크:** 모델 간 정확도/속도/파라미터 수 자동 비교 대시보드
-
----
-
-## 8. 로드맵
-
-### v1.0 (MVP)
-
-| 영역 | 항목 |
-|------|------|
-| I/O | OpenFOAM, Fluent, VTK Reader |
-| 차원축소 | POD, Randomized SVD |
-| 모달 | DMD |
-| 유동분석 | Q-criterion, FFT/PSD, y+ |
-| Surrogate | RBF, Kriging |
-| PINN | PhysicsNEMO |
-| 디지털 트윈 | 기본 predict(params)→field 엔진 |
-| 검증 | RMSE, R², L2 norm |
-| 내보내기 | .ntwin 프로젝트 저장/복원 |
-| GUI | 기본 6패널 + 3D VTK 뷰어 |
-| 패키징 | PyInstaller |
-
-### v1.5
-
-| 영역 | 항목 |
-|------|------|
-| I/O | CGNS, STAR-CCM+ 추가 |
-| 차원축소 | Autoencoder, GNN-AE |
-| 모달 | SPOD |
-| 유동분석 | Wavelet, 두점상관 |
-| Surrogate | NN Surrogate, Ensemble |
-| FNO 계열 | FNO, TFNO, WNO |
-| DeepONet 계열 | DeepONet, PI-DeepONet, MIONet |
-| 잠재공간 | L-DeepONet |
-| Koopman | KNO |
-| U-Net | U-Net 필드 예측 |
-| GNN | GNN Surrogate |
-| 시계열 | LSTM |
-| 피델리티 | Multi-fidelity modeling |
-| 데이터동화 | EnKF |
-| 보정 | Physics correction |
-| 증강 | 물리기반 Data augmentation |
-| 최적화 | Bayesian Opt, Sobol indices |
-| 설명 | SHAP |
-| 검증 | 해석해 자동비교 (Couette, Poiseuille 등) |
-| 내보내기 | ONNX export |
-| 보고서 | Jinja2→PDF 자동보고서 |
-| GUI | 튜토리얼 위자드, i18n(한/영) |
-| 패키징 | Inno Setup 설치파일 |
-| PINN | Domain Decomposition PINN |
-
-### v2.0
+**목표:** GNN/SSM/생성모델/등변 신경망 등 최신 연구 기법을 모두 포함하여 연구 플랫폼으로 완성.
 
 | 영역 | 항목 |
 |------|------|
@@ -441,34 +92,47 @@ NavierTwin/
 | 데이터동화 | 4D-Var, Particle Filter |
 | 보정 | Hybrid ROM (POD-Galerkin + NN) |
 | 학습 | Active learning, Online learning |
-| 최적화 | 역문제, 위상최적화, UQ(MC, PCE), Causal inference |
-| 설명 | Attention visualization, KANO symbolic recovery |
+| 최적화 | 역문제, 위상최적화(DL4TO), UQ(MC, PCE), MDO(OpenMDAO), Causal inference |
+| 설명 | Attention visualization, KANO symbolic recovery, PySR symbolic recovery |
 | 검증 | 모델간 비교 대시보드 |
 | 내보내기 | FastAPI 서버 모드 |
 | GUI | Undo/Redo, 모델비교 대시보드 |
 | 패키징 | 자동 업데이트 |
+| 미분가능 CFD | JAX-Fluids 통합 (end-to-end 미분) |
 
 ---
 
-## 9. 참고 문헌 (주요 기법별)
+## 3. 우선순위 기준
 
-| 기법 | 핵심 논문/출처 |
-|------|---------------|
-| FNO | Li et al., ICLR 2021; neuraloperator library |
-| DeepONet | Lu et al., Nature Machine Intelligence 2021 |
-| L-DeepONet | Kontolati et al., Nature Communications 2024 |
-| PI-Latent-NO | Karumuri et al., CMAME 2026 |
-| KNO/IKNO | Xiong et al., JCP 2024; Jin et al., arXiv 2025 |
-| KANO | arXiv:2509.16825 |
-| MNO | Mamba Neural Operator, JCP 2025 |
-| DeepOMamba | Hu et al., JCP 2025 |
-| TNO | Temporal Neural Operator, Nature Sci. Rep. 2025 |
-| MeshGraphNets | Pfaff et al., ICML 2021 |
-| EGNO | Xu et al., ICML 2024 |
-| HAMLET | arXiv 2024 |
-| Wavelet Diffusion NO | ICLR 2025 |
-| Group Equiv FNO | ICML 2023 |
-| Lie Algebra Equivariant | ICLR 2025 |
-| Latent Space Dynamics | Gonzalez & Balajewicz 2018; Lee & Carlberg 2020 |
-| PhysicsNEMO | NVIDIA docs.nvidia.com/physicsnemo |
-| Spectral-Refiner | ICLR 2025 |
+1. **사용 빈도** — 가장 많은 CFD 사용자가 필요로 하는 기능 먼저
+2. **구현 안정성** — 성숙한 라이브러리 기반 모듈 먼저, 최신 연구 코드는 후순위
+3. **의존성 최소화** — v1.0에서 무거운 선택적 의존성(e.g. JAX, Julia/PySR)은 설치 옵션으로
+4. **검증 가능성** — 해석해가 있는 기법(Couette, Poiseuille)으로 자동 검증 가능한 것 우선
+5. **GPU 없이도 동작** — CPU 폴백이 가능한 기법을 우선 구현
+
+---
+
+## 4. 기술 선택 근거
+
+| 선택 | 이유 | 대안 검토 |
+|------|------|-----------|
+| PySide6 (Qt6) | 크로스플랫폼, Python 바인딩 성숙도, 상업 무료 | wxPython (생태계 작음), tkinter (3D 통합 어려움) |
+| PyVista | VTK Python 래퍼 최고 성숙도, pyvistaqt로 Qt 통합 용이 | Mayavi (유지보수 약화), vedo |
+| HDF5 (.ntwin) | 메쉬+필드+가중치를 단일 파일에, 계층 구조, 대용량 지원 | NetCDF (CFD 표준 아님), SQLite (바이너리 배열 비효율) |
+| foamlib | 2025 JOSS, 비동기 지원, 타입힌트 완비 | fluidfoam (바이너리 미지원), PyFoam (구식 API) |
+| neuraloperator v2.0+ | FNO 원저자 라이브러리, GINO/UQNO 포함, 활발한 개발 | 자체 구현 (유지보수 부담) |
+| DAPPER | DA 알고리즘 벤치마크 표준, 2024 JOSS | filterpy (기본 EnKF만 지원) |
+| SALib | Sobol/Morris/FAST 통합, 2022 SESMO | 자체 구현 (검증 비용 큼) |
+| PySR | Julia 백엔드로 속도 탁월, 2024 학술지 게재 | gplearn (성능 낮음) |
+
+---
+
+## 5. 리스크 및 대응
+
+| 리스크 | 대응 |
+|--------|------|
+| PhysicsNEMO 설치 복잡 (CUDA 버전 종속) | PINA를 경량 대안으로 병행 지원 |
+| mamba-ssm Windows 지원 불안정 | WSL 또는 Linux 환경 권장 문서화, CPU 폴백 |
+| PySR Julia 런타임 번들링 어려움 | PyInstaller 배포 시 선택적 플러그인으로 분리 |
+| neuraloperator 대형 모델 GPU 메모리 | 배치 크기 자동 조정, gradient checkpointing 옵션 |
+| 상업 포맷(Fluent .cas.h5) 스펙 비공개 | meshio + h5py 조합으로 역공학, 공개 스펙 최대 활용 |

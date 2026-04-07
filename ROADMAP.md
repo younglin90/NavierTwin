@@ -3,7 +3,7 @@
 ## 현재 단계: v1.0 MVP
 
 ### Phase 0: 프로젝트 스캐폴딩
-- [ ] pyproject.toml 작성 (의존성: PySide6, pyvista, meshio, numpy, scipy, torch, smt 등)
+- [ ] pyproject.toml 작성 (의존성: PySide6, pyvista, meshio, foamlib, pyCGNS, numpy, scipy, torch, smt, pysindy, pyspod, pykoopman, pykoop, pina, uqpy, salib, openmdao, pysr, dapper 등)
 - [ ] src/naviertwin/ 전체 디렉토리 구조 생성 (PLAN.md §4 기준)
 - [ ] 각 모듈 __init__.py + base.py 추상 클래스 작성
 - [ ] main.py 엔트리포인트
