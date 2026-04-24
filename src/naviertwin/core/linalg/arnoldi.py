@@ -44,7 +44,8 @@ def ritz_values(
 ) -> NDArray[np.complex128]:
     """H 의 eigenvalues = Ritz 추정."""
     _, H = arnoldi(A, b, k)
-    return np.linalg.eigvals(H[:-1, :])
+    kk = H.shape[1]
+    return np.linalg.eigvals(H[:kk, :kk])
 
 
 __all__ = ["arnoldi", "ritz_values"]
