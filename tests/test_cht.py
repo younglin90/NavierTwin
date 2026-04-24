@@ -18,7 +18,9 @@ class TestCHT:
     def test_finite(self) -> None:
         from naviertwin.core.coupling.cht import cht_iterate
 
-        Ts = np.zeros(8); Ts[0] = 100.0
-        Tf = np.zeros(8); Tf[-1] = 50.0
+        Ts = np.zeros(8)
+        Ts[0] = 100.0
+        Tf = np.zeros(8)
+        Tf[-1] = 50.0
         Ts2, Tf2 = cht_iterate(Ts, Tf, k_s=5.0, k_f=2.0, n_iter=100)
         assert np.isfinite(Ts2).all() and np.isfinite(Tf2).all()
