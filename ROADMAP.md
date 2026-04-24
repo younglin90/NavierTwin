@@ -2,7 +2,7 @@
 
 > Phase별 세부 태스크 체크리스트. 버전별 목표·범위·근거는 `PLAN.md` 참조.
 
-## 현재 단계: v2.0.1 — 신경 연산자 확장 (TFNO + PI-DeepONet + MIONet + WNO) + Model 패널 GUI ✅
+## 현재 단계: v2.1.0 — GNN 계열 (GNN Surrogate + MeshGraphNets) ✅
 
 ---
 
@@ -106,12 +106,12 @@
 - [ ] `latent_operator/l_deeponet.py` / `latent_operator/pi_latent_no.py` (v2.0.x)
 - [ ] 학습 loss curve 실시간 플롯 (v2.0.x)
 
-### v2.1.0 — GNN 계열
-- [ ] `core/gnn/gnn_surrogate/gnn_surrogate.py` (PyTorch Geometric)
-- [ ] `core/gnn/meshgraphnets/meshgraphnets.py`
-- [ ] `core/gnn/egno/egno.py` — E(n)-Equivariant GNN (e3nn)
-- [ ] `core/gnn/graph_transformer/hamlet.py`
-- [ ] `tests/test_gnn.py`
+### v2.1.0 — GNN 계열 ✅ (부분 완료 — GCN surrogate + MeshGraphNets MVP)
+- [x] `core/gnn/gnn_surrogate/gnn_surrogate.py` — GCNConv 기반 node-level surrogate
+- [x] `core/gnn/meshgraphnets/meshgraphnets.py` — Encode-Process-Decode + rollout
+- [x] `tests/test_gnn.py` — 6 tests pass
+- [ ] `core/gnn/egno/egno.py` — E(n)-Equivariant GNN (e3nn) (v2.1.x)
+- [ ] `core/gnn/graph_transformer/hamlet.py` (v2.1.x)
 
 ### v2.2.0 — 시계열 + Koopman 신경 연산자
 - [ ] `core/time_series/lstm/lstm.py`
