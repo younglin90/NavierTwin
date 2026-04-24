@@ -31,8 +31,8 @@ def mlmc_estimate(
     rng = rng if rng is not None else np.random.default_rng(0)
     est = 0.0
     var = 0.0
-    for l, n_l in enumerate(levels):
-        samples = np.array([level_sampler(l, rng) for _ in range(n_l)])
+    for lvl, n_l in enumerate(levels):
+        samples = np.array([level_sampler(lvl, rng) for _ in range(n_l)])
         est += samples.mean()
         var += samples.var(ddof=1) / max(n_l, 1)
     return float(est), float(var)
