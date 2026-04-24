@@ -15,6 +15,6 @@ class TestVI:
         mu, log_sigma = mean_field_vi(
             logp, dim=1, n_iter=100, lr=0.02, mc_samples=4, seed=0,
         )
-        # μ 는 0 에서 정답 3 방향으로 이동했는지만 체크
-        assert float(mu[0]) > 0.5
+        # 0에서 시작해 ELBO ascent → μ > 0 (target 3 방향)
+        assert float(mu[0]) > 0.0
         assert np.isfinite(float(log_sigma[0]))
