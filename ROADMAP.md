@@ -332,3 +332,51 @@
 - mamba-ssm (MNO, DeepOMamba) — Windows 지원 불안정으로 후순위
 - Certified RB (RBniCSx) — LGPL, Firedrake 의존성 무거움
 - pyPDAF 대규모 DA — Fortran 컴파일 필요
+
+---
+
+## 🎯 Round 40 Milestone (v4.2.40)
+
+### 최종 통계
+- **383 passed / 4 skipped** tests
+- **63 commits**, **215 소스 파일**, **53 테스트 파일**
+- **4 실전 예제** (cavity / LBM / Burgers+FNO / Streaming Burgers)
+
+### 추가 도메인 (rounds 33-39)
+- **StreamingDigitalTwin + Burgers** (round 33) — 실시간 EnKF (4.9% → 3.0%)
+- **CLI 서브커맨드** (round 34) — benchmark/server/pipeline
+- **RL flow control** (round 35) — GaussianPolicy + REINFORCE
+- **Turbulence** (round 36) — k-ε closure + E(k) 스펙트럼 + Kolmogorov 기울기
+- **Helmholtz + 압축성** (round 37) — 주기 2D 분해 + Mach/isentropic
+- **QMC samplers** (round 38) — Halton / LHS / Sobol + 스케일링
+- **음향 모드** (round 39) — 1D duct + Strouhal + Womersley
+
+### 사용 가능 도메인 total
+1. CFD I/O (7 formats)
+2. 메쉬 생성/후처리 (2)
+3. 차원축소 (선형 5 + 비선형 6)
+4. 모달/통계 (9)
+5. 유동 분석 (10+)
+6. 신경 연산자 (FNO 6 + DeepONet 5 + Latent 2 + KNO 3 + UNet 2 + KANO + HAMLET)
+7. GNN (2)
+8. 시계열 (5 + ESN + TNO)
+9. Equivariant (3)
+10. 생성 모델 (3)
+11. PINN (3)
+12. 물리 보정 (3)
+13. DA (3)
+14. UQ + 최적화 (7+)
+15. 민감도 + 설명 (5)
+16. Surrogate (4) + 멀티피델리티 (2) + Online (3)
+17. Digital Twin (3 엔진 + Streaming)
+18. **Turbulence** (k-ε + E(k))
+19. **압축성** (Mach/isentropic)
+20. **음향** (duct + Strouhal)
+21. **RL** (policy gradient)
+22. **QMC** (Halton/LHS/Sobol)
+23. External 솔버 래퍼 (LBM + Lettuce + flowtorch + JAX-Fluids)
+24. PDE 솔버 (Burgers + Heat)
+25. Export (ntwin + ONNX + TorchScript)
+26. Report (Jinja2 + weasyprint)
+27. API (FastAPI 5 엔드포인트)
+28. GUI (6 패널 + 6 위젯 + 위자드 + i18n + Compare 탭)
