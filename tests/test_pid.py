@@ -49,8 +49,8 @@ class TestPID:
     def test_reset(self) -> None:
         from naviertwin.core.control.pid import PID
 
-        p = PID(ki=1.0)
+        p = PID(kp=0.0, ki=1.0)
         p.step(1.0, 0.0, 0.5)
         p.reset()
         u = p.step(1.0, 0.0, 0.5)
-        assert u == pytest.approx(0.5)  # integral reset → only 0.5*1
+        assert u == pytest.approx(0.5)  # integral reset → only ki * (0.5 * 1)
