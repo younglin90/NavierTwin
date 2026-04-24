@@ -26,12 +26,22 @@ def _grad_descent(
     g_fn: Callable[[NDArray], NDArray], x0: NDArray, *, lr: float = 0.05,
     n: int = 200, tol: float = 1e-8,
 ) -> NDArray:
+    """gradient descent with backtracking line search."""
     x = x0.copy()
     for _ in range(n):
         gx = g_fn(x)
-        x = x - lr * gx
-        if np.linalg.norm(gx) < tol:
+        gn = float(np.linalg.norm(gx))
+        if gn < tol:
             break
+        # backtracking
+        step = lr
+        for _bt in range(30):
+            x_new = x - step * gx
+            gx_new = g_fn(x_new)
+            if float(np.linalg.norm(gx_new)) < gn:
+                break
+            step *= 0.5
+        x = x - step * gx
     return x
 
 
@@ -52,7 +62,7 @@ def aug_lagrangian(
         # solve unconstrained augmented problem
         def g_aug(x_):
             return grad(x_) + hjac(x_).T @ (lam + mu * h(x_))
-        x = _grad_descent(g_aug, x, lr=1.0 / max(mu, 1.0), n=300)
+        x = _grad_descent(g_aug, x, lr=0.1, n=500)
         lam = lam + mu * h(x)
         mu *= 1.5
     return x
