@@ -2,7 +2,7 @@
 
 > Phase별 세부 태스크 체크리스트. 버전별 목표·범위·근거는 `PLAN.md` 참조.
 
-## 현재 단계: v2.1.0 — GNN 계열 (GNN Surrogate + MeshGraphNets) ✅
+## 현재 단계: v2.2.0 — 시계열 + Koopman 신경 연산자 ✅
 
 ---
 
@@ -113,17 +113,16 @@
 - [ ] `core/gnn/egno/egno.py` — E(n)-Equivariant GNN (e3nn) (v2.1.x)
 - [ ] `core/gnn/graph_transformer/hamlet.py` (v2.1.x)
 
-### v2.2.0 — 시계열 + Koopman 신경 연산자
-- [ ] `core/time_series/lstm/lstm.py`
-- [ ] `core/time_series/transformer/transformer_ts.py`
-- [ ] `core/time_series/temporal_no/tno.py`
-- [ ] `core/time_series/neural_ode/neural_ode.py` (torchdiffeq)
-- [ ] `core/time_series/latent_dynamics/latent_dynamics.py`
-- [ ] `core/operator_learning/koopman/kno.py`
-- [ ] `core/operator_learning/koopman/ikno.py`
-- [ ] `core/operator_learning/koopman/flowdmd.py`
-- [ ] `core/flow_analysis/modal/pykoopman_wrapper.py` (PyKoopman, pykoop)
-- [ ] `tests/test_time_series.py`
+### v2.2.0 — 시계열 + Koopman 신경 연산자 ✅ (부분 완료)
+- [x] `core/time_series/lstm/lstm.py` — LSTM autoregressive (lookback 윈도우 + rollout)
+- [x] `core/time_series/transformer/transformer_ts.py` — causal mask Transformer encoder
+- [x] `core/time_series/neural_ode/neural_ode.py` — torchdiffeq + RK4 폴백
+- [x] `core/operator_learning/koopman/kno.py` — encoder/decoder + 선형 Koopman K
+- [x] `tests/test_time_series.py` — 6 tests pass
+- [ ] `core/time_series/temporal_no/tno.py` (v2.2.x)
+- [ ] `core/time_series/latent_dynamics/latent_dynamics.py` (v2.2.x)
+- [ ] `core/operator_learning/koopman/ikno.py` / `flowdmd.py` (v2.2.x)
+- [ ] `core/flow_analysis/modal/pykoopman_wrapper.py` (v2.2.x)
 
 ---
 
