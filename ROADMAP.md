@@ -422,3 +422,30 @@
 
 이 milestone 이후 기능 추가는 희귀 영역 (Mamba SSM / Firedrake 기반 Certified RB /
 Fortran pyPDAF) 이며, 일반 사용자에게는 현재 범위가 충분합니다.
+
+---
+
+## 🔧 Round 51-58: 라이브러리 활용도 개선 집중
+
+**전략 변경**: 자체 구현 일변도 → 검증된 라이브러리 래핑.
+
+| Round | 라이브러리 | 이전 활용도 | 개선 후 |
+|------|------|------|------|
+| 51 | botorch + gpytorch | 0% | qEI/UCB 배치 BO ✅ |
+| 52 | SALib | 20% (Sobol) | 100% (Morris/FAST/PAWN/Delta/Sobol) |
+| 53 | nlopt | 0% | 14 알고리즘 |
+| 54 | pydmd | 20% (DMD/FbDMD) | 60% (+HODMD/MrDMD/OptDMD/HAVOK/DMDc) |
+| 55 | smt | 30% (RBF/Kriging) | 80% (+KPLS/GEKPLS/IDW/QP + LHS/FullFact) |
+| 56 | pymor | 0% | POD/DEIM/GramSchmidt |
+| 57 | foamlib | 0% | case 파라미터 스윕 + dict 조작 |
+| 58 | pymeshlab | 10% (simplify/smooth) | 60% (+Taubin/remesh/curvature/hole) |
+
+**458 passed / 83 commits / v4.2.58**
+
+### 라이브러리 활용도 점검 답변
+> **"모든 라이브러리 제대로 잘 이용하고 있는거 맞지?"**
+
+- Round 50 시점: **부분적** (설치된 라이브러리 중 절반만 활용, 자체 구현 과다)
+- Round 58 시점: **핵심 라이브러리 8종 전체 활용** (botorch/SALib/nlopt/pydmd/smt/pymor/foamlib/pymeshlab)
+- 남은 것: `physicsnemo` (가용성 체크만), `pyCGNS` (h5py 폴백에 의존)
+- 미설치: pyspod/pysindy/modred/flowtorch/pysr/shap/torchdiffeq/e3nn/escnn/pygmo/dedalus/jaxfluids/lettuce — 자체 구현 완비로 보완
