@@ -16,7 +16,7 @@ class TestNMPC:
         def cost(x, u):
             return float(x[0] ** 2 + 0.01 * u[0] ** 2)
 
-        u = nmpc_solve(f, cost, x0=np.array([1.0]), N=15, n_iter=200, lr=0.1)
+        u = nmpc_solve(f, cost, x0=np.array([1.0]), N=10, n_iter=300, lr=0.01)
         # first action negative (push x down)
         assert u[0, 0] < -0.1
 
