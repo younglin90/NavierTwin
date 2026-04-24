@@ -27,7 +27,6 @@ def mhe_estimate(
     R: NDArray[np.float64],
 ) -> NDArray[np.float64]:
     """Linear MHE: minimize prior + sum (z - H x_k)ᵀ R⁻¹ ... 갈, Newton."""
-    n = A.shape[0]
     N = Y.shape[0]
     Ri = np.linalg.inv(R)
     Qi = np.linalg.inv(Q)

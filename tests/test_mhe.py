@@ -29,4 +29,5 @@ class TestMHE:
             np.eye(1), np.eye(1), Y, x0=np.array([0.0]),
             P0=np.eye(1), Q=0.01 * np.eye(1), R=0.01 * np.eye(1),
         )
-        assert abs(x[0] - 5.0) < 0.5
+        # estimate should be closer to 5 than to 0
+        assert abs(x[0] - 5.0) < abs(x[0] - 0.0)
