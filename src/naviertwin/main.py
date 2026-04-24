@@ -56,6 +56,24 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         help="로그 레벨 (기본값: INFO)",
     )
+
+    sub = parser.add_subparsers(dest="command", metavar="<command>")
+
+    # benchmark
+    p_bench = sub.add_parser("benchmark", help="cavity 또는 Burgers 벤치마크 실행")
+    p_bench.add_argument("--kind", choices=["cavity", "burgers", "lbm"], default="cavity")
+
+    # server
+    p_serv = sub.add_parser("server", help="FastAPI REST 서버 실행")
+    p_serv.add_argument("--host", default="127.0.0.1")
+    p_serv.add_argument("--port", type=int, default=8000)
+
+    # pipeline
+    p_pipe = sub.add_parser("pipeline", help="합성 end-to-end 파이프라인 실행")
+    p_pipe.add_argument("--n-modes", type=int, default=5)
+    p_pipe.add_argument("--reducer", choices=["pod", "ae"], default="pod")
+    p_pipe.add_argument("--surrogate", choices=["kriging", "rbf"], default="kriging")
+
     return parser
 
 
@@ -107,9 +125,74 @@ def main() -> None:
 
     if args.gui:
         sys.exit(_run_gui(args.config))
+    elif args.command == "benchmark":
+        sys.exit(_run_benchmark(args.kind))
+    elif args.command == "server":
+        sys.exit(_run_server(args.host, args.port))
+    elif args.command == "pipeline":
+        sys.exit(_run_pipeline(args.reducer, args.n_modes, args.surrogate))
     else:
         parser.print_help()
         sys.exit(0)
+
+
+def _run_benchmark(kind: str) -> int:
+    """단일 벤치마크 실행."""
+    import runpy
+    from pathlib import Path
+
+    base = Path(__file__).resolve().parent.parent.parent / "examples"
+    scripts = {
+        "cavity": base / "cavity_benchmark.py",
+        "burgers": base / "burgers_fno.py",
+        "lbm": base / "lbm_rom_pipeline.py",
+    }
+    script = scripts.get(kind)
+    if script is None or not script.exists():
+        print(f"벤치마크 스크립트 없음: {kind}", file=sys.stderr)
+        return 1
+    runpy.run_path(str(script), run_name="__main__")
+    return 0
+
+
+def _run_server(host: str, port: int) -> int:
+    """FastAPI 서버 실행 (uvicorn)."""
+    try:
+        import uvicorn
+
+        from naviertwin.api.server import app
+    except ImportError as e:
+        print(f"오류: FastAPI/uvicorn 설치 필요: {e}", file=sys.stderr)
+        return 1
+    if app is None:
+        print("app 생성 실패 (FastAPI 미설치)", file=sys.stderr)
+        return 1
+    uvicorn.run(app, host=host, port=port)
+    return 0
+
+
+def _run_pipeline(reducer: str, n_modes: int, surrogate: str) -> int:
+    """합성 파이프라인 실행."""
+    import numpy as np
+
+    from naviertwin.core.digital_twin.pipeline import NavierTwinPipeline
+
+    rng = np.random.default_rng(0)
+    r = max(1, n_modes)
+    U = rng.standard_normal((60, r))
+    V = rng.standard_normal((r, 30))
+    X = U @ V + 0.01 * rng.standard_normal((60, 30))
+
+    pipe = NavierTwinPipeline(
+        reducer_kind=reducer, n_modes=n_modes, surrogate_kind=surrogate,
+    )
+    pipe.load_snapshots(X, field_name="U")
+    pipe.reduce()
+    params = np.linspace(0, 1, 30).reshape(-1, 1)
+    pipe.fit_surrogate(params)
+    metrics = pipe.validate(params[-5:], pipe.state.coeffs[-5:])
+    print(f"파이프라인 완료: {metrics}")
+    return 0
 
 
 if __name__ == "__main__":
