@@ -2,7 +2,7 @@
 
 > Phase별 세부 태스크 체크리스트. 버전별 목표·범위·근거는 `PLAN.md` 참조.
 
-## 현재 단계: v2.2.0 — 시계열 + Koopman 신경 연산자 ✅
+## 현재 단계: v3.0.0 — 데이터 동화 + UQ + 기본 최적화 ✅
 
 ---
 
@@ -128,18 +128,17 @@
 
 ## v3.x — 디지털 트윈 완성
 
-### v3.0.0 — 데이터 동화 + UQ + 기본 최적화
-- [ ] `core/data_assimilation/enkf.py` (DAPPER)
-- [ ] `core/data_assimilation/enkf_hpc.py` (pyPDAF)
-- [ ] `core/data_assimilation/4dvar.py`
-- [ ] `core/data_assimilation/particle_filter.py` (filterpy)
-- [ ] `core/sensitivity/sobol_analysis.py` (SALib)
-- [ ] `core/optimization/uq_surrogate.py` (UQpy, OpenTURNS)
-- [ ] `core/optimization/mc_propagation.py`
-- [ ] `core/optimization/bayesian_opt.py` (scikit-optimize + NLopt)
-- [ ] `core/optimization/surrogate_opt.py` (NLopt)
-- [ ] `core/sensitivity/causal_analysis.py`
-- [ ] `tests/test_da.py`, `tests/test_uq.py`
+### v3.0.0 — 데이터 동화 + UQ + 기본 최적화 ✅ (부분 완료)
+- [x] `core/data_assimilation/enkf.py` — Stochastic EnKF + inflation
+- [x] `core/data_assimilation/particle_filter.py` — Bootstrap SIR + systematic resample
+- [x] `core/sensitivity/sobol_analysis.py` — Saltelli 샘플링 + Sobol S1/ST (SALib 옵션 wrapper)
+- [x] `core/optimization/mc_propagation.py` — 평균/표준편차/백분위수 MC 전파
+- [x] `core/optimization/bayesian_opt.py` — GP + EI 최소화 (scikit-learn)
+- [x] `tests/test_da_uq.py` — 7 tests pass
+- [ ] `core/data_assimilation/enkf_hpc.py` / `4dvar.py` (v3.0.x)
+- [ ] `core/optimization/uq_surrogate.py` (v3.0.x, UQpy/OpenTURNS)
+- [ ] `core/optimization/surrogate_opt.py` (v3.0.x, NLopt)
+- [ ] `core/sensitivity/causal_analysis.py` (v3.0.x)
 
 ### v3.1.0 — PINN + 물리 보정 + 방정식 발견
 - [ ] `core/physnemo/physnemo_wrapper.py` (NVIDIA PhysicsNEMO)
