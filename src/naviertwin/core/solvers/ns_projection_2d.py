@@ -33,21 +33,26 @@ def solve_cavity(
     dy = Ly / (ny - 1)
     nu = 1.0 / Re
     if dt is None:
-        dt = 0.25 * min(dx ** 2, dy ** 2) / nu
+        dt_diff = 0.25 * min(dx ** 2, dy ** 2) / nu
+        dt_conv = 0.25 * min(dx, dy) / max(abs(U_lid), 1e-6)
+        dt = min(dt_diff, dt_conv)
     u = np.zeros((nx, ny), dtype=np.float64)
     v = np.zeros((nx, ny), dtype=np.float64)
     p = np.zeros((nx, ny), dtype=np.float64)
 
-    for _ in range(n_steps):
-        # BC: top lid
-        u[:, -1] = U_lid
-        v[:, -1] = 0.0
+    def _apply_bc(u, v):
+        # walls first, lid last so corners take lid value
         u[:, 0] = 0.0
         v[:, 0] = 0.0
         u[0, :] = 0.0
         v[0, :] = 0.0
         u[-1, :] = 0.0
         v[-1, :] = 0.0
+        u[:, -1] = U_lid
+        v[:, -1] = 0.0
+
+    for _ in range(n_steps):
+        _apply_bc(u, v)
 
         # convection (upwind) + diffusion (central)
         # predictor for u*
@@ -85,6 +90,7 @@ def solve_cavity(
         dp_y = (p[1:-1, 2:] - p[1:-1, :-2]) / (2 * dy)
         u[1:-1, 1:-1] = u_star[1:-1, 1:-1] - dt * dp_x
         v[1:-1, 1:-1] = v_star[1:-1, 1:-1] - dt * dp_y
+    _apply_bc(u, v)
     return u, v, p
 
 

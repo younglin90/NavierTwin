@@ -21,9 +21,9 @@ class TestNS:
         from naviertwin.core.solvers.ns_projection_2d import solve_cavity
 
         u, v, _ = solve_cavity(nx=12, ny=12, Re=50.0, n_steps=10)
-        # 좌/우/하단 벽 = 0
-        assert np.max(np.abs(u[0, :])) < 1e-12
-        assert np.max(np.abs(u[-1, :])) < 1e-12
+        # 좌/우/하단 벽 = 0 (모서리는 lid 에 의해 1이 될 수 있으므로 내부만)
+        assert np.max(np.abs(u[0, :-1])) < 1e-12
+        assert np.max(np.abs(u[-1, :-1])) < 1e-12
         assert np.max(np.abs(u[:, 0])) < 1e-12
         # 상단 lid
         assert np.allclose(u[:, -1], 1.0)
