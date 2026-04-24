@@ -68,7 +68,7 @@ def vae_loss(x_hat, x, mu, logv, *, beta: float = 1.0):
     torch = _torch()
     rec = ((x_hat - x) ** 2).mean()
     kl = -0.5 * torch.mean(1 + logv - mu ** 2 - logv.exp())
-    return rec + beta * kl, {"rec": float(rec), "kl": float(kl)}
+    return rec + beta * kl, {"rec": float(rec.detach()), "kl": float(kl.detach())}
 
 
 __all__ = ["VAE", "vae_loss"]
