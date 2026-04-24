@@ -31,7 +31,7 @@ class TestNonlinear:
         def J(x):
             return np.array([[1, 1], [x[1], x[0]]], dtype=float)
 
-        x, info = newton_solve(F, J, x0=np.array([0.5, 0.5]))
+        x, info = newton_solve(F, J, x0=np.array([0.5, 2.5]))
         assert info["converged"]
         assert np.linalg.norm(F(x)) < 1e-8
 
