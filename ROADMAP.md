@@ -2,7 +2,7 @@
 
 > Phase별 세부 태스크 체크리스트. 버전별 목표·범위·근거는 `PLAN.md` 참조.
 
-## 현재 단계: v3.2.0 — GUI 완성 요소 (ONNX/TorchScript + 보고서 + Undo/Redo + i18n) ✅
+## 현재 단계: v4.0.0 — 잠재 동역학 + Score-based Diffusion ✅
 
 ---
 
@@ -166,12 +166,13 @@
 
 ## v4.x — 최첨단 모델
 
-### v4.0.0 — State Space Model + Neural ODE 고도화
-- [ ] `core/state_space/mamba_neural_op/mno.py` (mamba-ssm)
-- [ ] `core/state_space/deepomamba/deepomamba.py`
-- [ ] `core/time_series/latent_dynamics/latent_dynamics_adv.py` 고도화
-- [ ] flowtorch 파이프라인 연동 (GPL)
-- [ ] Lettuce LBM 스냅샷 생성 연동
+### v4.0.0 — 잠재 동역학 + 생성 모델 MVP ✅
+- [x] `core/time_series/latent_dynamics/latent_dynamics.py` — AE + Neural ODE (RK4) 잠재 적분
+- [x] `core/generative/diffusion_pde/diffusion_pde.py` — DDPM-style 유동장 생성
+- [x] `tests/test_latent_generative.py` — 6 tests pass
+- [ ] `core/state_space/mamba_neural_op/mno.py` (v4.0.x — mamba-ssm WSL 필요)
+- [ ] `core/state_space/deepomamba/deepomamba.py` (v4.0.x)
+- [ ] flowtorch 파이프라인 연동 (v4.0.x, GPL)
 
 ### v4.1.0 — 생성 모델 + KAN
 - [ ] `core/generative/diffusion_pde/diffusion_pde.py`
