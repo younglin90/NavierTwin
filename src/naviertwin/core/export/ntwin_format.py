@@ -144,7 +144,7 @@ class NTwinWriter:
     # 공개 API
     # ------------------------------------------------------------------
 
-    def write_dataset(self, dataset: Any) -> None:
+    def write_dataset(self, dataset: Any, compression: str | None = None) -> None:
         """CFDDataset 전체를 .ntwin 파일에 저장한다.
 
         단일 타임스텝 메쉬를 기준으로 VTKHDF 구조를 초기화하고
@@ -152,6 +152,7 @@ class NTwinWriter:
 
         Args:
             dataset: 저장할 :class:`~naviertwin.core.cfd_reader.base.CFDDataset`.
+            compression: PointData 저장 시 적용할 HDF5 compression (예: ``"gzip"``).
         """
         np = _require_numpy()
         mesh = dataset.mesh
@@ -161,6 +162,9 @@ class NTwinWriter:
 
         # 필드 데이터 저장
         point_data_grp = self._h5["VTKHDF/PointData"]
+        compression_kwargs: dict[str, Any] = {}
+        if compression:
+            compression_kwargs["compression"] = compression
         for name in dataset.field_names:
             arr: Any = None
             if hasattr(mesh, "point_data") and name in mesh.point_data:
@@ -168,7 +172,7 @@ class NTwinWriter:
             elif hasattr(mesh, "cell_data") and name in mesh.cell_data:
                 arr = np.asarray(mesh.cell_data[name], dtype=np.float32)
             if arr is not None:
-                point_data_grp.create_dataset(name, data=arr)
+                point_data_grp.create_dataset(name, data=arr, **compression_kwargs)
 
         # NumberOfPoints/Cells
         n_pts = int(mesh.n_points) if hasattr(mesh, "n_points") else 0
@@ -419,6 +423,13 @@ class NTwinReader:
         # 마지막 타임스텝 메쉬 (또는 전체를 대표하는 단일 메쉬)
         idx = max(0, len(ts) - 1)
         mesh = self.read_timestep(idx)
+        metadata: dict[str, Any] = {
+            "source_file": str(self._path),
+            "reader": "NTwinReader",
+        }
+        time_series_fields = self._read_time_series_point_data(ts, fn)
+        if time_series_fields:
+            metadata["time_series_fields"] = time_series_fields
 
         logger.info(
             "read 완료: %d 타임스텝, 필드=%s", len(ts), fn
@@ -427,7 +438,7 @@ class NTwinReader:
             mesh=mesh,
             time_steps=ts,
             field_names=fn,
-            metadata={"source_file": str(self._path), "reader": "NTwinReader"},
+            metadata=metadata,
         )
 
     def read_timestep(self, t_idx: int) -> Any:
@@ -454,6 +465,7 @@ class NTwinReader:
             )
 
         vtk_grp = self._h5["VTKHDF"]
+        offset, count = self._resolve_timestep_slice(vtk_grp, t_idx, len(ts))
 
         # Points
         if "Points" in vtk_grp:
@@ -484,10 +496,80 @@ class NTwinReader:
             for name in self.field_names:
                 if name in pd_grp:
                     arr = np.asarray(pd_grp[name])
-                    mesh.point_data[name] = arr
+                    if arr.ndim == 0:
+                        mesh.point_data[name] = arr
+                        continue
+                    if arr.shape[0] < offset + count:
+                        raise ValueError(
+                            "PointData 길이가 타임스텝 슬라이스 범위를 충족하지 않습니다: "
+                            f"field={name}, len={arr.shape[0]}, need={offset + count}"
+                        )
+                    mesh.point_data[name] = arr[offset : offset + count]
 
         logger.debug("read_timestep t_idx=%d 완료", t_idx)
         return mesh
+
+    def _read_time_series_point_data(
+        self, time_steps: list[float], field_names: list[str]
+    ) -> dict[str, Any]:
+        """read() 시 사용할 multi-timestep PointData 배열을 읽는다."""
+        np = _require_numpy()
+
+        if "VTKHDF" not in self._h5:
+            return {}
+        vtk_grp = self._h5["VTKHDF"]
+        if "PointData" not in vtk_grp or "NumberOfPoints" not in vtk_grp:
+            return {}
+
+        counts = np.asarray(vtk_grp["NumberOfPoints"], dtype=np.int64).reshape(-1)
+        if counts.size != len(time_steps) or counts.size <= 1:
+            return {}
+
+        total_points = int(counts.sum())
+        if total_points <= 0:
+            return {}
+
+        result: dict[str, Any] = {}
+        pd_grp = vtk_grp["PointData"]
+        for name in field_names:
+            if name not in pd_grp:
+                continue
+            arr = np.asarray(pd_grp[name])
+            if arr.ndim == 0:
+                continue
+            if arr.shape[0] < total_points:
+                raise ValueError(
+                    "PointData 길이가 multi-timestep 전체 길이를 충족하지 않습니다: "
+                    f"field={name}, len={arr.shape[0]}, need={total_points}"
+                )
+            result[name] = arr[:total_points]
+        return result
+
+    def _resolve_timestep_slice(
+        self, vtk_grp: Any, t_idx: int, n_time_steps: int
+    ) -> tuple[int, int]:
+        """타임스텝별 PointData 슬라이스(offset, count)를 계산한다."""
+        np = _require_numpy()
+
+        if "NumberOfPoints" not in vtk_grp:
+            raise ValueError("NumberOfPoints 메타데이터가 없습니다.")
+
+        counts = np.asarray(vtk_grp["NumberOfPoints"], dtype=np.int64).reshape(-1)
+        if counts.size == 0:
+            raise ValueError("NumberOfPoints 메타데이터가 비어 있습니다.")
+
+        if counts.size == 1:
+            return 0, int(counts[0])
+
+        if counts.size != n_time_steps:
+            raise ValueError(
+                "NumberOfPoints 길이와 time_steps 길이가 일치하지 않습니다: "
+                f"{counts.size} != {n_time_steps}"
+            )
+
+        offset = int(counts[:t_idx].sum())
+        count = int(counts[t_idx])
+        return offset, count
 
     @property
     def time_steps(self) -> list[float]:
@@ -499,8 +581,12 @@ class NTwinReader:
         np = _require_numpy()
         try:
             ts_raw = self._h5["NavierTwin/time_steps"]
-            return list(np.asarray(ts_raw, dtype=np.float64))
-        except KeyError:
+            ts_arr = np.asarray(ts_raw, dtype=np.float64)
+            if ts_arr.ndim == 0:
+                return [float(ts_arr)]
+            values = list(ts_arr)
+            return [float(v) for v in values]
+        except (KeyError, TypeError, ValueError):
             return [0.0]
 
     @property
@@ -513,9 +599,16 @@ class NTwinReader:
         try:
             raw = self._h5["NavierTwin/field_names"]
             decoded = raw[()].decode("utf-8") if hasattr(raw[()], "decode") else str(raw[()])
-            return json.loads(decoded)
+            parsed = json.loads(decoded)
+            if isinstance(parsed, list) and all(isinstance(x, str) for x in parsed):
+                return parsed
+            raise TypeError("field_names must be list[str]")
         except (KeyError, json.JSONDecodeError, AttributeError):
             # PointData 그룹에서 직접 수집
+            if "VTKHDF/PointData" in self._h5:
+                return sorted(self._h5["VTKHDF/PointData"].keys())
+            return []
+        except TypeError:
             if "VTKHDF/PointData" in self._h5:
                 return sorted(self._h5["VTKHDF/PointData"].keys())
             return []
@@ -540,18 +633,21 @@ class NTwinReader:
 # ---------------------------------------------------------------------------
 
 
-def save_dataset(dataset: Any, path: Path) -> None:
+def save_dataset(
+    dataset: Any, path: Path, compression: str | None = None
+) -> None:
     """CFDDataset 을 .ntwin 파일로 저장하는 편의 함수.
 
     Args:
         dataset: 저장할 :class:`~naviertwin.core.cfd_reader.base.CFDDataset`.
         path: 저장 경로 (.ntwin 확장자 권장).
+        compression: PointData 저장 시 적용할 HDF5 compression (예: ``"gzip"``).
 
     Raises:
         ImportError: h5py 가 설치되어 있지 않은 경우.
     """
     with NTwinWriter(Path(path)) as writer:
-        writer.write_dataset(dataset)
+        writer.write_dataset(dataset, compression=compression)
     logger.info("save_dataset 완료: %s", path)
 
 

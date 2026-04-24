@@ -2,7 +2,7 @@
 
 > Phase별 세부 태스크 체크리스트. 버전별 목표·범위·근거는 `PLAN.md` 참조.
 
-## 현재 단계: v3.1.0 — PINN + 물리 보정 + SINDy ✅
+## 현재 단계: v3.2.0 — GUI 완성 요소 (ONNX/TorchScript + 보고서 + Undo/Redo + i18n) ✅
 
 ---
 
@@ -151,17 +151,16 @@
 - [ ] `core/explainability/symbolic_regression.py` (PySR, optional) (v3.1.x)
 - [ ] `core/multi_fidelity/multi_fidelity.py` (v3.1.x)
 
-### v3.2.0 — GUI 완성 + 배포
-- [ ] `gui/wizard/tutorial_wizard.py`
-- [ ] `gui/styles/i18n/ko.json`, `en.json`
-- [ ] `utils/undo_redo.py` — Command 스택
-- [ ] 모델 비교 대시보드 GUI
-- [ ] `core/report/generator.py` (Jinja2 → PDF)
-- [ ] `core/export/onnx_export.py`
-- [ ] `core/export/torchscript_export.py`
-- [ ] `installer/naviertwin.iss` — Inno Setup
-- [ ] optional extras 분리 빌드 (`[core]` vs `[full]`)
-- [ ] `tests/test_export.py`, `tests/test_report.py`
+### v3.2.0 — GUI 완성 + 배포 ✅ (핵심 MVP 완료)
+- [x] `gui/styles/i18n/ko.json`, `en.json` + `utils/i18n.py` Translator
+- [x] `utils/undo_redo.py` — Command 스택 (max_size cap 포함)
+- [x] `core/report/generator.py` — Jinja2 HTML + weasyprint PDF
+- [x] `core/export/onnx_export.py` — opset / dynamic_axes / legacy 경로 fallback
+- [x] `core/export/torchscript_export.py` — trace / script 지원
+- [x] `tests/test_export_report.py` — 11 tests pass
+- [ ] `gui/wizard/tutorial_wizard.py` (v3.2.x)
+- [ ] 모델 비교 대시보드 GUI (v3.2.x)
+- [ ] `installer/naviertwin.iss` — Inno Setup (v3.2.x, 배포 시점)
 
 ---
 
