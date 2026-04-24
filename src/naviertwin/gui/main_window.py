@@ -118,6 +118,14 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001
             self._compare_panel = None
 
+        # 시뮬레이션 패널 — LBM / Streaming / RL / Burgers
+        try:
+            from naviertwin.gui.panels.simulation_panel import SimulationPanel
+
+            self._simulation_panel = SimulationPanel()
+        except Exception:  # noqa: BLE001
+            self._simulation_panel = None
+
         self._tabs.addTab(self._import_panel,  f"① {self._t('panel.import')}")
         self._tabs.addTab(self._analyze_panel, f"② {self._t('panel.analyze')}")
         self._tabs.addTab(self._reduce_panel,  f"③ {self._t('panel.reduce')}")
@@ -126,6 +134,8 @@ class MainWindow(QMainWindow):
         self._tabs.addTab(self._export_panel,  f"⑥ {self._t('panel.export')}")
         if self._compare_panel is not None:
             self._tabs.addTab(self._compare_panel, "⑦ Compare")
+        if self._simulation_panel is not None:
+            self._tabs.addTab(self._simulation_panel, "⑧ Simulation")
 
         vbox.addWidget(self._tabs)
 
