@@ -2,7 +2,7 @@
 
 > Phase별 세부 태스크 체크리스트. 버전별 목표·범위·근거는 `PLAN.md` 참조.
 
-## 현재 단계: v1.2.0 — 비선형 차원축소 + SPOD + 고급 유동분석 ✅
+## 현재 단계: v2.0.0 — 신경 연산자 MVP (FNO + DeepONet + U-Net) ✅
 
 ---
 
@@ -90,23 +90,15 @@
 
 ## v2.x — 신경 연산자
 
-### v2.0.0 — FNO / DeepONet 계열
-- [ ] `core/operator_learning/fno/fno.py` — FNO (neuraloperator)
-- [ ] `core/operator_learning/fno/tfno.py` — TFNO
-- [ ] `core/operator_learning/fno/wno.py` — WNO
-- [ ] `core/operator_learning/fno/adaptive_fno.py` — Adaptive FNO
-- [ ] `core/operator_learning/fno/lno.py` — LNO
-- [ ] `core/operator_learning/fno/spectral_refiner.py` — Spectral-Refiner
-- [ ] `core/operator_learning/deeponet/deeponet.py` — DeepONet (deepxde)
-- [ ] `core/operator_learning/deeponet/pi_deeponet.py` — PI-DeepONet
-- [ ] `core/operator_learning/deeponet/mionet.py` — MIONet
-- [ ] `core/operator_learning/deeponet/sequential_deeponet.py`
-- [ ] `core/operator_learning/deeponet/nfno_deeponet.py`
-- [ ] `core/operator_learning/latent_operator/l_deeponet.py`
-- [ ] `core/operator_learning/latent_operator/pi_latent_no.py`
-- [ ] `core/operator_learning/unet/unet.py`
-- [ ] 학습 모니터링 (loss curve, 검증 오차) GUI 연동
-- [ ] `tests/test_operator_learning.py`
+### v2.0.0 — FNO / DeepONet / U-Net MVP ✅
+- [x] `core/operator_learning/fno/fno.py` — SpectralConv1d/2d + FNO1D/FNO2D (PyTorch 직접 구현)
+- [x] `core/operator_learning/deeponet/deeponet.py` — branch/trunk MLP + bias (trunk 좌표 캐시)
+- [x] `core/operator_learning/unet/unet.py` — 2-level U-Net (encoder/decoder + skip)
+- [x] `tests/test_operator_learning.py` — 8 테스트 통과 (FNO1D/FNO2D/DeepONet/UNet2D + not-fitted 가드)
+- [ ] `fno/tfno.py` / `fno/wno.py` / `fno/adaptive_fno.py` / `fno/lno.py` / `fno/spectral_refiner.py` (v2.0.x)
+- [ ] `deeponet/pi_deeponet.py` / `deeponet/mionet.py` / `deeponet/sequential_deeponet.py` / `nfno_deeponet.py` (v2.0.x)
+- [ ] `latent_operator/l_deeponet.py` / `latent_operator/pi_latent_no.py` (v2.0.x)
+- [ ] 학습 모니터링 GUI 연동 (v2.0.x)
 
 ### v2.1.0 — GNN 계열
 - [ ] `core/gnn/gnn_surrogate/gnn_surrogate.py` (PyTorch Geometric)
