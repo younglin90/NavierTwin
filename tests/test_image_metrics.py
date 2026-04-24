@@ -39,4 +39,4 @@ class TestImg:
 
         a = np.array([[0.0, 1.0], [0.0, 1.0]])
         b = a + 0.1
-        assert nrmse(a, b) == 0.1
+        assert abs(nrmse(a, b) - 0.1) < 1e-10
