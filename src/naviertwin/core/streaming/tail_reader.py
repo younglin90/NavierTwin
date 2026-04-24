@@ -33,7 +33,10 @@ class TailReader:
                 if self.path.exists():
                     with self.path.open("r", encoding="utf-8", errors="replace") as f:
                         f.seek(self._pos)
-                        for line in f:
+                        while True:
+                            line = f.readline()
+                            if not line:
+                                break
                             if line.endswith("\n"):
                                 self.handler(line.rstrip("\n"))
                                 self._pos = f.tell()
