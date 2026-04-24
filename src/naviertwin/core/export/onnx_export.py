@@ -58,6 +58,12 @@ def export_to_onnx(
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
 
+    import warnings
+
+    warnings.filterwarnings(
+        "ignore", category=DeprecationWarning, message=".*legacy TorchScript.*"
+    )
+
     model.eval()
     export_kwargs = dict(
         input_names=input_names or ["input"],

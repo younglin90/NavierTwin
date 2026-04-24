@@ -50,14 +50,19 @@ def export_to_torchscript(
     out.parent.mkdir(parents=True, exist_ok=True)
     model.eval()
 
-    if mode == "trace":
-        if sample_input is None:
-            raise ValueError("mode='trace' 는 sample_input 필요")
-        scripted = torch.jit.trace(model, sample_input)
-    elif mode == "script":
-        scripted = torch.jit.script(model)
-    else:
-        raise ValueError(f"mode 는 trace/script: '{mode}'")
+    # torch.jit 은 최신 PyTorch 에서 deprecation 경고 — 사용자 명시 경로로만 억제
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=DeprecationWarning)
+        if mode == "trace":
+            if sample_input is None:
+                raise ValueError("mode='trace' 는 sample_input 필요")
+            scripted = torch.jit.trace(model, sample_input)
+        elif mode == "script":
+            scripted = torch.jit.script(model)
+        else:
+            raise ValueError(f"mode 는 trace/script: '{mode}'")
 
     scripted.save(str(out))
     logger.info("TorchScript 저장 완료 (%s): %s", mode, out)

@@ -40,7 +40,7 @@ def _to_pymeshlab(mesh: Any) -> Any:
     except ImportError as exc:
         raise RuntimeError(_MISSING) from exc
 
-    surf = mesh.extract_surface().triangulate()
+    surf = mesh.extract_surface(algorithm="dataset_surface").triangulate()
     points = np.asarray(surf.points, dtype=np.float64)
     faces = np.asarray(surf.faces, dtype=np.int64).reshape(-1, 4)[:, 1:]
     ms = pymeshlab.MeshSet()
