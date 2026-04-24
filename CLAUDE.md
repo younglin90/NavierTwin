@@ -31,7 +31,7 @@ CFD 후처리 결과 → AI/ROM/Operator Learning → 디지털 트윈 변환 Wi
 `PLAN.md`의 §4 참조. 이 구조를 반드시 따를 것.
 
 ## 현재 단계
-`ROADMAP.md` 참조. 현재 v1.1.0 단계.
+`ROADMAP.md` 참조. 현재 v4.2.0 + 17 rounds 고도화 완료 (310+ 테스트 통과).
 
 ## Skill routing
 

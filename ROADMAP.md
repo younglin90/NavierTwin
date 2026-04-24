@@ -2,7 +2,7 @@
 
 > Phase별 세부 태스크 체크리스트. 버전별 목표·범위·근거는 `PLAN.md` 참조.
 
-## 현재 단계: v4.2.0 — C4 Equivariant FNO + ConstrainedPOD ✅
+## 현재 단계: v4.2.0 + 17 rounds — 연구 플랫폼 + 전영역 성숙화 ✅
 
 ---
 
@@ -119,9 +119,10 @@
 - [x] `core/time_series/neural_ode/neural_ode.py` — torchdiffeq + RK4 폴백
 - [x] `core/operator_learning/koopman/kno.py` — encoder/decoder + 선형 Koopman K
 - [x] `tests/test_time_series.py` — 6 tests pass
+- [x] `core/time_series/latent_dynamics/latent_dynamics.py` — AE + Neural ODE (v4.0.0 에서 구현)
+- [x] `core/operator_learning/koopman/ikno.py` — Real-NVP 가역 Koopman (round10)
 - [ ] `core/time_series/temporal_no/tno.py` (v2.2.x)
-- [ ] `core/time_series/latent_dynamics/latent_dynamics.py` (v2.2.x)
-- [ ] `core/operator_learning/koopman/ikno.py` / `flowdmd.py` (v2.2.x)
+- [ ] `core/operator_learning/koopman/flowdmd.py` (v2.2.x)
 - [ ] `core/flow_analysis/modal/pykoopman_wrapper.py` (v2.2.x)
 
 ---
@@ -135,10 +136,11 @@
 - [x] `core/optimization/mc_propagation.py` — 평균/표준편차/백분위수 MC 전파
 - [x] `core/optimization/bayesian_opt.py` — GP + EI 최소화 (scikit-learn)
 - [x] `tests/test_da_uq.py` — 7 tests pass
-- [ ] `core/data_assimilation/enkf_hpc.py` / `4dvar.py` (v3.0.x)
-- [ ] `core/optimization/uq_surrogate.py` (v3.0.x, UQpy/OpenTURNS)
-- [ ] `core/optimization/surrogate_opt.py` (v3.0.x, NLopt)
-- [ ] `core/sensitivity/causal_analysis.py` (v3.0.x)
+- [x] `core/data_assimilation/four_dvar.py` — 선형 4D-Var (round6)
+- [x] `core/optimization/uq_surrogate.py` — PCE + Sobol (round9)
+- [x] `core/optimization/surrogate_opt.py` — RBF + L-BFGS-B (round9)
+- [x] `core/sensitivity/causal_analysis.py` — Pearson + Granger (round6)
+- [ ] `core/data_assimilation/enkf_hpc.py` (v3.0.x, pyPDAF)
 
 ### v3.1.0 — PINN + 물리 보정 + 방정식 발견 ✅ (부분 완료)
 - [x] `core/physnemo/pina_wrapper.py` — PINNSolver (PINA-style, PyTorch 직접)
@@ -146,10 +148,10 @@
 - [x] `core/physics_correction/hybrid_rom.py` — POD + NN 잔차 보정
 - [x] `core/flow_analysis/modal/sindy_wrapper.py` — STLSQ 자체 구현 + PySINDy 백엔드
 - [x] `tests/test_pinn_correction.py` — 7 tests (1D Poisson 수렴 포함)
+- [x] `core/explainability/symbolic_regression.py` — PySR + poly fallback (round13)
+- [x] `core/multi_fidelity/multi_fidelity.py` — Additive Co-Kriging (v5.1.0)
 - [ ] `core/physnemo/physnemo_wrapper.py` (NVIDIA PhysicsNEMO, v3.1.x)
 - [ ] `core/physnemo/dd_pinn.py` — Domain Decomposition PINN (v3.1.x)
-- [ ] `core/explainability/symbolic_regression.py` (PySR, optional) (v3.1.x)
-- [ ] `core/multi_fidelity/multi_fidelity.py` (v3.1.x)
 
 ### v3.2.0 — GUI 완성 + 배포 ✅ (핵심 MVP 완료)
 - [x] `gui/styles/i18n/ko.json`, `en.json` + `utils/i18n.py` Translator
@@ -158,9 +160,14 @@
 - [x] `core/export/onnx_export.py` — opset / dynamic_axes / legacy 경로 fallback
 - [x] `core/export/torchscript_export.py` — trace / script 지원
 - [x] `tests/test_export_report.py` — 11 tests pass
-- [ ] `gui/wizard/tutorial_wizard.py` (v3.2.x)
-- [ ] 모델 비교 대시보드 GUI (v3.2.x)
-- [ ] `installer/naviertwin.iss` — Inno Setup (v3.2.x, 배포 시점)
+- [x] `gui/wizard/tutorial_wizard.py` — 5 페이지 QWizard (round5)
+- [x] 모델 비교 대시보드 GUI — `ModelCompareWidget` + MainWindow 탭 통합 (round5, round17)
+- [x] `gui/widgets/loss_curve_widget.py` — 실시간 loss (round7)
+- [x] `installer/naviertwin.iss` — Inno Setup 스크립트 (round8)
+- [x] `core/digital_twin/pipeline.py` — end-to-end 오케스트레이터 (round5)
+- [x] `api/server.py` — FastAPI REST 엔드포인트 (round4)
+- [x] `core/explainability/shap_explainer.py` — KernelSHAP (v5.0.0)
+- [x] `core/explainability/attention_viz.py` — MultiheadAttention 시각화 (round13)
 
 ---
 
@@ -174,23 +181,23 @@
 - [ ] `core/state_space/deepomamba/deepomamba.py` (v4.0.x)
 - [ ] flowtorch 파이프라인 연동 (v4.0.x, GPL)
 
-### v4.1.0 — 생성 모델 + KAN
-- [ ] `core/generative/diffusion_pde/diffusion_pde.py`
-- [ ] `core/generative/wavelet_diffusion/wavelet_diffusion_no.py`
-- [ ] `core/generative/conditional_gen/conditional_gen.py`
-- [ ] `core/operator_learning/kan/kano.py`
-- [ ] `core/dimensionality_reduction/nonlinear/tucker_decomp.py`
+### v4.1.0 — 생성 모델 + KAN ✅
+- [x] `core/generative/diffusion_pde/diffusion_pde.py` — DDPM-style (v4.0.0)
+- [x] `core/generative/wavelet_diffusion/wavelet_diffusion_no.py` — DWT+Diffusion (round14)
+- [x] `core/generative/conditional_gen/conditional_gen.py` — cVAE (round10)
+- [x] `core/operator_learning/kan/kano.py` — KAN + spectral (round1)
+- [x] `core/dimensionality_reduction/nonlinear/tucker_decomp.py` — HOSVD+HOOI (round1)
 
 ### v4.2.0 — Equivariant NN + 고급 분해 ✅ (부분 완료)
 - [x] `core/equivariant/group_equiv_fno/group_equiv_fno.py` — C4 회전 평균 FNO2D
 - [x] `core/dimensionality_reduction/linear/cpod.py` — null-space 투영 POD
 - [x] `tests/test_equivariant_cpod.py` — 5 tests pass
-- [ ] `core/equivariant/physics_embedded/physics_embedded_gnn.py` (escnn) (v4.2.x)
+- [x] `core/equivariant/physics_embedded/physics_embedded_gnn.py` — EGNN translation/rotation equivariant (round14)
+- [x] `core/dimensionality_reduction/nonlinear/diffusion_maps.py` — Coifman-Lafon (round6)
+- [x] `core/flow_analysis/modal/pgd.py` — greedy rank-1 (round4)
+- [x] `core/flow_analysis/vortex/lcs.py` — FTLE via RK4 flow-map (round4)
+- [x] `core/flow_analysis/thermofluids/entropy_gen.py` — Bejan (round4)
 - [ ] `core/equivariant/physics_embedded/lie_algebra_no.py` (v4.2.x)
-- [ ] `core/dimensionality_reduction/nonlinear/diffusion_maps.py` (v4.2.x)
-- [ ] `core/flow_analysis/modal/pgd.py` (v4.2.x)
-- [ ] `core/flow_analysis/vortex/lcs.py` (v4.2.x)
-- [ ] `core/flow_analysis/thermofluids/entropy_gen.py` (v4.2.x)
 
 ---
 
@@ -226,3 +233,69 @@
 
 ## 완료된 항목
 (완료 시 위에서 여기로 이동)
+
+---
+
+## 라운드 기반 고도화 (v4.2.0 이후)
+
+### 연산자 학습 확장
+- [x] `operator_learning/fno/tfno.py` — Tucker-factorized FNO (v2.0.1)
+- [x] `operator_learning/fno/wno.py` — WNO (v2.0.1)
+- [x] `operator_learning/fno/adaptive_fno.py` — rFFT 기반 modes 자동 선택 (round11)
+- [x] `operator_learning/fno/spectral_refiner.py` — low→high 2단계 학습 (round11)
+- [x] `operator_learning/fno/lno.py` — Laplace 복소 pole/residue (round15)
+- [x] `operator_learning/deeponet/pi_deeponet.py` — 물리 잔차 (v2.0.1)
+- [x] `operator_learning/deeponet/mionet.py` — 복수 branch (v2.0.1)
+- [x] `operator_learning/deeponet/sequential_deeponet.py` — GRU branch (round11)
+- [x] `operator_learning/latent_operator/l_deeponet.py` — 잠재 DeepONet (round12)
+- [x] `operator_learning/latent_operator/pi_latent_no.py` — PI-Latent-NO (round12)
+- [x] `operator_learning/koopman/ikno.py` — Real-NVP invertible (round10)
+- [x] `gnn/graph_transformer/hamlet.py` — Dense self-attention + position emb (round15)
+
+### 5.0/5.1 연구 플랫폼
+- [x] `optimization/moo_optimizer.py` — NSGA-II (v5.0.0)
+- [x] `optimization/topology_opt.py` — SIMP 2D (v5.0.0)
+- [x] `optimization/uq_surrogate.py` — PCE + Sobol (round9)
+- [x] `optimization/surrogate_opt.py` — RBF + L-BFGS-B (round9)
+- [x] `multi_fidelity/transfer_learning.py` — freeze + finetune (v5.1.0)
+- [x] `online_learning/active_learning.py` — variance-based selection (v5.1.0)
+- [x] `data_assimilation/four_dvar.py` — 선형 해석해 (round6)
+- [x] `sensitivity/causal_analysis.py` — Pearson + Granger (round6)
+- [x] `explainability/symbolic_regression.py` — PySR + polynomial fallback (round13)
+- [x] `explainability/attention_viz.py` — MultiheadAttention (round13)
+- [x] `surrogate/ensemble.py` — Ensemble + MoE k-means gating (round13)
+
+### 생성/잠재 모델
+- [x] `generative/conditional_gen/conditional_gen.py` — cVAE (round10)
+- [x] `generative/wavelet_diffusion/wavelet_diffusion_no.py` — DWT+DDPM (round14)
+
+### 대칭성 보존
+- [x] `equivariant/group_equiv_fno/group_equiv_fno.py` — C4 회전 평균 (v4.2.0)
+- [x] `equivariant/physics_embedded/physics_embedded_gnn.py` — EGNN (round14)
+
+### GUI & 배포
+- [x] `gui/wizard/tutorial_wizard.py` — 5 단계 QWizard (round5)
+- [x] `gui/widgets/model_compare_widget.py` — RMSE/R² 바 차트 (round5)
+- [x] `gui/widgets/loss_curve_widget.py` — 학습 손실 실시간 (round7)
+- [x] `gui/widgets/analytic_compare_widget.py` — 해석해 ↔ 수치 (v1.1.1)
+- [x] MainWindow i18n + 7번째 Compare 탭 (round17)
+- [x] `installer/naviertwin.iss` — Windows Inno Setup (round8)
+- [x] `utils/i18n.py` + ko/en 번역 JSON (v3.2.0)
+- [x] `utils/undo_redo.py` — Command 스택 (v3.2.0)
+
+### API / 내보내기
+- [x] `api/server.py` — FastAPI (/health, /reduce/pod, /analytic/*, /optimize/bayesian) (round4)
+- [x] `core/export/onnx_export.py` + `torchscript_export.py` (v3.2.0)
+- [x] `core/report/generator.py` — Jinja2 + weasyprint (v3.2.0)
+- [x] `core/digital_twin/pipeline.py` — 6 단계 오케스트레이터 (round5)
+
+### 실전 예제
+- [x] `examples/cavity_benchmark.py` — POD/AE/FNO 재구성 비교 (round16)
+
+---
+
+## 총 진행 상황
+
+- **307+ 테스트 통과 / 4 skipped** (optional: pywt / pymeshlab / dedalus / onnxscript)
+- Ruff 린트 통과 전체 모듈
+- v1.1.0 → v4.2.0 + 17 rounds 고도화 완료
