@@ -2,7 +2,7 @@
 
 > Phase별 세부 태스크 체크리스트. 버전별 목표·범위·근거는 `PLAN.md` 참조.
 
-## 현재 단계: v2.0.0 — 신경 연산자 MVP (FNO + DeepONet + U-Net) ✅
+## 현재 단계: v2.0.1 — 신경 연산자 확장 (TFNO + PI-DeepONet + MIONet + WNO) + Model 패널 GUI ✅
 
 ---
 
@@ -95,10 +95,16 @@
 - [x] `core/operator_learning/deeponet/deeponet.py` — branch/trunk MLP + bias (trunk 좌표 캐시)
 - [x] `core/operator_learning/unet/unet.py` — 2-level U-Net (encoder/decoder + skip)
 - [x] `tests/test_operator_learning.py` — 8 테스트 통과 (FNO1D/FNO2D/DeepONet/UNet2D + not-fitted 가드)
-- [ ] `fno/tfno.py` / `fno/wno.py` / `fno/adaptive_fno.py` / `fno/lno.py` / `fno/spectral_refiner.py` (v2.0.x)
-- [ ] `deeponet/pi_deeponet.py` / `deeponet/mionet.py` / `deeponet/sequential_deeponet.py` / `nfno_deeponet.py` (v2.0.x)
+- [x] `fno/tfno.py` — Tucker-factorized FNO2D (파라미터 90% 절감)
+- [x] `fno/wno.py` — Wavelet Neural Operator 1D (pywt optional)
+- [x] `deeponet/pi_deeponet.py` — Physics-Informed DeepONet (물리 잔차 λ_phys)
+- [x] `deeponet/mionet.py` — Multiple-Input Operator Network (product/concat merge)
+- [x] Model 패널 GUI — FNO/TFNO/DeepONet/UNet/WNO 데모 학습 버튼 통합
+- [x] `tests/test_operator_learning_ext.py` — 7 pass + 1 skip
+- [ ] `fno/adaptive_fno.py` / `fno/lno.py` / `fno/spectral_refiner.py` (v2.0.x)
+- [ ] `deeponet/sequential_deeponet.py` / `nfno_deeponet.py` (v2.0.x)
 - [ ] `latent_operator/l_deeponet.py` / `latent_operator/pi_latent_no.py` (v2.0.x)
-- [ ] 학습 모니터링 GUI 연동 (v2.0.x)
+- [ ] 학습 loss curve 실시간 플롯 (v2.0.x)
 
 ### v2.1.0 — GNN 계열
 - [ ] `core/gnn/gnn_surrogate/gnn_surrogate.py` (PyTorch Geometric)

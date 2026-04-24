@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "naviertwin"
-version = "2.0.0"
+version = "2.0.1"
 description = "CFD 후처리 결과를 AI/ROM 디지털 트윈으로 변환하는 툴"
 readme = "README.md"
 license = { file = "LICENSE" }
