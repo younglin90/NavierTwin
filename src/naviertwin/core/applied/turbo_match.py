@@ -21,7 +21,8 @@ def match_rpm(
 ) -> float:
     """Bisection on (W_t - W_c)."""
     lo, hi = rpm_min, rpm_max
-    f = lambda n: turb_power(n) - comp_power(n)
+    def f(n: float) -> float:
+        return turb_power(n) - comp_power(n)
     if f(lo) * f(hi) > 0:
         return float(lo)
     while hi - lo > tol:
