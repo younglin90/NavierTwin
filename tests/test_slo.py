@@ -8,7 +8,7 @@ class TestSLO:
         from naviertwin.core.twin.slo import burn_rate
 
         # 1% errors with 99% SLO → burn rate 1.0
-        assert burn_rate(error_count=10, total_count=1000, slo=0.99) == 1.0
+        assert abs(burn_rate(error_count=10, total_count=1000, slo=0.99) - 1.0) < 1e-9
 
     def test_under_budget(self) -> None:
         from naviertwin.core.twin.slo import burn_rate
