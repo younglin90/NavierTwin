@@ -17,15 +17,15 @@ def iv_curve(
     n: float = 1.0, V_max: float = 0.7, n_pts: int = 50,
 ) -> tuple[np.ndarray, np.ndarray]:
     V = np.linspace(0, V_max, n_pts)
-    I = I_ph - I_0 * (np.exp(V / (n * V_T)) - 1)  # noqa: E741
-    I = np.clip(I, 0, None)
-    return V, I
+    cur = I_ph - I_0 * (np.exp(V / (n * V_T)) - 1)
+    cur = np.clip(cur, 0, None)
+    return V, cur
 
 
-def mppt(V: np.ndarray, I: np.ndarray) -> tuple[float, float, float]:
-    P = V * I
+def mppt(V: np.ndarray, cur: np.ndarray) -> tuple[float, float, float]:
+    P = V * cur
     k = int(np.argmax(P))
-    return float(V[k]), float(I[k]), float(P[k])
+    return float(V[k]), float(cur[k]), float(P[k])
 
 
 __all__ = ["iv_curve", "mppt"]
