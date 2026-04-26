@@ -51,3 +51,14 @@ jobs:
 
       - name: Static security (bandit)
         run: bandit -r src/naviertwin -x tests || echo "bandit reported issues (non-blocking)"
+
+      - name: Verification report (5-layer aggregate)
+        run: bash scripts/verify_all.sh
+        continue-on-error: true
+
+      - name: Upload verification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-report-py${{ matrix.python-version }}
+          path: verify_artifacts/
