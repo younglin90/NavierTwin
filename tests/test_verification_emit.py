@@ -12,7 +12,7 @@ class TestEmitter:
     def test_pass_path(self, tmp_path) -> None:
         # build inputs
         (tmp_path / "unit.json").write_text(json.dumps({"passed": 100, "failed": 0}))
-        (tmp_path / "coverage.json").write_text(json.dumps({"coverage_pct": 78}))
+        (tmp_path / "coverage.json").write_text(json.dumps({"coverage_pct": 85}))
         (tmp_path / "mms.json").write_text(json.dumps([
             {"name": "x", "observed_p": 2.0, "target": 2.0},
         ]))

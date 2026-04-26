@@ -171,7 +171,7 @@
     },
     {
       "name": "src/naviertwin/core/analysis/lyapunov.py",
-      "cover": 38
+      "cover": 100
     },
     {
       "name": "src/naviertwin/core/analysis/okubo_weiss.py",
@@ -927,7 +927,7 @@
     },
     {
       "name": "src/naviertwin/core/flow_analysis/statistics/wavelet.py",
-      "cover": 0
+      "cover": 81
     },
     {
       "name": "src/naviertwin/core/flow_analysis/thermofluids/__init__.py",
@@ -1935,11 +1935,11 @@
     },
     {
       "name": "src/naviertwin/core/state_space/__init__.py",
-      "cover": 0
+      "cover": 100
     },
     {
       "name": "src/naviertwin/core/state_space/base.py",
-      "cover": 0
+      "cover": 100
     },
     {
       "name": "src/naviertwin/core/state_space/deepomamba/__init__.py",

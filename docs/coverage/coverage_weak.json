@@ -2,10 +2,6 @@
   "threshold": 50,
   "weak": [
     {
-      "name": "src/naviertwin/core/analysis/lyapunov.py",
-      "cover": 38
-    },
-    {
       "name": "src/naviertwin/core/cfd_reader/openfoam_reader.py",
       "cover": 47
     },
@@ -30,10 +26,6 @@
       "cover": 29
     },
     {
-      "name": "src/naviertwin/core/flow_analysis/statistics/wavelet.py",
-      "cover": 0
-    },
-    {
       "name": "src/naviertwin/core/flow_analysis/vortex/q_criterion.py",
       "cover": 45
     },
@@ -44,14 +36,6 @@
     {
       "name": "src/naviertwin/core/operator_learning/fno/wno.py",
       "cover": 28
-    },
-    {
-      "name": "src/naviertwin/core/state_space/__init__.py",
-      "cover": 0
-    },
-    {
-      "name": "src/naviertwin/core/state_space/base.py",
-      "cover": 0
     },
     {
       "name": "src/naviertwin/core/surrogate/kriging_surrogate.py",

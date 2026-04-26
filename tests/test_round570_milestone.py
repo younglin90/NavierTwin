@@ -20,7 +20,7 @@ class TestMilestoneVerify:
 
         r = build_report(
             unit={"passed": 1900, "failed": 0},
-            coverage_pct=78,
+            coverage_pct=85,
             mms_results=[
                 {"name": "multigrid", "observed_p": 2.0, "target": 2.0},
                 {"name": "ssp_rk3", "observed_p": 3.1, "target": 3.0},
