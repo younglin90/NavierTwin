@@ -27,7 +27,7 @@ def build_report(
     """Aggregate verdict from per-layer inputs."""
     layers = {}
     layers["L1_unit"] = unit["failed"] == 0
-    layers["L1_coverage"] = coverage_pct >= 84
+    layers["L1_coverage"] = coverage_pct >= 85
     layers["L2_mms"] = all(
         abs(r["observed_p"] - r["target"]) <= 0.5 for r in mms_results
     )

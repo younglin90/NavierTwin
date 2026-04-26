@@ -2,20 +2,12 @@
   "threshold": 50,
   "weak": [
     {
-      "name": "src/naviertwin/core/cfd_reader/openfoam_reader.py",
-      "cover": 47
-    },
-    {
-      "name": "src/naviertwin/core/dimensionality_reduction/__init__.py",
-      "cover": 30
-    },
-    {
       "name": "src/naviertwin/core/generative/wavelet_diffusion/wavelet_diffusion_no.py",
       "cover": 45
     },
     {
       "name": "src/naviertwin/core/operator_learning/fno/wno.py",
-      "cover": 30
+      "cover": 33
     },
     {
       "name": "src/naviertwin/core/tools/mesh_generator.py",
@@ -72,14 +64,6 @@
     {
       "name": "src/naviertwin/gui/wizard/tutorial_wizard.py",
       "cover": 0
-    },
-    {
-      "name": "src/naviertwin/main.py",
-      "cover": 29
-    },
-    {
-      "name": "src/naviertwin/utils/safe_yaml.py",
-      "cover": 33
     }
   ]
 }

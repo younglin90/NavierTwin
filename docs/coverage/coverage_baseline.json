@@ -371,7 +371,7 @@
     },
     {
       "name": "src/naviertwin/core/cfd_reader/cgns_reader.py",
-      "cover": 58
+      "cover": 87
     },
     {
       "name": "src/naviertwin/core/cfd_reader/csv_snapshots.py",
@@ -399,7 +399,7 @@
     },
     {
       "name": "src/naviertwin/core/cfd_reader/openfoam_reader.py",
-      "cover": 47
+      "cover": 71
     },
     {
       "name": "src/naviertwin/core/cfd_reader/parquet_reader.py",
@@ -583,7 +583,7 @@
     },
     {
       "name": "src/naviertwin/core/digital_twin/pipeline.py",
-      "cover": 84
+      "cover": 86
     },
     {
       "name": "src/naviertwin/core/digital_twin/pipeline_builder.py",
@@ -615,7 +615,7 @@
     },
     {
       "name": "src/naviertwin/core/dimensionality_reduction/__init__.py",
-      "cover": 30
+      "cover": 100
     },
     {
       "name": "src/naviertwin/core/dimensionality_reduction/base.py",
@@ -831,7 +831,7 @@
     },
     {
       "name": "src/naviertwin/core/export/onnx_wrap.py",
-      "cover": 52
+      "cover": 96
     },
     {
       "name": "src/naviertwin/core/export/quantize.py",
@@ -1451,7 +1451,7 @@
     },
     {
       "name": "src/naviertwin/core/operator_learning/fno/wno.py",
-      "cover": 30
+      "cover": 33
     },
     {
       "name": "src/naviertwin/core/operator_learning/kan/__init__.py",
@@ -2503,7 +2503,7 @@
     },
     {
       "name": "src/naviertwin/main.py",
-      "cover": 29
+      "cover": 77
     },
     {
       "name": "src/naviertwin/utils/__init__.py",
@@ -2599,7 +2599,7 @@
     },
     {
       "name": "src/naviertwin/utils/device.py",
-      "cover": 62
+      "cover": 79
     },
     {
       "name": "src/naviertwin/utils/disk_cache.py",
@@ -2795,7 +2795,7 @@
     },
     {
       "name": "src/naviertwin/utils/safe_yaml.py",
-      "cover": 33
+      "cover": 100
     },
     {
       "name": "src/naviertwin/utils/sam.py",
