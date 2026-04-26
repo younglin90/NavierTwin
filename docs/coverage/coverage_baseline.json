@@ -1,0 +1,2913 @@
+{
+  "total": 83,
+  "modules": [
+    {
+      "name": "src/naviertwin/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/api/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/api/server.py",
+      "cover": 79
+    },
+    {
+      "name": "src/naviertwin/core/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/active_learning/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/active_learning/query.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/amr/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/amr/aniso_driver.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/amr/berger_oliger.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/amr/dwr.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/amr/ghost_exchange.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/amr/goal_error.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/amr/octree_forest.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/amr/p_refine.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/amr/r_adapt.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/amr/refine_criteria.py",
+      "cover": 94
+    },
+    {
+      "name": "src/naviertwin/core/analysis/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/analysis/aero_forces.py",
+      "cover": 89
+    },
+    {
+      "name": "src/naviertwin/core/analysis/anomaly_ae.py",
+      "cover": 92
+    },
+    {
+      "name": "src/naviertwin/core/analysis/barycentric.py",
+      "cover": 88
+    },
+    {
+      "name": "src/naviertwin/core/analysis/boundary_layer.py",
+      "cover": 90
+    },
+    {
+      "name": "src/naviertwin/core/analysis/correlation.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/analysis/cusum.py",
+      "cover": 89
+    },
+    {
+      "name": "src/naviertwin/core/analysis/dbscan.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/analysis/delta_rortex.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/analysis/dimensionless.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/analysis/dtw.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/analysis/energy_spectrum.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/analysis/enstrophy.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/analysis/ftle.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/analysis/gmm.py",
+      "cover": 91
+    },
+    {
+      "name": "src/naviertwin/core/analysis/granger.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/analysis/helicity.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/analysis/hilbert_spectrum.py",
+      "cover": 90
+    },
+    {
+      "name": "src/naviertwin/core/analysis/implicit_ode.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/core/analysis/interpolate.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/analysis/kdtree_wrapper.py",
+      "cover": 88
+    },
+    {
+      "name": "src/naviertwin/core/analysis/kmeans.py",
+      "cover": 98
+    },
+    {
+      "name": "src/naviertwin/core/analysis/komega_sst.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/analysis/lambda2.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/analysis/latent_embedding.py",
+      "cover": 81
+    },
+    {
+      "name": "src/naviertwin/core/analysis/les_smagorinsky.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/analysis/lyapunov.py",
+      "cover": 38
+    },
+    {
+      "name": "src/naviertwin/core/analysis/okubo_weiss.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/analysis/particle_tracker.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/analysis/probe.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/analysis/rans_ke.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/analysis/rbf_interp.py",
+      "cover": 82
+    },
+    {
+      "name": "src/naviertwin/core/analysis/reynolds.py",
+      "cover": 88
+    },
+    {
+      "name": "src/naviertwin/core/analysis/roi_mask.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/analysis/rom_energy.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/analysis/spatial_index.py",
+      "cover": 88
+    },
+    {
+      "name": "src/naviertwin/core/analysis/spectral.py",
+      "cover": 84
+    },
+    {
+      "name": "src/naviertwin/core/analysis/spectrum.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/analysis/stft.py",
+      "cover": 88
+    },
+    {
+      "name": "src/naviertwin/core/analysis/streamline.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/analysis/symplectic.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/analysis/synchrosqueeze.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/analysis/time_integrator.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/core/analysis/velocity_gradient.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/analysis/vortex_core.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/analysis/vorticity.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/analysis/wavelet.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/analysis/ypls_correct.py",
+      "cover": 94
+    },
+    {
+      "name": "src/naviertwin/core/applied/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/applied/battery_thermal.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/applied/bem_turbine.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/applied/centrifugal_pump.py",
+      "cover": 92
+    },
+    {
+      "name": "src/naviertwin/core/applied/chiller_cop.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/applied/compressor_map.py",
+      "cover": 92
+    },
+    {
+      "name": "src/naviertwin/core/applied/cooling_tower.py",
+      "cover": 79
+    },
+    {
+      "name": "src/naviertwin/core/applied/cyclone.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/applied/ev_motor.py",
+      "cover": 83
+    },
+    {
+      "name": "src/naviertwin/core/applied/fan_affinity.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/applied/greenhouse.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/applied/heat_exchanger.py",
+      "cover": 69
+    },
+    {
+      "name": "src/naviertwin/core/applied/hvac_duct.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/applied/jensen_wake.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/applied/mccabe_thiele.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/applied/pipe_flow.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/core/applied/solar_pv.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/applied/spray_smd.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/applied/turbo_match.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/core/augmentation/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/augmentation/noise.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/benchmarks/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/benchmarks/dataset_catalog.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/benchmarks/ghia_cavity.py",
+      "cover": 89
+    },
+    {
+      "name": "src/naviertwin/core/cfd_reader/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/cfd_reader/_mesh_utils.py",
+      "cover": 80
+    },
+    {
+      "name": "src/naviertwin/core/cfd_reader/base.py",
+      "cover": 84
+    },
+    {
+      "name": "src/naviertwin/core/cfd_reader/cgns_advanced.py",
+      "cover": 85
+    },
+    {
+      "name": "src/naviertwin/core/cfd_reader/cgns_reader.py",
+      "cover": 58
+    },
+    {
+      "name": "src/naviertwin/core/cfd_reader/csv_snapshots.py",
+      "cover": 91
+    },
+    {
+      "name": "src/naviertwin/core/cfd_reader/fluent_cas_ext.py",
+      "cover": 86
+    },
+    {
+      "name": "src/naviertwin/core/cfd_reader/fluent_reader.py",
+      "cover": 77
+    },
+    {
+      "name": "src/naviertwin/core/cfd_reader/foam_writer.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/cfd_reader/foamlib_case.py",
+      "cover": 73
+    },
+    {
+      "name": "src/naviertwin/core/cfd_reader/gmsh_reader.py",
+      "cover": 72
+    },
+    {
+      "name": "src/naviertwin/core/cfd_reader/openfoam_reader.py",
+      "cover": 47
+    },
+    {
+      "name": "src/naviertwin/core/cfd_reader/parquet_reader.py",
+      "cover": 83
+    },
+    {
+      "name": "src/naviertwin/core/cfd_reader/pycgns_tree.py",
+      "cover": 84
+    },
+    {
+      "name": "src/naviertwin/core/cfd_reader/reader_factory.py",
+      "cover": 79
+    },
+    {
+      "name": "src/naviertwin/core/cfd_reader/su2_reader.py",
+      "cover": 81
+    },
+    {
+      "name": "src/naviertwin/core/cfd_reader/su2_writer.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/cfd_reader/vtk_pvd_writer.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/cfd_reader/vtk_reader.py",
+      "cover": 84
+    },
+    {
+      "name": "src/naviertwin/core/cfd_reader/xarray_wrapper.py",
+      "cover": 42
+    },
+    {
+      "name": "src/naviertwin/core/cfd_reader/zarr_reader.py",
+      "cover": 44
+    },
+    {
+      "name": "src/naviertwin/core/control/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/control/adaptive_pid.py",
+      "cover": 89
+    },
+    {
+      "name": "src/naviertwin/core/control/lqg.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/control/lqr.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/control/mpc_linear.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/control/nmpc_sqp.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/control/pid.py",
+      "cover": 91
+    },
+    {
+      "name": "src/naviertwin/core/coupling/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/coupling/cahn_hilliard.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/coupling/cht.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/coupling/fsi_oneway.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/coupling/fsi_twoway.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/core/coupling/levelset_reinit.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/coupling/mhd_induction.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/coupling/vof_1d.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/core/data_assimilation/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/data_assimilation/ekf.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/data_assimilation/enkf.py",
+      "cover": 84
+    },
+    {
+      "name": "src/naviertwin/core/data_assimilation/enkf_simple.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/data_assimilation/envar.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/data_assimilation/four_dvar.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/data_assimilation/iterated_ekf.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/data_assimilation/kalman.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/data_assimilation/ks_nonlinear.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/data_assimilation/mhe.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/data_assimilation/particle_filter.py",
+      "cover": 72
+    },
+    {
+      "name": "src/naviertwin/core/data_assimilation/particle_smoother.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/data_assimilation/rls.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/data_assimilation/rts_smoother.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/data_assimilation/ukf.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/data_assimilation/var4d_cost.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/data_augmentation/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/data_augmentation/augmentation.py",
+      "cover": 81
+    },
+    {
+      "name": "src/naviertwin/core/digital_twin/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/digital_twin/batch_predict.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/core/digital_twin/manifest.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/digital_twin/pipeline.py",
+      "cover": 84
+    },
+    {
+      "name": "src/naviertwin/core/digital_twin/pipeline_builder.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/digital_twin/pipeline_checkpoint.py",
+      "cover": 90
+    },
+    {
+      "name": "src/naviertwin/core/digital_twin/pipeline_compare.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/digital_twin/pipeline_hyperopt.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/core/digital_twin/pipeline_neural.py",
+      "cover": 95
+    },
+    {
+      "name": "src/naviertwin/core/digital_twin/streaming_twin.py",
+      "cover": 94
+    },
+    {
+      "name": "src/naviertwin/core/digital_twin/twin_engine.py",
+      "cover": 92
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/__init__.py",
+      "cover": 30
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/base.py",
+      "cover": 81
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/linear/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/linear/bpod.py",
+      "cover": 94
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/linear/bpod_scratch.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/linear/cpod.py",
+      "cover": 81
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/linear/deim.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/linear/galerkin.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/linear/gnat.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/linear/ica.py",
+      "cover": 44
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/linear/incremental_svd.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/linear/local_rom.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/linear/lspg.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/linear/pod.py",
+      "cover": 92
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/linear/pod_galerkin.py",
+      "cover": 88
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/linear/pymor_pod.py",
+      "cover": 85
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/linear/quadratic_manifold.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/linear/randomized_svd.py",
+      "cover": 85
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/linear/shifted_pod.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/linear/snapshot_pod_scratch.py",
+      "cover": 90
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/linear/space_time_pod.py",
+      "cover": 89
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/linear/weighted_pod.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/nonlinear/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/nonlinear/adaptive_enrich.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/nonlinear/autoencoder.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/nonlinear/closure_rom.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/nonlinear/cnn_ae.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/nonlinear/diffusion_maps.py",
+      "cover": 98
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/nonlinear/gnn_ae.py",
+      "cover": 92
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/nonlinear/isomap.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/nonlinear/latent_linearize.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/nonlinear/latent_ode.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/nonlinear/lift_learn.py",
+      "cover": 87
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/nonlinear/lle.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/nonlinear/manifold_tangent.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/nonlinear/opinf.py",
+      "cover": 85
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/nonlinear/reduced_barycentric.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/nonlinear/tucker_decomp.py",
+      "cover": 85
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/nonlinear/vae.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/core/equivariant/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/equivariant/base.py",
+      "cover": 63
+    },
+    {
+      "name": "src/naviertwin/core/equivariant/group_equiv_fno/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/equivariant/group_equiv_fno/group_equiv_fno.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/core/equivariant/physics_embedded/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/equivariant/physics_embedded/lie_algebra_no.py",
+      "cover": 94
+    },
+    {
+      "name": "src/naviertwin/core/equivariant/physics_embedded/physics_embedded_gnn.py",
+      "cover": 99
+    },
+    {
+      "name": "src/naviertwin/core/explainability/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/explainability/attention_viz.py",
+      "cover": 81
+    },
+    {
+      "name": "src/naviertwin/core/explainability/shap_explainer.py",
+      "cover": 95
+    },
+    {
+      "name": "src/naviertwin/core/explainability/symbolic_regression.py",
+      "cover": 82
+    },
+    {
+      "name": "src/naviertwin/core/export/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/export/coreml_stub.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/export/ntwin_format.py",
+      "cover": 90
+    },
+    {
+      "name": "src/naviertwin/core/export/onnx_export.py",
+      "cover": 82
+    },
+    {
+      "name": "src/naviertwin/core/export/onnx_wrap.py",
+      "cover": 52
+    },
+    {
+      "name": "src/naviertwin/core/export/quantize.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/core/export/tflite_stub.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/export/torchscript_export.py",
+      "cover": 85
+    },
+    {
+      "name": "src/naviertwin/core/export/torchscript_verify.py",
+      "cover": 86
+    },
+    {
+      "name": "src/naviertwin/core/export/torchscript_wrap.py",
+      "cover": 83
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/acoustic.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/base.py",
+      "cover": 67
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/boundary_layer/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/boundary_layer/boundary_layer.py",
+      "cover": 78
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/boundary_layer/yplus.py",
+      "cover": 92
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/helmholtz.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/modal/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/modal/dmd.py",
+      "cover": 29
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/modal/dmd_advanced.py",
+      "cover": 77
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/modal/pde_find.py",
+      "cover": 98
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/modal/pgd.py",
+      "cover": 94
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/modal/pykoopman_wrapper.py",
+      "cover": 73
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/modal/sindy_wrapper.py",
+      "cover": 80
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/modal/spod.py",
+      "cover": 76
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/statistics/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/statistics/fft_psd.py",
+      "cover": 86
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/statistics/two_point_corr.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/statistics/wavelet.py",
+      "cover": 0
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/thermofluids/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/thermofluids/compressible.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/thermofluids/entropy_gen.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/thermofluids/nondim.py",
+      "cover": 74
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/vortex/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/vortex/lcs.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/vortex/q_criterion.py",
+      "cover": 45
+    },
+    {
+      "name": "src/naviertwin/core/flow_control/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/flow_control/policy_gradient.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/generative/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/generative/base.py",
+      "cover": 60
+    },
+    {
+      "name": "src/naviertwin/core/generative/conditional_gen/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/generative/conditional_gen/conditional_gen.py",
+      "cover": 98
+    },
+    {
+      "name": "src/naviertwin/core/generative/diffusion_pde/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/generative/diffusion_pde/diffusion_pde.py",
+      "cover": 99
+    },
+    {
+      "name": "src/naviertwin/core/generative/langevin.py",
+      "cover": 95
+    },
+    {
+      "name": "src/naviertwin/core/generative/wavelet_diffusion/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/generative/wavelet_diffusion/wavelet_diffusion_no.py",
+      "cover": 39
+    },
+    {
+      "name": "src/naviertwin/core/geometry/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/geometry/csg.py",
+      "cover": 71
+    },
+    {
+      "name": "src/naviertwin/core/geometry/cut_cell.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/geometry/cut_quadrature.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/geometry/ghost_fluid.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/geometry/ib_forcing.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/geometry/levelset_advect.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/core/geometry/remap_1d.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/geometry/sdf.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/geometry/sdf_reinit.py",
+      "cover": 90
+    },
+    {
+      "name": "src/naviertwin/core/gnn/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/gnn/base.py",
+      "cover": 57
+    },
+    {
+      "name": "src/naviertwin/core/gnn/egno/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/gnn/gnn_surrogate/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/gnn/gnn_surrogate/gnn_surrogate.py",
+      "cover": 94
+    },
+    {
+      "name": "src/naviertwin/core/gnn/graph_transformer/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/gnn/graph_transformer/hamlet.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/gnn/meshgraphnets/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/gnn/meshgraphnets/meshgraphnets.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/core/io/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/io/async_loader.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/io/hdf5_virtual.py",
+      "cover": 85
+    },
+    {
+      "name": "src/naviertwin/core/koopman/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/koopman/linear_fit.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/linalg/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/linalg/arnoldi.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/linalg/bicgstab.py",
+      "cover": 95
+    },
+    {
+      "name": "src/naviertwin/core/linalg/iterative_solvers.py",
+      "cover": 92
+    },
+    {
+      "name": "src/naviertwin/core/linalg/lanczos.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/linalg/least_squares.py",
+      "cover": 91
+    },
+    {
+      "name": "src/naviertwin/core/linalg/minres.py",
+      "cover": 71
+    },
+    {
+      "name": "src/naviertwin/core/linalg/multigrid.py",
+      "cover": 98
+    },
+    {
+      "name": "src/naviertwin/core/linalg/newton_krylov.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/core/linalg/nonlinear.py",
+      "cover": 92
+    },
+    {
+      "name": "src/naviertwin/core/linalg/pcg.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/linalg/power_method.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/core/linalg/sparse_builder.py",
+      "cover": 79
+    },
+    {
+      "name": "src/naviertwin/core/linalg/svd_utils.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/linalg/tridiagonal.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/meshless/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/meshless/dem_hertz.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/meshless/flip_pic.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/meshless/lbm_d2q9.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/meshless/mls.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/meshless/pic_deposit.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/meshless/rbf_fd.py",
+      "cover": 95
+    },
+    {
+      "name": "src/naviertwin/core/meshless/rbf_interp.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/meshless/sph_kernel.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/meshless/sph_momentum.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/monitoring/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/monitoring/anomaly.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/monitoring/dashboard.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/core/multi_fidelity/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/multi_fidelity/multi_fidelity.py",
+      "cover": 91
+    },
+    {
+      "name": "src/naviertwin/core/multi_fidelity/transfer_learning.py",
+      "cover": 92
+    },
+    {
+      "name": "src/naviertwin/core/multiscale/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/multiscale/coarse_grain.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/multiscale/fe2.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/multiscale/gap_tooth.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/multiscale/hmm.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/multiscale/homogenization.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/multiscale/periodic_stress.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/multiscale/projective_integ.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/multiscale/rg_coarsen.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/multiscale/vms.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/neural/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/neural/activations.py",
+      "cover": 87
+    },
+    {
+      "name": "src/naviertwin/core/neural/attention_pool.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/core/neural/cfno.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/neural/conv_ae.py",
+      "cover": 94
+    },
+    {
+      "name": "src/naviertwin/core/neural/deeponet.py",
+      "cover": 95
+    },
+    {
+      "name": "src/naviertwin/core/neural/diffusion_1d.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/neural/equivariant_cnn.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/neural/fno_layer.py",
+      "cover": 95
+    },
+    {
+      "name": "src/naviertwin/core/neural/gat.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/neural/gnn_layer.py",
+      "cover": 94
+    },
+    {
+      "name": "src/naviertwin/core/neural/hypernet.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/neural/lno.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/neural/loss_library.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/neural/meshgraphnet.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/neural/mlp_blocks.py",
+      "cover": 95
+    },
+    {
+      "name": "src/naviertwin/core/neural/neural_ode.py",
+      "cover": 94
+    },
+    {
+      "name": "src/naviertwin/core/neural/neural_sde.py",
+      "cover": 91
+    },
+    {
+      "name": "src/naviertwin/core/neural/op_transformer.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/neural/pde_residuals.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/core/neural/pinn_trainer.py",
+      "cover": 88
+    },
+    {
+      "name": "src/naviertwin/core/neural/positional_enc.py",
+      "cover": 92
+    },
+    {
+      "name": "src/naviertwin/core/neural/realnvp_lite.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/neural/rnn_blocks.py",
+      "cover": 94
+    },
+    {
+      "name": "src/naviertwin/core/neural/transformer_block.py",
+      "cover": 94
+    },
+    {
+      "name": "src/naviertwin/core/neural/unet_2d.py",
+      "cover": 95
+    },
+    {
+      "name": "src/naviertwin/core/neural/vae.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/core/numerics/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/numerics/chebyshev.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/numerics/clenshaw_curtis.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/online_learning/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/online_learning/active_learning.py",
+      "cover": 85
+    },
+    {
+      "name": "src/naviertwin/core/online_learning/online_learning.py",
+      "cover": 98
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/base.py",
+      "cover": 79
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/deeponet/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/deeponet/deeponet.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/deeponet/mionet.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/deeponet/nfno_deeponet.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/deeponet/pi_deeponet.py",
+      "cover": 99
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/deeponet/sequential_deeponet.py",
+      "cover": 98
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/fno/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/fno/adaptive_fno.py",
+      "cover": 94
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/fno/fno.py",
+      "cover": 98
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/fno/lno.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/fno/spectral_refiner.py",
+      "cover": 95
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/fno/tfno.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/fno/wno.py",
+      "cover": 28
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/kan/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/kan/kano.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/koopman/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/koopman/flowdmd.py",
+      "cover": 94
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/koopman/ikno.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/koopman/kno.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/latent_operator/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/latent_operator/l_deeponet.py",
+      "cover": 98
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/latent_operator/pi_latent_no.py",
+      "cover": 98
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/unet/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/unet/unet3d.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/unet/unet.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/optimization/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/optimization/adjoint.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/optimization/aug_lagrangian.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/optimization/bayesian_opt.py",
+      "cover": 95
+    },
+    {
+      "name": "src/naviertwin/core/optimization/bayesian_opt_botorch.py",
+      "cover": 94
+    },
+    {
+      "name": "src/naviertwin/core/optimization/bfgs.py",
+      "cover": 91
+    },
+    {
+      "name": "src/naviertwin/core/optimization/bobyqa.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/optimization/cma_es_simple.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/optimization/genetic.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/optimization/gradient_opt.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/optimization/halving.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/optimization/hyperopt.py",
+      "cover": 78
+    },
+    {
+      "name": "src/naviertwin/core/optimization/inverse_design.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/optimization/line_search.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/core/optimization/mads.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/optimization/mc_propagation.py",
+      "cover": 95
+    },
+    {
+      "name": "src/naviertwin/core/optimization/moo_optimizer.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/optimization/nelder_mead.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/core/optimization/nlopt_wrapper.py",
+      "cover": 84
+    },
+    {
+      "name": "src/naviertwin/core/optimization/nsga2_constrained.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/optimization/pareto.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/optimization/pso.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/optimization/shape_opt.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/optimization/simulated_annealing.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/optimization/sqp.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/optimization/surrogate_opt.py",
+      "cover": 95
+    },
+    {
+      "name": "src/naviertwin/core/optimization/tangent_linear.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/optimization/tchebycheff.py",
+      "cover": 91
+    },
+    {
+      "name": "src/naviertwin/core/optimization/topo_simp.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/optimization/topology_opt.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/core/optimization/trust_region.py",
+      "cover": 95
+    },
+    {
+      "name": "src/naviertwin/core/optimization/uq_surrogate.py",
+      "cover": 94
+    },
+    {
+      "name": "src/naviertwin/core/physics_correction/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/physics_correction/hybrid_rom.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/core/physics_correction/hybrid_rom_adv.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/physics_correction/physics_correction.py",
+      "cover": 82
+    },
+    {
+      "name": "src/naviertwin/core/physnemo/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/physnemo/dd_pinn.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/core/physnemo/deep_ritz.py",
+      "cover": 99
+    },
+    {
+      "name": "src/naviertwin/core/physnemo/physicsnemo_model.py",
+      "cover": 89
+    },
+    {
+      "name": "src/naviertwin/core/physnemo/physnemo_wrapper.py",
+      "cover": 88
+    },
+    {
+      "name": "src/naviertwin/core/physnemo/pina_wrapper.py",
+      "cover": 94
+    },
+    {
+      "name": "src/naviertwin/core/preprocessing/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/preprocessing/normalizer.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/preprocessing/sliding_window.py",
+      "cover": 95
+    },
+    {
+      "name": "src/naviertwin/core/preprocessing/splitter.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/reaction/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/reaction/adiabatic_flame.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/reaction/arrhenius.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/reaction/chemkin_parser.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/core/reaction/mixture_fraction.py",
+      "cover": 86
+    },
+    {
+      "name": "src/naviertwin/core/reaction/soret_dufour.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/report/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/report/csv_writer.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/report/generator.py",
+      "cover": 68
+    },
+    {
+      "name": "src/naviertwin/core/report/html_report.py",
+      "cover": 95
+    },
+    {
+      "name": "src/naviertwin/core/report/markdown.py",
+      "cover": 92
+    },
+    {
+      "name": "src/naviertwin/core/report/plots.py",
+      "cover": 90
+    },
+    {
+      "name": "src/naviertwin/core/rheology/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/rheology/bingham.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/rheology/carreau_yasuda.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/rheology/cross_model.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/rheology/power_law.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/sampling/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/sampling/monte_carlo.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/sampling/param_sweep.py",
+      "cover": 84
+    },
+    {
+      "name": "src/naviertwin/core/sampling/poisson_disk.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/sampling/qmc.py",
+      "cover": 92
+    },
+    {
+      "name": "src/naviertwin/core/sensitivity/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/sensitivity/causal_analysis.py",
+      "cover": 84
+    },
+    {
+      "name": "src/naviertwin/core/sensitivity/salib_wrappers.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/core/sensitivity/sobol_analysis.py",
+      "cover": 78
+    },
+    {
+      "name": "src/naviertwin/core/serving/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/serving/grpc_server.py",
+      "cover": 68
+    },
+    {
+      "name": "src/naviertwin/core/serving/http_server.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/solver_interfaces/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/solver_interfaces/flowtorch_wrapper.py",
+      "cover": 78
+    },
+    {
+      "name": "src/naviertwin/core/solver_interfaces/fvm_advection.py",
+      "cover": 94
+    },
+    {
+      "name": "src/naviertwin/core/solver_interfaces/jax_fluids_wrapper.py",
+      "cover": 92
+    },
+    {
+      "name": "src/naviertwin/core/solver_interfaces/lbm_d2q9.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/solver_interfaces/lettuce_wrapper.py",
+      "cover": 89
+    },
+    {
+      "name": "src/naviertwin/core/solver_interfaces/pde_solvers.py",
+      "cover": 98
+    },
+    {
+      "name": "src/naviertwin/core/solver_interfaces/sph.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/core/solvers/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/solvers/adi_2d.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/solvers/ausm_plus.py",
+      "cover": 91
+    },
+    {
+      "name": "src/naviertwin/core/solvers/boundary_conditions.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/solvers/cfl.py",
+      "cover": 95
+    },
+    {
+      "name": "src/naviertwin/core/solvers/cheb_2d.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/core/solvers/conv_diff_2d.py",
+      "cover": 92
+    },
+    {
+      "name": "src/naviertwin/core/solvers/dg_1d.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/core/solvers/entropy_stable.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/solvers/fd_1d.py",
+      "cover": 98
+    },
+    {
+      "name": "src/naviertwin/core/solvers/fd_2d.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/solvers/fv_1d.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/solvers/hllc_1d.py",
+      "cover": 88
+    },
+    {
+      "name": "src/naviertwin/core/solvers/imex_rk.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/solvers/low_mach.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/solvers/muscl.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/solvers/ns_projection_2d.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/solvers/ppm.py",
+      "cover": 78
+    },
+    {
+      "name": "src/naviertwin/core/solvers/pressure_poisson.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/solvers/roe.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/solvers/spectral_galerkin.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/solvers/ssp_rk3.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/solvers/strang_split.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/solvers/tvb_limiter.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/solvers/weno5.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/state_space/__init__.py",
+      "cover": 0
+    },
+    {
+      "name": "src/naviertwin/core/state_space/base.py",
+      "cover": 0
+    },
+    {
+      "name": "src/naviertwin/core/state_space/deepomamba/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/state_space/mamba_neural_op/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/streaming/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/streaming/tail_reader.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/core/surrogate/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/surrogate/base.py",
+      "cover": 87
+    },
+    {
+      "name": "src/naviertwin/core/surrogate/bayesian_linear.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/surrogate/ensemble.py",
+      "cover": 92
+    },
+    {
+      "name": "src/naviertwin/core/surrogate/gp_scratch.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/surrogate/kriging_scratch.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/surrogate/kriging_surrogate.py",
+      "cover": 49
+    },
+    {
+      "name": "src/naviertwin/core/surrogate/multi_fidelity.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/core/surrogate/rbf_surrogate.py",
+      "cover": 62
+    },
+    {
+      "name": "src/naviertwin/core/surrogate/rff_regression.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/core/surrogate/rsm.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/surrogate/smt_advanced.py",
+      "cover": 76
+    },
+    {
+      "name": "src/naviertwin/core/system_id/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/system_id/delay_embed.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/core/system_id/dmdc.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/core/system_id/exact_dmd.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/core/system_id/lstm_forecast.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/system_id/mrdmd.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/system_id/randomized_dmd.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/system_id/reservoir.py",
+      "cover": 98
+    },
+    {
+      "name": "src/naviertwin/core/system_id/sindy.py",
+      "cover": 87
+    },
+    {
+      "name": "src/naviertwin/core/system_id/sindyc.py",
+      "cover": 95
+    },
+    {
+      "name": "src/naviertwin/core/system_id/var_id.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/time_series/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/time_series/base.py",
+      "cover": 85
+    },
+    {
+      "name": "src/naviertwin/core/time_series/esn/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/time_series/esn/esn.py",
+      "cover": 98
+    },
+    {
+      "name": "src/naviertwin/core/time_series/latent_dynamics/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/time_series/latent_dynamics/latent_dynamics.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/core/time_series/lstm/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/time_series/lstm/lstm.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/core/time_series/neural_ode/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/time_series/neural_ode/neural_ode.py",
+      "cover": 91
+    },
+    {
+      "name": "src/naviertwin/core/time_series/temporal_no/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/time_series/temporal_no/tno.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/core/time_series/transformer/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/time_series/transformer/transformer_ts.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/core/tools/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/tools/aniso_metric.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/tools/bl_orthogonal.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/tools/clip_plane.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/tools/delaunay_2d.py",
+      "cover": 91
+    },
+    {
+      "name": "src/naviertwin/core/tools/edge_collapse.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/tools/laplacian_smooth.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/tools/marching_cubes_lite.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/core/tools/mesh_generator.py",
+      "cover": 11
+    },
+    {
+      "name": "src/naviertwin/core/tools/mesh_processor.py",
+      "cover": 54
+    },
+    {
+      "name": "src/naviertwin/core/tools/mesh_processor_advanced.py",
+      "cover": 73
+    },
+    {
+      "name": "src/naviertwin/core/tools/mesh_quality.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/tools/mesh_refine_1d.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/tools/mesh_stats.py",
+      "cover": 73
+    },
+    {
+      "name": "src/naviertwin/core/tools/quadtree_amr.py",
+      "cover": 98
+    },
+    {
+      "name": "src/naviertwin/core/tools/stream_seeds.py",
+      "cover": 95
+    },
+    {
+      "name": "src/naviertwin/core/tools/surface_extract.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/tools/winslow.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/turbulence/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/turbulence/energy_spectrum.py",
+      "cover": 94
+    },
+    {
+      "name": "src/naviertwin/core/turbulence/k_epsilon.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/twin/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/twin/ci_delivery.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/twin/counterfactual.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/twin/drift_monitor.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/twin/lifecycle.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/twin/replay_buffer.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/twin/retrain_trigger.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/twin/slo.py",
+      "cover": 88
+    },
+    {
+      "name": "src/naviertwin/core/twin/sync.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/twin/whatif.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/uncertainty/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/uncertainty/abc.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/uncertainty/bootstrap.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/uncertainty/conformal.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/core/uncertainty/cross_entropy.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/uncertainty/hmc.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/uncertainty/jackknife.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/uncertainty/kl_expansion.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/uncertainty/mcmc.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/uncertainty/mlmc.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/uncertainty/nested_sampling.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/uncertainty/pce_simple.py",
+      "cover": 89
+    },
+    {
+      "name": "src/naviertwin/core/uncertainty/rare_event.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/core/uncertainty/smc.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/uncertainty/stoch_collocation.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/uncertainty/svgd.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/uncertainty/vi.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/validation/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/validation/analytic_solutions.py",
+      "cover": 70
+    },
+    {
+      "name": "src/naviertwin/core/validation/cross_val.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/validation/distances.py",
+      "cover": 90
+    },
+    {
+      "name": "src/naviertwin/core/validation/field_diff.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/validation/field_sanity.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/validation/image_metrics.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/validation/metrics.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/validation/taylor_green.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/verification/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/verification/gci.py",
+      "cover": 91
+    },
+    {
+      "name": "src/naviertwin/core/verification/loglog_slope.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/verification/mms.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/verification/monotone.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/verification/order_table.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/verification/richardson.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/verification/sobol.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/verification/uq_disc.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/verification/vv20.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/visualization/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/visualization/colormaps.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/visualization/glyph.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/visualization/heatmap.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/visualization/hist2d.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/visualization/pareto_plot.py",
+      "cover": 94
+    },
+    {
+      "name": "src/naviertwin/core/visualization/pvd_extended.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/visualization/quiver_downsample.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/core/visualization/timeseries_plot.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/core/visualization/volume_render.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/gui/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/gui/colormaps.py",
+      "cover": 96
+    },
+    {
+      "name": "src/naviertwin/gui/main_window.py",
+      "cover": 15
+    },
+    {
+      "name": "src/naviertwin/gui/mode_gallery.py",
+      "cover": 90
+    },
+    {
+      "name": "src/naviertwin/gui/panels/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/gui/panels/analyze_panel.py",
+      "cover": 6
+    },
+    {
+      "name": "src/naviertwin/gui/panels/export_panel.py",
+      "cover": 12
+    },
+    {
+      "name": "src/naviertwin/gui/panels/import_panel.py",
+      "cover": 15
+    },
+    {
+      "name": "src/naviertwin/gui/panels/model_panel.py",
+      "cover": 45
+    },
+    {
+      "name": "src/naviertwin/gui/panels/reduce_panel.py",
+      "cover": 10
+    },
+    {
+      "name": "src/naviertwin/gui/panels/simulation_panel.py",
+      "cover": 10
+    },
+    {
+      "name": "src/naviertwin/gui/panels/twin_panel.py",
+      "cover": 9
+    },
+    {
+      "name": "src/naviertwin/gui/plotting.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/gui/signal_bridge.py",
+      "cover": 86
+    },
+    {
+      "name": "src/naviertwin/gui/styles/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/gui/widgets/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/gui/widgets/analytic_compare_widget.py",
+      "cover": 0
+    },
+    {
+      "name": "src/naviertwin/gui/widgets/loss_curve_widget.py",
+      "cover": 15
+    },
+    {
+      "name": "src/naviertwin/gui/widgets/model_compare_widget.py",
+      "cover": 13
+    },
+    {
+      "name": "src/naviertwin/gui/widgets/vtk_viewer.py",
+      "cover": 12
+    },
+    {
+      "name": "src/naviertwin/gui/wizard/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/gui/wizard/tutorial_wizard.py",
+      "cover": 0
+    },
+    {
+      "name": "src/naviertwin/main.py",
+      "cover": 29
+    },
+    {
+      "name": "src/naviertwin/utils/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/activation_offload.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/active_learning.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/atomic_io.py",
+      "cover": 77
+    },
+    {
+      "name": "src/naviertwin/utils/backoff.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/benchmark.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/cache.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/utils/calibration.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/callbacks.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/utils/class_weights.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/cli_entry.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/complex_step.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/config.py",
+      "cover": 42
+    },
+    {
+      "name": "src/naviertwin/utils/config_diff.py",
+      "cover": 90
+    },
+    {
+      "name": "src/naviertwin/utils/config_loader.py",
+      "cover": 87
+    },
+    {
+      "name": "src/naviertwin/utils/coverage_summary.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/csrf.py",
+      "cover": 94
+    },
+    {
+      "name": "src/naviertwin/utils/curriculum.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/data_lineage.py",
+      "cover": 90
+    },
+    {
+      "name": "src/naviertwin/utils/dataset_card.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/utils/dataset_cas.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/dataset_metadata.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/dataset_split.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/device.py",
+      "cover": 62
+    },
+    {
+      "name": "src/naviertwin/utils/disk_cache.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/utils/distillation.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/docker_gen.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/env_info.py",
+      "cover": 88
+    },
+    {
+      "name": "src/naviertwin/utils/event_bus.py",
+      "cover": 98
+    },
+    {
+      "name": "src/naviertwin/utils/experiment_log.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/utils/flakiness.py",
+      "cover": 94
+    },
+    {
+      "name": "src/naviertwin/utils/flops_counter.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/github_ci_gen.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/grad_checkpoint.py",
+      "cover": 82
+    },
+    {
+      "name": "src/naviertwin/utils/grad_confusion.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/utils/gradient_check.py",
+      "cover": 91
+    },
+    {
+      "name": "src/naviertwin/utils/hash_chain.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/hashing.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/i18n.py",
+      "cover": 83
+    },
+    {
+      "name": "src/naviertwin/utils/influence.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/json_safe.py",
+      "cover": 89
+    },
+    {
+      "name": "src/naviertwin/utils/jwt_lite.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/latency_profiler.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/lipschitz.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/logger.py",
+      "cover": 92
+    },
+    {
+      "name": "src/naviertwin/utils/memory_budget.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/mi_knn.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/mixed_precision.py",
+      "cover": 82
+    },
+    {
+      "name": "src/naviertwin/utils/model_checkpoint.py",
+      "cover": 86
+    },
+    {
+      "name": "src/naviertwin/utils/mutation_smoke.py",
+      "cover": 95
+    },
+    {
+      "name": "src/naviertwin/utils/neon_dot.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/ntk.py",
+      "cover": 87
+    },
+    {
+      "name": "src/naviertwin/utils/otel.py",
+      "cover": 85
+    },
+    {
+      "name": "src/naviertwin/utils/pac_bayes.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/parallel.py",
+      "cover": 92
+    },
+    {
+      "name": "src/naviertwin/utils/path_sanitize.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/pipeline_parallel.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/power_throttle.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/precommit_gen.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/profile.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/utils/progress.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/prom_exporter.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/pruning.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/utils/pseudo_label.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/quantize.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/rate_limit.py",
+      "cover": 89
+    },
+    {
+      "name": "src/naviertwin/utils/rate_limit_http.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/rbac.py",
+      "cover": 95
+    },
+    {
+      "name": "src/naviertwin/utils/repro_manifest.py",
+      "cover": 90
+    },
+    {
+      "name": "src/naviertwin/utils/retry.py",
+      "cover": 94
+    },
+    {
+      "name": "src/naviertwin/utils/rolling_stats.py",
+      "cover": 84
+    },
+    {
+      "name": "src/naviertwin/utils/safe_toml.py",
+      "cover": 74
+    },
+    {
+      "name": "src/naviertwin/utils/safe_yaml.py",
+      "cover": 33
+    },
+    {
+      "name": "src/naviertwin/utils/sam.py",
+      "cover": 86
+    },
+    {
+      "name": "src/naviertwin/utils/schema_validator.py",
+      "cover": 94
+    },
+    {
+      "name": "src/naviertwin/utils/secret_redact.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/seeding.py",
+      "cover": 76
+    },
+    {
+      "name": "src/naviertwin/utils/signed_config.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/spectral_norm.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/sphinx_autoapi_gen.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/structured_log.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/utils/supply_audit.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/tensor_parallel.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/timing.py",
+      "cover": 98
+    },
+    {
+      "name": "src/naviertwin/utils/timing_safe.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/training_callbacks.py",
+      "cover": 93
+    },
+    {
+      "name": "src/naviertwin/utils/undo_redo.py",
+      "cover": 89
+    },
+    {
+      "name": "src/naviertwin/utils/units.py",
+      "cover": 89
+    },
+    {
+      "name": "src/naviertwin/utils/verification_report.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/watchdog.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/workflow/__init__.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/workflow/artifact_zip.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/workflow/budget.py",
+      "cover": 89
+    },
+    {
+      "name": "src/naviertwin/utils/workflow/checkpoint_mgr.py",
+      "cover": 97
+    },
+    {
+      "name": "src/naviertwin/utils/workflow/compare_report.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/workflow/dag_runner.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/workflow/experiment_registry.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/workflow/notify.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/workflow/resume.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/workflow/sweep.py",
+      "cover": 100
+    },
+    {
+      "name": "src/naviertwin/utils/zero_shard.py",
+      "cover": 100
+    }
+  ]
+}

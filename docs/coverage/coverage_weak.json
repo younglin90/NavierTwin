@@ -1,0 +1,129 @@
+{
+  "threshold": 50,
+  "weak": [
+    {
+      "name": "src/naviertwin/core/analysis/lyapunov.py",
+      "cover": 38
+    },
+    {
+      "name": "src/naviertwin/core/cfd_reader/openfoam_reader.py",
+      "cover": 47
+    },
+    {
+      "name": "src/naviertwin/core/cfd_reader/xarray_wrapper.py",
+      "cover": 42
+    },
+    {
+      "name": "src/naviertwin/core/cfd_reader/zarr_reader.py",
+      "cover": 44
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/__init__.py",
+      "cover": 30
+    },
+    {
+      "name": "src/naviertwin/core/dimensionality_reduction/linear/ica.py",
+      "cover": 44
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/modal/dmd.py",
+      "cover": 29
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/statistics/wavelet.py",
+      "cover": 0
+    },
+    {
+      "name": "src/naviertwin/core/flow_analysis/vortex/q_criterion.py",
+      "cover": 45
+    },
+    {
+      "name": "src/naviertwin/core/generative/wavelet_diffusion/wavelet_diffusion_no.py",
+      "cover": 39
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/fno/wno.py",
+      "cover": 28
+    },
+    {
+      "name": "src/naviertwin/core/state_space/__init__.py",
+      "cover": 0
+    },
+    {
+      "name": "src/naviertwin/core/state_space/base.py",
+      "cover": 0
+    },
+    {
+      "name": "src/naviertwin/core/surrogate/kriging_surrogate.py",
+      "cover": 49
+    },
+    {
+      "name": "src/naviertwin/core/tools/mesh_generator.py",
+      "cover": 11
+    },
+    {
+      "name": "src/naviertwin/gui/main_window.py",
+      "cover": 15
+    },
+    {
+      "name": "src/naviertwin/gui/panels/analyze_panel.py",
+      "cover": 6
+    },
+    {
+      "name": "src/naviertwin/gui/panels/export_panel.py",
+      "cover": 12
+    },
+    {
+      "name": "src/naviertwin/gui/panels/import_panel.py",
+      "cover": 15
+    },
+    {
+      "name": "src/naviertwin/gui/panels/model_panel.py",
+      "cover": 45
+    },
+    {
+      "name": "src/naviertwin/gui/panels/reduce_panel.py",
+      "cover": 10
+    },
+    {
+      "name": "src/naviertwin/gui/panels/simulation_panel.py",
+      "cover": 10
+    },
+    {
+      "name": "src/naviertwin/gui/panels/twin_panel.py",
+      "cover": 9
+    },
+    {
+      "name": "src/naviertwin/gui/widgets/analytic_compare_widget.py",
+      "cover": 0
+    },
+    {
+      "name": "src/naviertwin/gui/widgets/loss_curve_widget.py",
+      "cover": 15
+    },
+    {
+      "name": "src/naviertwin/gui/widgets/model_compare_widget.py",
+      "cover": 13
+    },
+    {
+      "name": "src/naviertwin/gui/widgets/vtk_viewer.py",
+      "cover": 12
+    },
+    {
+      "name": "src/naviertwin/gui/wizard/tutorial_wizard.py",
+      "cover": 0
+    },
+    {
+      "name": "src/naviertwin/main.py",
+      "cover": 29
+    },
+    {
+      "name": "src/naviertwin/utils/config.py",
+      "cover": 42
+    },
+    {
+      "name": "src/naviertwin/utils/safe_yaml.py",
+      "cover": 33
+    }
+  ]
+}
