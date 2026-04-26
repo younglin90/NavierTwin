@@ -31,7 +31,6 @@ class TestCavityGhia:
             U_lid=1.0,
         )
         # interpolate solver u at x=0.5 (centerline) onto Ghia y-stations
-        x = np.linspace(0, 1, nx)
         y = np.linspace(0, 1, ny)
         ix = nx // 2
         u_center = u[ix, :]  # u(x=0.5, y)
