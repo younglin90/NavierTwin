@@ -40,3 +40,6 @@ Thumbs.db
 htmlcov/
 .mypy_cache/
 .ruff_cache/
+
+# Verification artifacts
+verify_artifacts/
