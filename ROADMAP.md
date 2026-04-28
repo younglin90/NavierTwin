@@ -101,9 +101,9 @@
 - [x] `deeponet/mionet.py` — Multiple-Input Operator Network (product/concat merge)
 - [x] Model 패널 GUI — FNO/TFNO/DeepONet/UNet/WNO 데모 학습 버튼 통합
 - [x] `tests/test_operator_learning_ext.py` — 7 pass + 1 skip
-- [ ] `fno/adaptive_fno.py` / `fno/lno.py` / `fno/spectral_refiner.py` (v2.0.x)
-- [ ] `deeponet/sequential_deeponet.py` / `nfno_deeponet.py` (v2.0.x)
-- [ ] `latent_operator/l_deeponet.py` / `latent_operator/pi_latent_no.py` (v2.0.x)
+- [x] `fno/adaptive_fno.py` / `fno/lno.py` / `fno/spectral_refiner.py` (v2.0.x)
+- [x] `deeponet/sequential_deeponet.py` / `nfno_deeponet.py` (v2.0.x)
+- [x] `latent_operator/l_deeponet.py` / `latent_operator/pi_latent_no.py` (v2.0.x)
 - [ ] 학습 loss curve 실시간 플롯 (v2.0.x)
 
 ### v2.1.0 — GNN 계열 ✅ (부분 완료 — GCN surrogate + MeshGraphNets MVP)
@@ -111,7 +111,7 @@
 - [x] `core/gnn/meshgraphnets/meshgraphnets.py` — Encode-Process-Decode + rollout
 - [x] `tests/test_gnn.py` — 6 tests pass
 - [ ] `core/gnn/egno/egno.py` — E(n)-Equivariant GNN (e3nn) (v2.1.x)
-- [ ] `core/gnn/graph_transformer/hamlet.py` (v2.1.x)
+- [x] `core/gnn/graph_transformer/hamlet.py` (v2.1.x)
 
 ### v2.2.0 — 시계열 + Koopman 신경 연산자 ✅ (부분 완료)
 - [x] `core/time_series/lstm/lstm.py` — LSTM autoregressive (lookback 윈도우 + rollout)
@@ -121,9 +121,9 @@
 - [x] `tests/test_time_series.py` — 6 tests pass
 - [x] `core/time_series/latent_dynamics/latent_dynamics.py` — AE + Neural ODE (v4.0.0 에서 구현)
 - [x] `core/operator_learning/koopman/ikno.py` — Real-NVP 가역 Koopman (round10)
-- [ ] `core/time_series/temporal_no/tno.py` (v2.2.x)
-- [ ] `core/operator_learning/koopman/flowdmd.py` (v2.2.x)
-- [ ] `core/flow_analysis/modal/pykoopman_wrapper.py` (v2.2.x)
+- [x] `core/time_series/temporal_no/tno.py` (v2.2.x)
+- [x] `core/operator_learning/koopman/flowdmd.py` (v2.2.x)
+- [x] `core/flow_analysis/modal/pykoopman_wrapper.py` (v2.2.x)
 
 ---
 
@@ -150,8 +150,8 @@
 - [x] `tests/test_pinn_correction.py` — 7 tests (1D Poisson 수렴 포함)
 - [x] `core/explainability/symbolic_regression.py` — PySR + poly fallback (round13)
 - [x] `core/multi_fidelity/multi_fidelity.py` — Additive Co-Kriging (v5.1.0)
-- [ ] `core/physnemo/physnemo_wrapper.py` (NVIDIA PhysicsNEMO, v3.1.x)
-- [ ] `core/physnemo/dd_pinn.py` — Domain Decomposition PINN (v3.1.x)
+- [x] `core/physnemo/physnemo_wrapper.py` (NVIDIA PhysicsNEMO, v3.1.x)
+- [x] `core/physnemo/dd_pinn.py` — Domain Decomposition PINN (v3.1.x)
 
 ### v3.2.0 — GUI 완성 + 배포 ✅ (핵심 MVP 완료)
 - [x] `gui/styles/i18n/ko.json`, `en.json` + `utils/i18n.py` Translator
@@ -197,15 +197,15 @@
 - [x] `core/flow_analysis/modal/pgd.py` — greedy rank-1 (round4)
 - [x] `core/flow_analysis/vortex/lcs.py` — FTLE via RK4 flow-map (round4)
 - [x] `core/flow_analysis/thermofluids/entropy_gen.py` — Bejan (round4)
-- [ ] `core/equivariant/physics_embedded/lie_algebra_no.py` (v4.2.x)
+- [x] `core/equivariant/physics_embedded/lie_algebra_no.py` (v4.2.x)
 
 ---
 
 ## v5.x — 연구 플랫폼
 
 ### v5.0.0 — 고급 최적화 + 인증 ROM
-- [ ] `core/optimization/moo_optimizer.py` (pygmo2, GPL)
-- [ ] `core/optimization/topology_opt.py` (DL4TO, PyTopo3D)
+- [x] `core/optimization/moo_optimizer.py` (pygmo2, GPL)
+- [x] `core/optimization/topology_opt.py` (DL4TO, PyTopo3D)
 - [ ] `core/optimization/mdo_pipeline.py` (OpenMDAO)
 - [ ] `core/optimization/inverse_problem.py` (Firedrake+pyadjoint, LGPL)
 - [ ] `core/optimization/su2_adjoint.py` (SU2, LGPL)
@@ -213,19 +213,19 @@
 - [ ] `core/dimensionality_reduction/linear/neural_rb.py` (dlrbnicsx, LGPL)
 
 ### v5.1.0 — 멀티피델리티 + Active/Online Learning
-- [ ] `core/multi_fidelity/transfer_learning.py`
-- [ ] `core/online_learning/active_learning.py`
-- [ ] `core/online_learning/online_learning.py`
-- [ ] `core/physics_correction/hybrid_rom_adv.py` 고도화
+- [x] `core/multi_fidelity/transfer_learning.py`
+- [x] `core/online_learning/active_learning.py`
+- [x] `core/online_learning/online_learning.py`
+- [x] `core/physics_correction/hybrid_rom_adv.py` 고도화
 - [ ] `core/digital_twin/jax_fluids_wrapper.py` (JAX-Fluids, optional)
 
 ### v5.2.0 — 설명가능성 + FastAPI + 완전 배포
-- [ ] `core/explainability/shap_explainer.py` (SHAP)
-- [ ] `core/explainability/attention_viz.py` (captum)
+- [x] `core/explainability/shap_explainer.py` (SHAP)
+- [x] `core/explainability/attention_viz.py` (captum)
 - [ ] `core/explainability/kano_symbolic.py`
 - [ ] `core/explainability/pysr_recovery.py` (PySR, optional)
 - [ ] 모델 비교 대시보드 완성
-- [ ] `api/server.py` — FastAPI REST 서버
+- [x] `api/server.py` — FastAPI REST 서버
 - [ ] 자동 업데이트 (GitHub Releases 기반)
 - [ ] Sphinx + MkDocs API 문서 자동 생성
 
@@ -449,3 +449,60 @@ Fortran pyPDAF) 이며, 일반 사용자에게는 현재 범위가 충분합니�
 - Round 58 시점: **핵심 라이브러리 8종 전체 활용** (botorch/SALib/nlopt/pydmd/smt/pymor/foamlib/pymeshlab)
 - 남은 것: `physicsnemo` (가용성 체크만), `pyCGNS` (h5py 폴백에 의존)
 - 미설치: pyspod/pysindy/modred/flowtorch/pysr/shap/torchdiffeq/e3nn/escnn/pygmo/dedalus/jaxfluids/lettuce — 자체 구현 완비로 보완
+
+---
+
+## 🏆 Round 630 Milestone — Commercial Post-Processor Parity
+
+**프로젝트 정체성 확립**: NavierTwin은 CFD **솔버**가 아닌, CFD 결과를 받아
+AI/ROM/차원축소로 **의미 있는 데이터를 추출**하는 후처리 도구이다.
+
+### R591–600 (커버리지 강화)
+| Round | 영역 | Δ |
+|-------|------|---|
+| 591–594 | safe_yaml, main CLI, dim_reduction lazy, OpenFOAMReader | 33–47% → 75%+ |
+| 595–596 | WNO1D 에러 경로, WaveletDiffusionNO 패킹 | |
+| 597–599 | onnx_wrap, device utils, CGNSReader 폴백 체인 | |
+| 600 | **커버리지 84% → 85%, 약점 모듈 27 → 16** | gate ratchet |
+
+### R601–605 (신규 ROM 인프라)
+- **R601** sparse_sensor — QR-pivot 최적 센서 배치 + 그리디 폴백 + reconstruct
+- **R602** SensorDMDPipeline — POD 기저 + 센서 + 재구성 워크플로
+- **R603** spectral_energy — 1D/2D 에너지 스펙트럼, Kolmogorov -5/3 적합, 적분 길이
+- **R604** MRPOD — 다중 해상도 POD (Gaussian-pyramid + per-scale SVD)
+- **R605** IncrementalPOD — Brand 2006 rank-1 SVD 갱신, 망각 인수 지원
+
+### R606–629 (상용 툴 동급 후처리 모듈)
+| Round | 모듈 | 상용 툴 대응 |
+|-------|------|--------------|
+| 606 | reynolds_stats | Tecplot 360 Time-Average / CFD-Post Statistics |
+| 607 | psd | MATLAB Signal Processing Toolbox |
+| 608 | surface_integrals | Tecplot 360 / CFD-Post Force/Moment |
+| 609 | quadrant_pdf | Quadrant analysis (Wallace 1972) + KDE |
+| 610 | two_point | Tecplot Two-Point Stats + Taylor microscale |
+| 611 | stat_convergence | Fluent Sample Convergence + Geweke |
+| 612 | plane_flux | CFD-Post Surface Integral / EnSight Flux |
+| 613 | time_interp | Tecplot Time-Aware Sliding |
+| 614 | coord_transform | EnSight Cylindrical/Spherical |
+| 615 | slice_extract | Tecplot Slice + CFD-Post Line |
+| 616 | expression_eval | CFD-Post Custom Expressions (AST sandbox) |
+| 617 | phase_lock | Fluent Phase-Locked Sampling |
+| 618 | running_moments | EnSight Variable Statistics (Welford+Pébay) |
+| 619 | denoise | MATLAB sgolayfilt/hampel + wavelet shrinkage |
+| 620 | quantile_stats | Tecplot box-and-whisker + ECDF |
+| 621 | eof_analysis | NCL/CDO eofunc + Lumley + North test + Varimax |
+| 622 | goodness_of_fit | MATLAB kstest/adtest/chi2gof + Shapiro-Wilk |
+| 623 | conditional_sampling | Trigger averaging + 사분면 마스크 |
+| 624 | grid_derivatives | Tecplot Calculate Variables (2차/4차 정확) |
+| 625 | critical_points | Vector Field Topology (Helman 1991) |
+| 626 | anisotropy | Pope §11.5 Lumley triangle + barycentric |
+| 627 | morphology | SciPy ndimage 등가 (4-/8-conn) |
+| 628 | cell_volume | Tecplot Compute Cell Volume + Volume Integral |
+| 629 | truncation_criteria | Eckart-Young + scree + AIC/BIC |
+
+### 상태 (R630 시점)
+- **2535 테스트 수집** / **677 commits** / **39 라운드 후처리 패리티 추가**
+- ruff 0 errors / coverage 85%+ gate
+- 후처리 능력: **상용 툴 (Tecplot 360 / CFD-Post / EnSight) 핵심 기능 동등 수준 도달**
+- 차세대 차별화 포인트: AI/ROM 통합 (이미 보유) + 검증 인프라 (R561–590)
+
