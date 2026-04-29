@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 pytest.importorskip("PySide6")
@@ -74,6 +75,38 @@ class TestPanelConstruction:
         name, result = emitted[0]
         assert isinstance(result, dict)
 
+    def test_set_dataset_updates_customer_run_state(self, qtbot) -> None:
+        from naviertwin.gui.panels.postproc_panel import PostProcessPanel
+
+        panel = PostProcessPanel()
+        qtbot.addWidget(panel)
+        dataset = _FakeDataset()
+
+        panel.set_dataset(dataset)
+
+        assert panel._dataset is dataset
+        assert "로드됨" in panel._data_label.text()
+        assert panel._run_btn.text() == "실행 (로드 데이터)"
+
+    def test_dataset_run_uses_loaded_fields(self, qtbot) -> None:
+        from naviertwin.gui.panels.postproc_panel import PostProcessPanel
+
+        panel = PostProcessPanel()
+        qtbot.addWidget(panel)
+        dataset = _FakeDataset()
+        capture = _CaptureFacade()
+        panel.set_dataset(dataset)
+        _select_operation(panel, "psd_welch")
+        panel._facade = capture
+
+        panel._on_run_clicked()
+
+        assert capture.calls
+        op_name, kwargs = capture.calls[0]
+        assert op_name == "psd_welch"
+        np.testing.assert_allclose(kwargs["signal"], dataset.mesh.point_data["pressure"])
+        assert "로드 데이터셋" in panel._result_text.toPlainText()
+
 
 class TestSummarizeResult:
     def test_array_short(self) -> None:
@@ -125,6 +158,12 @@ class TestSmokeKwargs:
         with pytest.raises(ValueError, match="smoke 데이터"):
             PostProcessPanel._build_smoke_kwargs("undefined_op_xyz")
 
+    def test_dataset_kwargs_reject_unsupported_auto_mapping(self) -> None:
+        from naviertwin.gui.panels.postproc_panel import PostProcessPanel
+
+        with pytest.raises(ValueError, match="자동 구성"):
+            PostProcessPanel._build_dataset_kwargs("surface_forces", _FakeDataset())
+
     def test_commercial_parity_modules_exposed_to_gui_facade(self) -> None:
         import inspect
 
@@ -162,3 +201,64 @@ class TestSmokeKwargs:
 
         assert missing == []
         assert len(PostProcessFacade().list_operations()) >= len(expected_modules)
+
+
+class _FakeMesh:
+    def __init__(self) -> None:
+        self.n_points = 16
+        self.n_cells = 4
+        self.points = np.column_stack([
+            np.linspace(0.0, 1.0, self.n_points),
+            np.linspace(1.0, 2.0, self.n_points),
+            np.zeros(self.n_points),
+        ])
+        self.point_data = {
+            "pressure": np.linspace(100.0, 115.0, self.n_points),
+            "velocity": np.column_stack([
+                np.linspace(0.0, 1.0, self.n_points),
+                np.linspace(1.0, 0.0, self.n_points),
+                np.ones(self.n_points),
+            ]),
+        }
+        self.cell_data = {}
+
+
+class _FakeDataset:
+    def __init__(self) -> None:
+        self.mesh = _FakeMesh()
+        self.field_names = ["pressure", "velocity"]
+        self.time_steps = [0.0]
+        self.metadata = {}
+
+    @property
+    def n_points(self) -> int:
+        return self.mesh.n_points
+
+    @property
+    def n_cells(self) -> int:
+        return self.mesh.n_cells
+
+    @property
+    def n_time_steps(self) -> int:
+        return len(self.time_steps)
+
+    def extract_field_snapshots(self, field_name: str) -> np.ndarray:
+        values = np.asarray(self.mesh.point_data[field_name], dtype=float)
+        return values.reshape(-1, 1)
+
+
+class _CaptureFacade:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    def run(self, op_name: str, **kwargs: object) -> dict[str, object]:
+        self.calls.append((op_name, kwargs))
+        return {"count": len(kwargs)}
+
+
+def _select_operation(panel: object, op_name: str) -> None:
+    for i in range(panel._op_list.count()):
+        if panel._op_list.item(i).text() == op_name:
+            panel._op_list.setCurrentRow(i)
+            return
+    raise AssertionError(f"operation not found: {op_name}")

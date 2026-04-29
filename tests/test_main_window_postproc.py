@@ -57,3 +57,33 @@ class TestMainWindowIntegration:
         ][0]
         last_action.trigger()
         assert win._tabs.currentWidget() is win._postproc_panel
+
+    def test_dataset_loaded_connects_postproc_panel(
+        self, qtbot, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from naviertwin.gui.main_window import MainWindow
+
+        dataset = _FakeDataset()
+        win = MainWindow(confirm_on_close=False)
+        qtbot.addWidget(win)
+        captured: list[object] = []
+
+        monkeypatch.setattr(win._analyze_panel, "set_dataset", lambda _: None)
+        monkeypatch.setattr(win._reduce_panel, "set_dataset", lambda _: None)
+        monkeypatch.setattr(win._model_panel, "set_dataset", lambda _: None)
+        monkeypatch.setattr(win._export_panel, "set_dataset", lambda _: None)
+        monkeypatch.setattr(
+            win._postproc_panel,
+            "set_dataset",
+            lambda value: captured.append(value),
+        )
+
+        win._on_dataset_loaded(dataset)
+
+        assert captured == [dataset]
+
+
+class _FakeDataset:
+    n_points = 4
+    n_cells = 2
+    n_time_steps = 1

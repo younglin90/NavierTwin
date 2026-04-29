@@ -416,6 +416,8 @@ class MainWindow(QMainWindow):
         self._reduce_panel.set_dataset(dataset)    # type: ignore[arg-type]
         self._model_panel.set_dataset(dataset)     # type: ignore[arg-type]
         self._export_panel.set_dataset(dataset)    # type: ignore[arg-type]
+        if self._postproc_panel is not None:
+            self._postproc_panel.set_dataset(dataset)
         # Import 탭 완료 후 Analyze 탭으로 자동 이동
         self._tabs.setCurrentIndex(1)
 
