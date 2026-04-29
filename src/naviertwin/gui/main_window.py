@@ -168,6 +168,7 @@ class MainWindow(QMainWindow):
         ]
         for i, (key, num) in enumerate(titles):
             self._tabs.setTabText(i, f"{num} {self._t(key)}")
+        self._refresh_view_menu()
 
     def update_compare_dashboard(
         self, results: dict[str, dict[str, float]]
@@ -200,19 +201,31 @@ class MainWindow(QMainWindow):
         file_menu.addAction(quit_action)
 
         # 보기 메뉴
-        view_menu = mb.addMenu("보기(&V)")
-        for i, name in enumerate(["Import", "Analyze", "Reduce", "Model", "Twin", "Export"]):
-            action = QAction(f"{name} 탭", self)
-            action.setShortcut(f"Ctrl+{i+1}")
-            action.setData(i)
-            action.triggered.connect(self._switch_tab)
-            view_menu.addAction(action)
+        self._view_menu = mb.addMenu("보기(&V)")
+        self._refresh_view_menu()
 
         # 도움말 메뉴
         help_menu = mb.addMenu("도움말(&H)")
         about_action = QAction("NavierTwin 정보(&A)", self)
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
+
+    def _refresh_view_menu(self) -> None:
+        """현재 탭 목록 전체를 보기 메뉴에 노출한다."""
+        view_menu = getattr(self, "_view_menu", None)
+        tabs = getattr(self, "_tabs", None)
+        if view_menu is None or tabs is None:
+            return
+
+        view_menu.clear()
+        for i in range(tabs.count()):
+            title = tabs.tabText(i)
+            action = QAction(f"{title} 탭", self)
+            if i < 9:
+                action.setShortcut(f"Ctrl+{i + 1}")
+            action.setData(i)
+            action.triggered.connect(self._switch_tab)
+            view_menu.addAction(action)
 
     def _setup_statusbar(self) -> None:
         sb: QStatusBar = self.statusBar()

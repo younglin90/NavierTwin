@@ -30,3 +30,27 @@ class TestMainWindowIntegration:
         last_idx = win._tabs.count() - 1
         win._tabs.setCurrentIndex(last_idx)
         assert win._tabs.currentWidget() is win._postproc_panel
+
+    def test_view_menu_exposes_every_tab(self, qtbot) -> None:
+        from naviertwin.gui.main_window import MainWindow
+
+        win = MainWindow(confirm_on_close=False)
+        qtbot.addWidget(win)
+
+        view_menu = win._view_menu
+        actions = [action for action in view_menu.actions() if action.data() is not None]
+        assert len(actions) == win._tabs.count()
+        assert actions[-1].data() == win._tabs.count() - 1
+        assert "Post-Tools" in actions[-1].text()
+
+    def test_view_menu_switches_to_postproc_tab(self, qtbot) -> None:
+        from naviertwin.gui.main_window import MainWindow
+
+        win = MainWindow(confirm_on_close=False)
+        qtbot.addWidget(win)
+
+        last_action = [
+            action for action in win._view_menu.actions() if action.data() == win._tabs.count() - 1
+        ][0]
+        last_action.trigger()
+        assert win._tabs.currentWidget() is win._postproc_panel
