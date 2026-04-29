@@ -170,6 +170,11 @@ class ImportPanel(QWidget):
         self._clear_btn.clicked.connect(self._clear)
         btn_row.addWidget(self._clear_btn)
 
+        self._preflight_btn = QPushButton("Readiness 점검")
+        self._preflight_btn.setEnabled(False)
+        self._preflight_btn.clicked.connect(self._run_preflight)
+        btn_row.addWidget(self._preflight_btn)
+
         self._load_btn = QPushButton("데이터 로드")
         self._load_btn.setObjectName("primaryButton")
         self._load_btn.setEnabled(False)
@@ -218,7 +223,9 @@ class ImportPanel(QWidget):
     def _on_path_changed(self, text: str) -> None:
         p = Path(text.strip())
         self._current_path = p if text.strip() else None
-        self._load_btn.setEnabled(bool(text.strip()))
+        has_path = bool(text.strip())
+        self._preflight_btn.setEnabled(has_path)
+        self._load_btn.setEnabled(has_path)
 
     def _clear(self) -> None:
         self._path_edit.clear()
@@ -226,7 +233,29 @@ class ImportPanel(QWidget):
         self._log_text.clear()
         self._status_label.setText("파일을 선택하거나 드래그하세요.")
         self._current_path = None
+        self._preflight_btn.setEnabled(False)
         self._load_btn.setEnabled(False)
+
+    def _run_preflight(self) -> None:
+        if self._current_path is None:
+            return
+        self._run_preflight_path(self._current_path)
+
+    def _run_preflight_path(self, path: Path) -> dict[str, object]:
+        """CFD 입력 readiness 점검을 실행하고 결과를 로그/상태에 표시한다."""
+        from naviertwin.core.validation.dataset_preflight import (
+            build_dataset_preflight_report,
+            format_preflight_report,
+        )
+
+        report = build_dataset_preflight_report(path)
+        summary = format_preflight_report(report)
+        status = str(report.get("status", "unknown"))
+        score = int(report.get("readiness_score", 0) or 0)
+        self._log(summary)
+        self._status_label.setText(f"Preflight: {status} ({score}/100)")
+        self._status_label.setObjectName("errorLabel" if status == "error" else "statusLabel")
+        return report
 
     def _start_load(self) -> None:
         if self._current_path is None:
@@ -284,6 +313,7 @@ class ImportPanel(QWidget):
     def _set_loading(self, loading: bool) -> None:
         self._progress_bar.setVisible(loading)
         self._load_btn.setEnabled(not loading)
+        self._preflight_btn.setEnabled(not loading and self._current_path is not None)
         self._browse_file_btn.setEnabled(not loading)
         self._browse_dir_btn.setEnabled(not loading)
 
