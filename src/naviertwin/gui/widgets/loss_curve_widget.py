@@ -13,6 +13,7 @@ class LossCurveWidget(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._series: dict[str, list[float]] = {}
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
 
@@ -41,11 +42,12 @@ class LossCurveWidget(QWidget):
             series: {label: [loss_0, loss_1, ...]}.
             log_scale: y 축 로그 여부.
         """
+        self._series = {label: list(losses) for label, losses in series.items()}
         if not self._mpl or self._figure is None:
             return
         self._figure.clear()
         ax = self._figure.add_subplot(111)
-        for label, losses in series.items():
+        for label, losses in self._series.items():
             if not losses:
                 continue
             ax.plot(range(1, len(losses) + 1), losses, label=label, linewidth=1.5)
@@ -57,7 +59,7 @@ class LossCurveWidget(QWidget):
             except ValueError:
                 ax.set_yscale("linear")
         ax.grid(True, alpha=0.3)
-        if series:
+        if self._series:
             ax.legend(loc="best", fontsize=8)
         if self._canvas is not None:
             self._canvas.draw_idle()

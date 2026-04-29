@@ -45,6 +45,7 @@ class ModelPanel(QWidget):
         self._surrogate: Optional[object] = None
         self._reduction_artifact: Optional[dict[str, object]] = None
         self._loaded_metadata: dict[str, object] = {}
+        self._loss_series: dict[str, list[float]] = {}
         self._setup_ui()
 
     # ──────────────────────────────────────────────────────────────────
@@ -149,6 +150,15 @@ class ModelPanel(QWidget):
         self._metrics_list.setMaximumHeight(160)
         metrics_layout.addWidget(self._metrics_list)
         right_layout.addWidget(metrics_group)
+
+        # 학습 loss curve
+        loss_group = QGroupBox("학습 Loss Curve")
+        loss_layout = QVBoxLayout(loss_group)
+        from naviertwin.gui.widgets.loss_curve_widget import LossCurveWidget
+
+        self._loss_curve = LossCurveWidget()
+        loss_layout.addWidget(self._loss_curve)
+        right_layout.addWidget(loss_group)
 
         # 로그
         log_group = QGroupBox("로그")
@@ -502,6 +512,7 @@ class ModelPanel(QWidget):
                 return
 
             self._log(f"[{op_type}] 학습 완료 — {msg}")
+            self._update_loss_curve(op_type, op)
             self.model_trained.emit(op_type.lower(), op)
 
         except Exception as exc:  # noqa: BLE001
@@ -521,6 +532,25 @@ class ModelPanel(QWidget):
         except (TypeError, ValueError):
             return None
         return number if number > 0 else None
+
+    def _update_loss_curve(self, label: str, model: object) -> None:
+        """모델의 train_losses_를 LossCurveWidget에 반영한다."""
+        raw_losses = getattr(model, "train_losses_", None)
+        if raw_losses is None:
+            return
+        try:
+            losses = [
+                float(value)
+                for value in raw_losses
+                if np.isfinite(float(value))
+            ]
+        except (TypeError, ValueError):
+            return
+        if not losses:
+            return
+        self._loss_series[label] = losses
+        self._loss_curve.set_losses(self._loss_series)
+        self._log(f"Loss curve 업데이트: {label} ({len(losses)} epochs)")
 
     def _log(self, msg: str) -> None:
         self._log_text.append(msg)
