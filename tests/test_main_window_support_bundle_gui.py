@@ -63,6 +63,40 @@ def test_support_bundle_action_surfaces_success(
     assert win._status_label.text() == "지원 번들 생성: ok"
 
 
+def test_support_bundle_includes_current_import_path_preflight(
+    qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import naviertwin.utils.support_bundle as support_bundle
+    from naviertwin.gui.main_window import MainWindow
+
+    case_path = tmp_path / "case.su2"
+    case_path.write_text("% placeholder\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def fake_build_support_bundle(
+        outdir: str | Path,
+        preflight: str | Path | None = None,
+        include_optional: bool = False,
+        zip_bundle: bool = False,
+    ) -> dict[str, object]:
+        captured["preflight"] = preflight
+        return {
+            "status": "ok",
+            "zip_path": str(Path(outdir) / "support-bundle.zip"),
+            "files": ["doctor.json", "preflight.json", "metadata.json"],
+        }
+
+    monkeypatch.setattr(support_bundle, "build_support_bundle", fake_build_support_bundle)
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.information", lambda *args: None)
+    win = MainWindow(confirm_on_close=False)
+    qtbot.addWidget(win)
+    win._import_panel._path_edit.setText(str(case_path))
+
+    win._create_support_bundle_path(tmp_path)
+
+    assert captured["preflight"] == case_path
+
+
 def test_support_bundle_action_surfaces_errors(
     qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

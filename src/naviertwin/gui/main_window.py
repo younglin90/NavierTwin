@@ -517,6 +517,7 @@ class MainWindow(QMainWindow):
         try:
             metadata = build_support_bundle(
                 outdir,
+                preflight=self._support_bundle_preflight_path(),
                 include_optional=True,
                 zip_bundle=True,
             )
@@ -533,6 +534,14 @@ class MainWindow(QMainWindow):
             "지원 번들 생성 완료",
             f"상태: {status}\n저장 위치: {zip_path}",
         )
+
+    def _support_bundle_preflight_path(self) -> Path | None:
+        """지원 번들에 포함할 현재 Import 탭 CFD 입력 경로를 반환한다."""
+        path_text = self._import_panel._path_edit.text().strip()
+        if not path_text:
+            return None
+        path = Path(path_text)
+        return path if path.exists() else None
 
     def _open_recent_project(self) -> None:
         action: QAction = self.sender()  # type: ignore[assignment]
