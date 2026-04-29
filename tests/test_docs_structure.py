@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import runpy
 from argparse import _SubParsersAction
 from pathlib import Path
@@ -138,3 +139,26 @@ class TestDocsStructure:
             "EOF",
         ]:
             assert token in page
+
+    def test_public_api_package_initializers_are_not_placeholders(self) -> None:
+        """Customer-visible API packages should export real implemented symbols."""
+        expected = {
+            "naviertwin.core.report": ["ReportGenerator", "HTMLReport", "MarkdownReport"],
+            "naviertwin.core.multi_fidelity": ["AdditiveCoKriging", "freeze_layers"],
+            "naviertwin.core.sensitivity": ["saltelli_sample", "sobol_indices"],
+            "naviertwin.core.physics_correction": [
+                "HybridROM",
+                "project_linear_constraint",
+            ],
+            "naviertwin.core.physnemo": ["PINNSolver", "PhysicsNEMOWrapper"],
+        }
+
+        for module_name, symbols in expected.items():
+            module = importlib.import_module(module_name)
+            init_path = ROOT / "src" / Path(*module_name.split(".")) / "__init__.py"
+            text = init_path.read_text(encoding="utf-8")
+            assert "구현 예정" not in text
+            exported = set(getattr(module, "__all__", []))
+            for symbol in symbols:
+                assert hasattr(module, symbol)
+                assert symbol in exported
