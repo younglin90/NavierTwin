@@ -257,6 +257,21 @@ class TestDocsStructure:
                 "SO2EquivariantOperator",
                 "EGNN",
             ],
+            "naviertwin.core.numerics": [
+                "chebyshev_points",
+                "chebyshev_diff_matrix",
+                "clenshaw_curtis_weights",
+                "integrate_cc",
+            ],
+            "naviertwin.core.sampling": [
+                "generate_sweep",
+                "halton",
+                "latin_hypercube",
+                "mc_integral",
+                "poisson_disk_2d",
+                "select_sensors",
+                "SensorDMDPipeline",
+            ],
             "naviertwin.core.flow_analysis.statistics": [
                 "compute_fft",
                 "two_point_correlation",
