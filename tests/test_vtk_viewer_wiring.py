@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import builtins
+
 import numpy as np
 import pytest
 
@@ -20,6 +22,46 @@ class TestViewerAPI:
         from naviertwin.gui.main_window import MainWindow
 
         assert hasattr(MainWindow, "_on_simulation_done")
+
+    def test_render_controls_disabled_when_plotter_unavailable(
+        self, qtbot, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from naviertwin.gui.widgets.vtk_viewer import VtkViewer
+
+        real_import = builtins.__import__
+
+        def block_pyvistaqt(name: str, *args: object, **kwargs: object) -> object:
+            if name == "pyvistaqt":
+                raise ImportError("blocked")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", block_pyvistaqt)
+
+        viewer = VtkViewer()
+        qtbot.addWidget(viewer)
+
+        assert viewer._plotter is None
+        assert not viewer._reset_btn.isEnabled()
+        assert not viewer._screenshot_btn.isEnabled()
+        assert "renderer unavailable" in viewer._placeholder.text()
+
+    def test_render_controls_enable_when_plotter_available(
+        self, qtbot, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from naviertwin.gui.widgets import vtk_viewer
+
+        def fake_init_plotter(self: object) -> None:
+            self._plotter = object()
+            self._set_render_controls_enabled(True)
+
+        monkeypatch.setattr(vtk_viewer.VtkViewer, "_init_plotter", fake_init_plotter)
+
+        viewer = vtk_viewer.VtkViewer()
+        qtbot.addWidget(viewer)
+
+        assert viewer._plotter is not None
+        assert viewer._reset_btn.isEnabled()
+        assert viewer._screenshot_btn.isEnabled()
 
 
 class TestSimulationResultFormat:

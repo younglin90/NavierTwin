@@ -170,9 +170,22 @@ class VtkViewer(QWidget):
             self._viewport_layout.removeWidget(self._placeholder)
             self._placeholder.hide()
             self._viewport_layout.addWidget(self._plotter)
+            self._set_render_controls_enabled(True)
         except Exception:
             # pyvistaqt 없거나 디스플레이 없는 환경
             self._plotter = None
+            self._set_render_controls_enabled(False)
+
+    def _set_render_controls_enabled(self, enabled: bool) -> None:
+        """렌더러 의존 버튼 상태를 실제 backend 가용성과 맞춘다."""
+        tooltip = "" if enabled else "PyVista Qt 렌더러가 없어 사용할 수 없습니다."
+        for button in (self._reset_btn, self._screenshot_btn):
+            button.setEnabled(enabled)
+            button.setToolTip(tooltip)
+        if not enabled:
+            self._placeholder.setText(
+                "3D Viewport\n(PyVista Qt renderer unavailable)"
+            )
 
     # ──────────────────────────────────────────────────────────────────
     # 공개 API

@@ -30,6 +30,7 @@ CUSTOMER_SMOKE_TESTS = [
     "tests/test_verification_emit.py",
     "tests/test_version_consistency.py",
     "tests/test_updater.py",
+    "tests/test_vtk_viewer_wiring.py",
     "tests/test_doctor_cli.py",
     "tests/test_dataset_preflight.py",
     "tests/test_support_bundle_cli.py",
