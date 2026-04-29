@@ -45,6 +45,7 @@ from naviertwin.gui.panels.import_panel import ImportPanel
 from naviertwin.gui.panels.model_panel import ModelPanel
 from naviertwin.gui.panels.reduce_panel import ReducePanel
 from naviertwin.gui.panels.twin_panel import TwinPanel
+from naviertwin.utils.updater import UpdateCheckResult
 
 
 def open_file_filter() -> str:
@@ -57,6 +58,29 @@ def open_file_filter() -> str:
         f"All NavierTwin Inputs (*.ntwin {registered});;"
         "NavierTwin Project (*.ntwin);;"
         f"{cfd_file_filter()}"
+    )
+
+
+def format_update_check_message(result: UpdateCheckResult) -> tuple[str, str]:
+    """GUI 대화상자용 update-check 결과 메시지를 구성한다."""
+    if result.update_available:
+        return (
+            "업데이트 사용 가능",
+            (
+                f"현재 버전: {result.current_version}\n"
+                f"최신 버전: {result.latest_version}\n"
+                f"채널: {result.channel}\n"
+                f"다운로드: {result.url}\n"
+                f"SHA256: {result.sha256}"
+            ),
+        )
+    return (
+        "최신 상태",
+        (
+            f"현재 버전: {result.current_version}\n"
+            f"확인 채널: {result.channel}\n"
+            "사용 가능한 새 업데이트가 없습니다."
+        ),
     )
 
 
@@ -223,10 +247,15 @@ class MainWindow(QMainWindow):
         self._refresh_view_menu()
 
         # 도움말 메뉴
-        help_menu = mb.addMenu("도움말(&H)")
+        self._help_menu = mb.addMenu("도움말(&H)")
+        update_action = QAction("업데이트 확인(&U)", self)
+        update_action.triggered.connect(self._check_for_updates)
+        self._help_menu.addAction(update_action)
+        self._help_menu.addSeparator()
+
         about_action = QAction("NavierTwin 정보(&A)", self)
         about_action.triggered.connect(self._show_about)
-        help_menu.addAction(about_action)
+        self._help_menu.addAction(about_action)
 
     def _refresh_view_menu(self) -> None:
         """현재 탭 목록 전체를 보기 메뉴에 노출한다."""
@@ -430,6 +459,31 @@ class MainWindow(QMainWindow):
             "<p>License: MIT</p>"
             "<p>Python 3.10+ | PySide6 | PyVista | PyTorch</p>",
         )
+
+    def _check_for_updates(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "릴리스 메타데이터 선택",
+            "",
+            "Release Metadata (*.json);;All Files (*)",
+        )
+        if path:
+            self._check_for_updates_path(Path(path))
+
+    def _check_for_updates_path(self, path: Path) -> None:
+        """선택한 릴리스 메타데이터로 업데이트 상태를 표시한다."""
+        from naviertwin.utils.updater import check_for_update
+
+        try:
+            result = check_for_update(path)
+        except (OSError, ValueError) as exc:
+            self._set_status("업데이트 확인 실패")
+            QMessageBox.warning(self, "업데이트 확인 실패", str(exc))
+            return
+
+        title, message = format_update_check_message(result)
+        self._set_status(f"{title}: {result.latest_version}")
+        QMessageBox.information(self, title, message)
 
     # ──────────────────────────────────────────────────────────────────
     # 헬퍼
