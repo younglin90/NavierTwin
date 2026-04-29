@@ -124,6 +124,7 @@ class MainWindow(QMainWindow):
         self._latest_dataset: object | None = None
         self._latest_reducer: object | None = None
         self._latest_surrogate: object | None = None
+        self._latest_operator: object | None = None
         self._latest_engine: object | None = None
         self._model_compare_results: dict[str, dict[str, float]] = {}
 
@@ -407,6 +408,7 @@ class MainWindow(QMainWindow):
         self._latest_dataset = dataset
         self._latest_reducer = None
         self._latest_surrogate = None
+        self._latest_operator = None
         self._latest_engine = None
         self._set_status(
             f"데이터셋 로드 완료 — {dataset.n_points} pts, "  # type: ignore[union-attr]
@@ -431,6 +433,15 @@ class MainWindow(QMainWindow):
         self._tabs.setCurrentIndex(3)
 
     def _on_model_trained(self, model_type: str, surrogate: object) -> None:
+        if self._is_operator_model(model_type, surrogate):
+            self._latest_operator = surrogate
+            self._set_status(
+                f"연산자 학습 완료 ({model_type}) — TwinEngine 자동 연결 생략"
+            )
+            self._record_model_comparison(model_type, surrogate)
+            self._tabs.setCurrentWidget(self._model_panel)
+            return
+
         self._latest_surrogate = surrogate
         if self._latest_reducer is not None:
             try:
@@ -478,6 +489,18 @@ class MainWindow(QMainWindow):
         from naviertwin.core.digital_twin.twin_engine import TwinEngine
 
         return TwinEngine.from_fitted_components(reducer, surrogate)
+
+    @staticmethod
+    def _is_operator_model(model_type: str, model: object) -> bool:
+        """TwinEngine surrogate 경로와 호환되지 않는 neural operator인지 판정한다."""
+        operator_types = {"fno1d", "fno2d", "tfno2d", "deeponet", "unet2d", "wno1d"}
+        if model_type.lower() in operator_types:
+            return True
+        try:
+            from naviertwin.core.operator_learning.base import BaseOperator
+        except Exception:  # noqa: BLE001
+            return False
+        return isinstance(model, BaseOperator)
 
     # ──────────────────────────────────────────────────────────────────
     # 메뉴 액션
