@@ -1,1 +1,5 @@
-"""시계열 모델 서브모듈 — 구현 예정."""
+"""Neural ODE forecaster public API."""
+
+from naviertwin.core.time_series.neural_ode.neural_ode import NeuralODEForecaster
+
+__all__ = ["NeuralODEForecaster"]

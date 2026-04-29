@@ -216,6 +216,23 @@ class TestDocsStructure:
             "naviertwin.core.gnn.gnn_surrogate": ["GNNSurrogate"],
             "naviertwin.core.gnn.meshgraphnets": ["MeshGraphNets"],
             "naviertwin.core.gnn.graph_transformer": ["HAMLET"],
+            "naviertwin.core.time_series": [
+                "BaseTimeSeries",
+                "EchoStateNetwork",
+                "LSTMForecaster",
+                "TransformerForecaster",
+                "NeuralODEForecaster",
+                "LatentDynamicsForecaster",
+                "TNO",
+            ],
+            "naviertwin.core.time_series.esn": ["EchoStateNetwork"],
+            "naviertwin.core.time_series.lstm": ["LSTMForecaster"],
+            "naviertwin.core.time_series.transformer": ["TransformerForecaster"],
+            "naviertwin.core.time_series.neural_ode": ["NeuralODEForecaster"],
+            "naviertwin.core.time_series.latent_dynamics": [
+                "LatentDynamicsForecaster",
+            ],
+            "naviertwin.core.time_series.temporal_no": ["TNO"],
             "naviertwin.core.flow_analysis.statistics": [
                 "compute_fft",
                 "two_point_correlation",

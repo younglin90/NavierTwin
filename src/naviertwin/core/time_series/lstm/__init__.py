@@ -1,1 +1,5 @@
-"""시계열 모델 서브모듈 — 구현 예정."""
+"""LSTM forecaster public API."""
+
+from naviertwin.core.time_series.lstm.lstm import LSTMForecaster
+
+__all__ = ["LSTMForecaster"]
