@@ -57,6 +57,7 @@ CUSTOMER_SMOKE_TESTS = [
     "tests/test_main_window_tutorial_gui.py",
     "tests/test_main_window_update_check_gui.py",
     "tests/test_model_compare_dashboard_gui.py",
+    "tests/test_model_panel_active_learning_gui.py",
     "tests/test_model_panel_metadata.py",
     "tests/test_model_panel_loss_curve_gui.py",
     "tests/test_ntwin_project_open_gui.py",

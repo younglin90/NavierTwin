@@ -379,6 +379,11 @@ class MainWindow(QMainWindow):
 
         # Model → Twin 패널에 surrogate 전달
         self._model_panel.model_trained.connect(self._on_model_trained)
+        self._model_panel.active_learning_done.connect(
+            lambda result: self._set_status(
+                f"Active Learning 후보 추천 완료: {len(result.get('selected', []))}개"
+            )
+        )
 
         # Analyze 완료 상태 업데이트
         self._analyze_panel.analysis_done.connect(

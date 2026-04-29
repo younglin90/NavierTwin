@@ -16,10 +16,13 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QListWidget,
     QPushButton,
     QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -37,6 +40,7 @@ class ModelPanel(QWidget):
     """
 
     model_trained = Signal(str, object)
+    active_learning_done = Signal(object)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -110,6 +114,41 @@ class ModelPanel(QWidget):
         self._train_btn.clicked.connect(self._train_model)
         left_layout.addWidget(self._train_btn)
 
+        # Active learning candidate selection
+        active_group = QGroupBox("Active Learning")
+        active_form = QFormLayout(active_group)
+
+        self._active_strategy_combo = QComboBox()
+        self._active_strategy_combo.addItems(["variance", "random"])
+        active_form.addRow("Strategy:", self._active_strategy_combo)
+
+        self._active_pool_spin = QSpinBox()
+        self._active_pool_spin.setRange(10, 10000)
+        self._active_pool_spin.setValue(128)
+        active_form.addRow("Candidate pool:", self._active_pool_spin)
+
+        self._active_k_spin = QSpinBox()
+        self._active_k_spin.setRange(1, 32)
+        self._active_k_spin.setValue(3)
+        active_form.addRow("Query count:", self._active_k_spin)
+
+        self._active_low_spin = QDoubleSpinBox()
+        self._active_low_spin.setRange(-1e9, 1e9)
+        self._active_low_spin.setDecimals(4)
+        self._active_low_spin.setValue(0.0)
+        active_form.addRow("Lower bound:", self._active_low_spin)
+
+        self._active_high_spin = QDoubleSpinBox()
+        self._active_high_spin.setRange(-1e9, 1e9)
+        self._active_high_spin.setDecimals(4)
+        self._active_high_spin.setValue(1.0)
+        active_form.addRow("Upper bound:", self._active_high_spin)
+
+        self._active_btn = QPushButton("후보 추천")
+        self._active_btn.clicked.connect(self._run_active_learning)
+        active_form.addRow(self._active_btn)
+        left_layout.addWidget(active_group)
+
         # ─── 신경 연산자 (v2.0+) ───
         op_group = QGroupBox("신경 연산자 (Operator Learning)")
         op_form = QFormLayout(op_group)
@@ -150,6 +189,16 @@ class ModelPanel(QWidget):
         self._metrics_list.setMaximumHeight(160)
         metrics_layout.addWidget(self._metrics_list)
         right_layout.addWidget(metrics_group)
+
+        active_result_group = QGroupBox("Active Learning 후보")
+        active_result_layout = QVBoxLayout(active_result_group)
+        self._active_table = QTableWidget(0, 3)
+        self._active_table.setHorizontalHeaderLabels(["Rank", "Parameters", "Score"])
+        self._active_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        active_result_layout.addWidget(self._active_table)
+        right_layout.addWidget(active_result_group)
 
         # 학습 loss curve
         loss_group = QGroupBox("학습 Loss Curve")
@@ -410,6 +459,121 @@ class ModelPanel(QWidget):
 
         except Exception as exc:
             self._log(f"[ERROR] {exc}")
+
+    def _run_active_learning(self) -> None:
+        """학습된 surrogate로 다음 CFD 평가 후보를 추천한다."""
+        if self._surrogate is None:
+            self._log("[WARN] Active Learning을 실행할 학습된 surrogate가 없습니다.")
+            return
+
+        low = float(self._active_low_spin.value())
+        high = float(self._active_high_spin.value())
+        if not low < high:
+            self._log("[WARN] Active Learning bounds는 lower < upper 이어야 합니다.")
+            return
+
+        n_params = int(getattr(self._surrogate, "input_dim", 0) or self._n_params_spin.value())
+        if n_params <= 0:
+            self._log("[WARN] surrogate 입력 차원을 확인할 수 없습니다.")
+            return
+
+        n_pool = int(self._active_pool_spin.value())
+        k = min(int(self._active_k_spin.value()), n_pool)
+        rng = np.random.default_rng(0)
+        pool = rng.uniform(low, high, size=(n_pool, n_params))
+        strategy = self._active_strategy_combo.currentText()
+
+        try:
+            model = self._active_learning_adapter(self._surrogate)
+            idx = self._select_next_samples(model, pool, k=k, strategy=strategy)
+            selected = pool[np.asarray(idx, dtype=int)]
+            scores = self._active_learning_scores(self._surrogate, selected, strategy)
+            self._render_active_candidates(selected, scores)
+            result = {
+                "strategy": strategy,
+                "selected": selected,
+                "scores": scores,
+                "bounds": np.array([[low, high]], dtype=float),
+            }
+            self._log(
+                f"Active Learning 후보 추천 완료: strategy={strategy}, "
+                f"k={len(selected)}, dim={n_params}"
+            )
+            self.active_learning_done.emit(result)
+        except Exception as exc:
+            self._log(f"[ERROR] Active Learning 실패: {exc}")
+
+    def _active_learning_adapter(self, surrogate: object) -> object:
+        """select_next_samples가 기대하는 predict(return_std=True) adapter."""
+
+        class _Adapter:
+            def __init__(self, model: object) -> None:
+                self._model = model
+
+            def predict(
+                self,
+                X: np.ndarray,
+                return_std: bool = False,
+            ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+                X_arr = np.asarray(X, dtype=float)
+                if return_std:
+                    predict_var = getattr(self._model, "predict_with_variance", None)
+                    if predict_var is None:
+                        raise TypeError("surrogate does not support return_std")
+                    pred, var = predict_var(X_arr)
+                    pred_arr = np.asarray(pred, dtype=float).reshape(X_arr.shape[0], -1)
+                    var_arr = np.asarray(var, dtype=float).reshape(X_arr.shape[0], -1)
+                    mean = np.mean(pred_arr, axis=1)
+                    std = np.sqrt(np.maximum(np.mean(var_arr, axis=1), 0.0))
+                    return mean, std
+                pred = self._model.predict(X_arr)  # type: ignore[attr-defined]
+                pred_arr = np.asarray(pred, dtype=float).reshape(X_arr.shape[0], -1)
+                return np.mean(pred_arr, axis=1)
+
+        return _Adapter(surrogate)
+
+    def _select_next_samples(
+        self,
+        model: object,
+        pool: np.ndarray,
+        k: int,
+        strategy: str,
+    ) -> np.ndarray:
+        from naviertwin.core.online_learning.active_learning import select_next_samples
+
+        return select_next_samples(model, pool, k=k, strategy=strategy, seed=0)
+
+    def _active_learning_scores(
+        self,
+        surrogate: object,
+        selected: np.ndarray,
+        strategy: str,
+    ) -> np.ndarray:
+        if strategy != "variance":
+            return np.full((selected.shape[0],), np.nan)
+        predict_var = getattr(surrogate, "predict_with_variance", None)
+        if predict_var is None:
+            return np.full((selected.shape[0],), np.nan)
+        _, var = predict_var(selected)
+        var_arr = np.asarray(var, dtype=float).reshape(selected.shape[0], -1)
+        return np.mean(var_arr, axis=1)
+
+    def _render_active_candidates(
+        self,
+        selected: np.ndarray,
+        scores: np.ndarray,
+    ) -> None:
+        self._active_table.setRowCount(selected.shape[0])
+        for row, params in enumerate(selected):
+            score = scores[row] if row < len(scores) else np.nan
+            self._active_table.setItem(row, 0, QTableWidgetItem(str(row + 1)))
+            self._active_table.setItem(
+                row,
+                1,
+                QTableWidgetItem(np.array2string(params, precision=4)),
+            )
+            score_text = "n/a" if not np.isfinite(score) else f"{float(score):.6g}"
+            self._active_table.setItem(row, 2, QTableWidgetItem(score_text))
 
     def _train_operator(self) -> None:
         """선택한 신경 연산자를 합성 데이터로 빠르게 학습/검증한다."""
