@@ -1,1 +1,5 @@
-"""생성 모델 서브모듈 — 구현 예정."""
+"""Conditional generative model public API."""
+
+from naviertwin.core.generative.conditional_gen.conditional_gen import ConditionalVAE
+
+__all__ = ["ConditionalVAE"]

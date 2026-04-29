@@ -233,6 +233,17 @@ class TestDocsStructure:
                 "LatentDynamicsForecaster",
             ],
             "naviertwin.core.time_series.temporal_no": ["TNO"],
+            "naviertwin.core.generative": [
+                "BaseGenerative",
+                "ConditionalVAE",
+                "DiffusionPDE",
+                "WaveletDiffusionNO",
+                "langevin_sample",
+                "euler_maruyama",
+            ],
+            "naviertwin.core.generative.conditional_gen": ["ConditionalVAE"],
+            "naviertwin.core.generative.diffusion_pde": ["DiffusionPDE"],
+            "naviertwin.core.generative.wavelet_diffusion": ["WaveletDiffusionNO"],
             "naviertwin.core.flow_analysis.statistics": [
                 "compute_fft",
                 "two_point_correlation",

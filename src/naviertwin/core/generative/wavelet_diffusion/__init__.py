@@ -1,1 +1,7 @@
-"""생성 모델 서브모듈 — 구현 예정."""
+"""Wavelet diffusion neural-operator public API."""
+
+from naviertwin.core.generative.wavelet_diffusion.wavelet_diffusion_no import (
+    WaveletDiffusionNO,
+)
+
+__all__ = ["WaveletDiffusionNO"]
