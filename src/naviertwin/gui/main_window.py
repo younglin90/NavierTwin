@@ -260,6 +260,11 @@ class MainWindow(QMainWindow):
 
         # 도움말 메뉴
         self._help_menu = mb.addMenu("도움말(&H)")
+        tutorial_action = QAction("튜토리얼(&T)", self)
+        tutorial_action.triggered.connect(self._show_tutorial)
+        self._help_menu.addAction(tutorial_action)
+        self._help_menu.addSeparator()
+
         doctor_action = QAction("환경 진단(&D)", self)
         doctor_action.triggered.connect(self._show_doctor_report)
         self._help_menu.addAction(doctor_action)
@@ -487,6 +492,21 @@ class MainWindow(QMainWindow):
             "<p>License: MIT</p>"
             "<p>Python 3.10+ | PySide6 | PyVista | PyTorch</p>",
         )
+
+    def _show_tutorial(self) -> None:
+        """신규 사용자 튜토리얼 위저드를 실행한다."""
+        wizard = self._create_tutorial_wizard()
+        result = wizard.exec()
+        if result:
+            self._set_status("튜토리얼 완료")
+        else:
+            self._set_status("튜토리얼 닫힘")
+
+    def _create_tutorial_wizard(self) -> object:
+        """테스트에서 대체 가능한 튜토리얼 위저드 팩토리."""
+        from naviertwin.gui.wizard.tutorial_wizard import TutorialWizard
+
+        return TutorialWizard(self)
 
     def _show_doctor_report(self) -> None:
         """고객 지원용 런타임 진단 리포트를 GUI에서 표시한다."""
