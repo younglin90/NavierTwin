@@ -37,6 +37,7 @@ class TestDocsStructure:
         for pkg in [
             "cfd_reader",
             "dimensionality_reduction",
+            "active_learning",
             "operator_learning",
             "post_process_facade",
         ]:
@@ -184,6 +185,27 @@ class TestDocsStructure:
                 "isomap",
                 "lle",
                 "TuckerDecomposition",
+            ],
+            "naviertwin.core.surrogate": [
+                "BaseSurrogate",
+                "RBFSurrogate",
+                "KrigingSurrogate",
+                "RFFRegression",
+                "batch_predict",
+                "normalized_rmse",
+            ],
+            "naviertwin.core.online_learning": [
+                "OnlineKriging",
+                "OnlineNN",
+                "active_loop",
+                "select_next_samples",
+            ],
+            "naviertwin.core.active_learning": [
+                "expected_improvement",
+                "acquisition_expected_improvement",
+                "query_expected_improvement",
+                "top_variance_query",
+                "greedy_batch_acquisition",
             ],
             "naviertwin.core.flow_analysis.statistics": [
                 "compute_fft",

@@ -22,6 +22,7 @@ GUI 툴입니다.
    api/dimensionality_reduction
    api/flow_analysis
    api/surrogate
+   api/active_learning
    api/operator_learning
    api/gnn
    api/time_series
