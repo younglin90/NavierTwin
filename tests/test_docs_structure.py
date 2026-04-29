@@ -107,6 +107,8 @@ class TestDocsStructure:
             "Online Update",
             "4D-Var",
             "UKF",
+            "NSGA-II",
+            "SIMP",
             "SINDy",
             "ONNX",
             "TorchScript",

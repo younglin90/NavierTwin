@@ -104,3 +104,14 @@ def test_assimilation_signal_updates_status(qtbot) -> None:
     win._twin_panel.assimilation_done.emit({"method": "UKF", "error": 0.0123})
 
     assert "UKF 완료: error=0.0123" in win._status_label.text()
+
+
+def test_design_optimization_signal_updates_status(qtbot) -> None:
+    from naviertwin.gui.main_window import MainWindow
+
+    win = MainWindow(confirm_on_close=False)
+    qtbot.addWidget(win)
+
+    win._twin_panel.design_optimization_done.emit({"method": "NSGA-II Pareto"})
+
+    assert "NSGA-II Pareto 완료" in win._status_label.text()

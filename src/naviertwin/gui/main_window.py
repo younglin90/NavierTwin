@@ -414,6 +414,11 @@ class MainWindow(QMainWindow):
                 f"error={float(result.get('error', 0.0)):.4g}"
             )
         )
+        self._twin_panel.design_optimization_done.connect(
+            lambda result: self._set_status(
+                f"{result.get('method', 'Design Optimization')} 완료"
+            )
+        )
         if self._explain_panel is not None:
             self._explain_panel.explanation_done.connect(
                 lambda result: self._set_status(

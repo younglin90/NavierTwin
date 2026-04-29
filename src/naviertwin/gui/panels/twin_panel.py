@@ -4,6 +4,7 @@ Signals:
     prediction_done(object): 예측 완료 시 복원된 필드 배열 발생.
     optimization_done(object): 최적화 완료 시 최적 파라미터/목적값 dict 발생.
     assimilation_done(object): 데이터 동화 quick-check 완료 시 결과 dict 발생.
+    design_optimization_done(object): 설계 최적화 quick-check 결과 dict 발생.
 """
 
 from __future__ import annotations
@@ -41,6 +42,7 @@ class TwinPanel(QWidget):
     prediction_done = Signal(object)
     optimization_done = Signal(object)
     assimilation_done = Signal(object)
+    design_optimization_done = Signal(object)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -219,6 +221,35 @@ class TwinPanel(QWidget):
         assim_form.addRow(self._assim_btn)
 
         left_layout.addWidget(assim_group)
+
+        design_group = QGroupBox("Design Optimization Quick Check")
+        design_form = QFormLayout(design_group)
+
+        self._design_method_combo = QComboBox()
+        self._design_method_combo.addItems(["NSGA-II Pareto", "SIMP Topology"])
+        design_form.addRow("Method:", self._design_method_combo)
+
+        self._design_size_spin = QSpinBox()
+        self._design_size_spin.setRange(2, 50)
+        self._design_size_spin.setValue(8)
+        design_form.addRow("Dim/Grid nx:", self._design_size_spin)
+
+        self._design_iter_spin = QSpinBox()
+        self._design_iter_spin.setRange(1, 100)
+        self._design_iter_spin.setValue(8)
+        design_form.addRow("Generations/iters:", self._design_iter_spin)
+
+        self._design_volume_spin = QDoubleSpinBox()
+        self._design_volume_spin.setRange(0.1, 0.9)
+        self._design_volume_spin.setDecimals(3)
+        self._design_volume_spin.setValue(0.5)
+        design_form.addRow("Volume fraction:", self._design_volume_spin)
+
+        self._design_btn = QPushButton("설계 최적화 quick-check")
+        self._design_btn.clicked.connect(self._run_design_optimization)
+        design_form.addRow(self._design_btn)
+
+        left_layout.addWidget(design_group)
 
         # 데모 학습 버튼
         self._demo_btn = QPushButton("데모 학습 & 예측")
@@ -401,6 +432,88 @@ class TwinPanel(QWidget):
             self.assimilation_done.emit(result)
         except Exception as exc:
             self._log(f"[ERROR] 동화 실패: {exc}")
+
+    def _run_design_optimization(self) -> None:
+        method = self._design_method_combo.currentText()
+        try:
+            if method == "NSGA-II Pareto":
+                result = self._run_nsga2_demo()
+            else:
+                result = self._run_simp_demo()
+            self._log(self._format_design_result(result))
+            self._status_label.setText(f"{method} 완료.")
+            self.design_optimization_done.emit(result)
+        except Exception as exc:
+            self._log(f"[ERROR] 설계 최적화 실패: {exc}")
+
+    def _run_nsga2_demo(self) -> dict[str, object]:
+        from naviertwin.core.optimization.moo_optimizer import NSGA2
+
+        n_dims = min(int(self._design_size_spin.value()), 10)
+        n_gen = int(self._design_iter_spin.value())
+        pop_size = max(12, 4 * n_dims)
+        bounds = np.tile(np.array([[-1.0, 1.0]], dtype=float), (n_dims, 1))
+
+        def objective(x: np.ndarray) -> list[float]:
+            return [
+                float(np.sum((x - 0.2) ** 2)),
+                float(np.sum((x + 0.5) ** 2)),
+            ]
+
+        optimizer = NSGA2(
+            bounds=bounds,
+            n_obj=2,
+            pop_size=pop_size,
+            n_gen=n_gen,
+            seed=0,
+        )
+        pareto, objectives = optimizer.optimize(objective)
+        return {
+            "method": "NSGA-II Pareto",
+            "pareto": pareto,
+            "objectives": objectives,
+            "pareto_count": int(pareto.shape[0]),
+            "n_dims": int(n_dims),
+            "n_gen": int(n_gen),
+        }
+
+    def _run_simp_demo(self) -> dict[str, object]:
+        from naviertwin.core.optimization.topology_opt import simp_2d
+
+        nx = int(self._design_size_spin.value())
+        ny = max(2, nx // 2)
+        n_iter = int(self._design_iter_spin.value())
+        vol_frac = float(self._design_volume_spin.value())
+        density = simp_2d(nx=nx, ny=ny, vol_frac=vol_frac, n_iter=n_iter)
+        return {
+            "method": "SIMP Topology",
+            "density": density,
+            "shape": tuple(int(v) for v in density.shape),
+            "volume_fraction": float(np.mean(density)),
+            "density_min": float(np.min(density)),
+            "density_max": float(np.max(density)),
+            "n_iter": int(n_iter),
+        }
+
+    @staticmethod
+    def _format_design_result(result: dict[str, object]) -> str:
+        method = str(result.get("method", "Design Optimization"))
+        if method == "NSGA-II Pareto":
+            objectives = np.asarray(result["objectives"], dtype=float)
+            best = objectives[np.argmin(objectives[:, 0])]
+            return (
+                "설계 최적화 완료: "
+                f"method={method}, pareto={int(result['pareto_count'])}, "
+                f"best_f=[{best[0]:.4g}, {best[1]:.4g}]"
+            )
+        density = np.asarray(result["density"], dtype=float)
+        return (
+            "설계 최적화 완료: "
+            f"method={method}, shape={density.shape}, "
+            f"vol={float(result['volume_fraction']):.4g}, "
+            f"range=[{float(result['density_min']):.4g}, "
+            f"{float(result['density_max']):.4g}]"
+        )
 
     def _run_four_dvar_demo(
         self, n_state: int, n_steps: int, obs_noise: float

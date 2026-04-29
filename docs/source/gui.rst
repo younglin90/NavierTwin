@@ -18,7 +18,7 @@ GUI 사용법
    * - ④ Model
      - Kriging / RBF / FNO / DeepONet / UNet / WNO / TFNO 학습, Active Learning 후보 추천, Online Update
    * - ⑤ Twin
-     - 파라미터 → 실시간 예측, TwinEngine 저장/로드, inverse-design 최적화, 4D-Var/PF/UKF 동화 quick-check
+     - 파라미터 → 실시간 예측, TwinEngine 저장/로드, inverse-design 최적화, NSGA-II/SIMP 설계 quick-check, 4D-Var/PF/UKF 동화 quick-check
    * - ⑥ Export
      - .ntwin / VTK / CSV / 고객 보고서 / ONNX / TorchScript 모델 아티팩트
    * - ⑦ Compare
