@@ -1,1 +1,5 @@
-"""GNN 서브모듈 — 구현 예정."""
+"""Graph transformer public API."""
+
+from naviertwin.core.gnn.graph_transformer.hamlet import HAMLET
+
+__all__ = ["HAMLET"]

@@ -1,1 +1,5 @@
-"""GNN 서브모듈 — 구현 예정."""
+"""GNN surrogate public API."""
+
+from naviertwin.core.gnn.gnn_surrogate.gnn_surrogate import GNNSurrogate
+
+__all__ = ["GNNSurrogate"]

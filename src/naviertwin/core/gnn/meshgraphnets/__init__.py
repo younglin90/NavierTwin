@@ -1,1 +1,5 @@
-"""GNN 서브모듈 — 구현 예정."""
+"""MeshGraphNets public API."""
+
+from naviertwin.core.gnn.meshgraphnets.meshgraphnets import MeshGraphNets
+
+__all__ = ["MeshGraphNets"]

@@ -207,6 +207,15 @@ class TestDocsStructure:
                 "top_variance_query",
                 "greedy_batch_acquisition",
             ],
+            "naviertwin.core.gnn": [
+                "BaseGNN",
+                "GNNSurrogate",
+                "MeshGraphNets",
+                "HAMLET",
+            ],
+            "naviertwin.core.gnn.gnn_surrogate": ["GNNSurrogate"],
+            "naviertwin.core.gnn.meshgraphnets": ["MeshGraphNets"],
+            "naviertwin.core.gnn.graph_transformer": ["HAMLET"],
             "naviertwin.core.flow_analysis.statistics": [
                 "compute_fft",
                 "two_point_correlation",
