@@ -151,6 +151,17 @@ class TestDocsStructure:
                 "project_linear_constraint",
             ],
             "naviertwin.core.physnemo": ["PINNSolver", "PhysicsNEMOWrapper"],
+            "naviertwin.core.operator_learning.fno": ["FNO1D", "TFNO2D", "WNO1D"],
+            "naviertwin.core.operator_learning.deeponet": [
+                "DeepONet",
+                "PIDeepONet",
+            ],
+            "naviertwin.core.operator_learning.unet": ["UNet2D", "UNet3D"],
+            "naviertwin.core.operator_learning.koopman": ["KNO", "FlowDMD"],
+            "naviertwin.core.operator_learning.latent_operator": [
+                "LDeepONet",
+                "PILatentNO",
+            ],
         }
 
         for module_name, symbols in expected.items():
