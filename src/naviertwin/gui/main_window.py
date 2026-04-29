@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
 
 from naviertwin import __version__
 from naviertwin.gui.panels.analyze_panel import AnalyzePanel
+from naviertwin.gui.panels.explainability_panel import ExplainabilityPanel
 from naviertwin.gui.panels.export_panel import ExportPanel
 from naviertwin.gui.panels.import_panel import ImportPanel
 from naviertwin.gui.panels.model_panel import ModelPanel
@@ -167,6 +168,7 @@ class MainWindow(QMainWindow):
         self._model_panel = ModelPanel()
         self._twin_panel = TwinPanel()
         self._export_panel = ExportPanel()
+        self._explain_panel: ExplainabilityPanel | None = ExplainabilityPanel()
 
         # 모델 비교 대시보드 탭
         try:
@@ -202,8 +204,10 @@ class MainWindow(QMainWindow):
             self._tabs.addTab(self._compare_panel, "⑦ Compare")
         if self._simulation_panel is not None:
             self._tabs.addTab(self._simulation_panel, "⑧ Simulation")
+        if self._explain_panel is not None:
+            self._tabs.addTab(self._explain_panel, "⑨ Explain")
         if self._postproc_panel is not None:
-            self._tabs.addTab(self._postproc_panel, "⑨ Post-Tools")
+            self._tabs.addTab(self._postproc_panel, "⑩ Post-Tools")
 
         vbox.addWidget(self._tabs)
 
@@ -394,6 +398,12 @@ class MainWindow(QMainWindow):
                 f"최적화 완료: f_best={float(result.get('f_best', 0.0)):.4g}"
             )
         )
+        if self._explain_panel is not None:
+            self._explain_panel.explanation_done.connect(
+                lambda result: self._set_status(
+                    f"SHAP 설명 완료: {len(result.get('feature_names', []))} features"
+                )
+            )
 
         # Simulation 결과 → 상태바 + 전역 viewer 연동 훅
         if self._simulation_panel is not None:
@@ -444,6 +454,8 @@ class MainWindow(QMainWindow):
         self._reduce_panel.set_dataset(dataset)    # type: ignore[arg-type]
         self._model_panel.set_dataset(dataset)     # type: ignore[arg-type]
         self._export_panel.set_dataset(dataset)    # type: ignore[arg-type]
+        if self._explain_panel is not None:
+            self._explain_panel.set_dataset(dataset)
         if self._postproc_panel is not None:
             self._postproc_panel.set_dataset(dataset)
         # Import 탭 완료 후 Analyze 탭으로 자동 이동
@@ -470,6 +482,8 @@ class MainWindow(QMainWindow):
             return
 
         self._latest_surrogate = surrogate
+        if self._explain_panel is not None:
+            self._explain_panel.set_model(surrogate)
         if self._latest_reducer is not None:
             try:
                 engine = self._build_engine(self._latest_reducer, surrogate)
@@ -495,6 +509,8 @@ class MainWindow(QMainWindow):
                 self._model_panel.set_reducer(self._latest_reducer)
             self._twin_panel.set_engine(engine)
             self._export_panel.set_engine(engine)
+            if self._latest_surrogate is not None and self._explain_panel is not None:
+                self._explain_panel.set_model(self._latest_surrogate)
             self._set_status("프로젝트 로드 완료 (dataset + TwinEngine)")
         else:
             self._set_status("프로젝트 로드 완료 (dataset)")

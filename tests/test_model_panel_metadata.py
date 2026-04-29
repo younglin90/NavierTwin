@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 pytest.importorskip("PySide6")
@@ -62,6 +63,20 @@ def test_set_loaded_metadata_invalid_or_non_positive_keeps_defaults(qtbot: objec
     assert panel._n_samples_spin.value() == 20
     assert panel._n_params_spin.value() == 2
     assert panel._n_outputs_spin.value() == 5
+
+
+def test_explainability_metadata_background_is_capped(qtbot: object) -> None:
+    panel = ModelPanel()
+    qtbot.addWidget(panel)
+    X_train = np.arange(120, dtype=float).reshape(40, 3)
+
+    metadata = panel._build_explainability_metadata(X_train)
+
+    background = metadata["background"]
+    assert isinstance(background, np.ndarray)
+    assert background.shape == (32, 3)
+    assert metadata["feature_names"] == ["param_0", "param_1", "param_2"]
+    assert metadata["output_index"] == 0
 
     panel.set_loaded_metadata(
         {

@@ -380,6 +380,9 @@ class ModelPanel(QWidget):
                 "n_samples": int(Y.shape[0]),
                 "source": "real_data" if used_real_data else "demo",
             }
+            surrogate.training_metadata["explainability"] = (
+                self._build_explainability_metadata(X_train)
+            )
 
             # 검증
             metrics_text = ""
@@ -523,6 +526,20 @@ class ModelPanel(QWidget):
         if self._dataset is None:
             raise RuntimeError("dataset이 설정되지 않았습니다.")
         return self._dataset.extract_field_snapshots(field)
+
+    @staticmethod
+    def _build_explainability_metadata(X_train: np.ndarray) -> dict[str, object]:
+        """SHAP GUI가 사용할 bounded background metadata를 구성한다."""
+        X_arr = np.asarray(X_train, dtype=float)
+        if X_arr.ndim != 2:
+            X_arr = X_arr.reshape(len(X_arr), -1)
+        n_background = min(32, X_arr.shape[0])
+        n_features = X_arr.shape[1] if X_arr.ndim == 2 else 0
+        return {
+            "background": X_arr[:n_background].copy(),
+            "feature_names": [f"param_{i}" for i in range(n_features)],
+            "output_index": 0,
+        }
 
     @staticmethod
     def _as_positive_int(value: object) -> int | None:

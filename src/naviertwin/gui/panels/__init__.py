@@ -5,10 +5,12 @@
     - ReducePanel: 차원 축소 패널
     - ModelPanel: 모델 학습/평가 패널
     - TwinPanel: 디지털 트윈 예측 패널
+    - ExplainabilityPanel: 모델 설명 패널
     - ExportPanel: 결과 내보내기 패널
 """
 
 from naviertwin.gui.panels.analyze_panel import AnalyzePanel
+from naviertwin.gui.panels.explainability_panel import ExplainabilityPanel
 from naviertwin.gui.panels.export_panel import ExportPanel
 from naviertwin.gui.panels.import_panel import ImportPanel
 from naviertwin.gui.panels.model_panel import ModelPanel
@@ -21,5 +23,6 @@ __all__ = [
     "ReducePanel",
     "ModelPanel",
     "TwinPanel",
+    "ExplainabilityPanel",
     "ExportPanel",
 ]
