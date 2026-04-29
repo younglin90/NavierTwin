@@ -211,6 +211,16 @@ class TestDocsStructure:
         assert "api/flow_control" in index
         assert ".. automodule:: naviertwin.core.flow_control" in page
 
+    def test_turbulence_api_docs_are_discoverable(self) -> None:
+        """Turbulence docs should expose shipped diagnostic APIs."""
+        index = (DOCS / "source" / "index.rst").read_text(encoding="utf-8")
+        page = (DOCS / "source" / "api" / "turbulence.rst").read_text(
+            encoding="utf-8"
+        )
+
+        assert "api/turbulence" in index
+        assert ".. automodule:: naviertwin.core.turbulence" in page
+
     def test_makefile(self) -> None:
         mf = DOCS / "Makefile"
         assert mf.exists()
