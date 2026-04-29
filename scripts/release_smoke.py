@@ -39,6 +39,7 @@ CUSTOMER_SMOKE_TESTS = [
     "tests/test_main_cli.py",
     "tests/test_cli_subcommands.py",
     "tests/test_lcs_pgd_entropy_api.py",
+    "tests/test_analyze_panel_advanced_gui.py",
     "tests/test_import_panel_formats.py",
     "tests/test_main_window_postproc.py",
     "tests/test_model_compare_dashboard_gui.py",
