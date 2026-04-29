@@ -19,10 +19,12 @@ Examples:
 from __future__ import annotations
 
 import math
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Optional
 
+from PySide6.QtCore import QProcess
 from PySide6.QtGui import QAction, QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -126,6 +128,7 @@ class MainWindow(QMainWindow):
         self._latest_surrogate: object | None = None
         self._latest_operator: object | None = None
         self._latest_engine: object | None = None
+        self._server_process: QProcess | None = None
         self._model_compare_results: dict[str, dict[str, float]] = {}
 
         self._apply_theme()
@@ -268,6 +271,20 @@ class MainWindow(QMainWindow):
         # 보기 메뉴
         self._view_menu = mb.addMenu("보기(&V)")
         self._refresh_view_menu()
+
+        # 도구 메뉴
+        self._tools_menu = mb.addMenu("도구(&T)")
+        pipeline_demo_action = QAction("파이프라인 데모 실행(&P)", self)
+        pipeline_demo_action.triggered.connect(self._run_pipeline_demo)
+        self._tools_menu.addAction(pipeline_demo_action)
+
+        server_start_action = QAction("API 서버 시작(&S)", self)
+        server_start_action.triggered.connect(self._start_api_server)
+        self._tools_menu.addAction(server_start_action)
+
+        server_stop_action = QAction("API 서버 중지(&X)", self)
+        server_stop_action.triggered.connect(self._stop_api_server)
+        self._tools_menu.addAction(server_stop_action)
 
         # 도움말 메뉴
         self._help_menu = mb.addMenu("도움말(&H)")
@@ -552,6 +569,98 @@ class MainWindow(QMainWindow):
             self._save_gui_config()
             self._set_status(f"언어 변경: {lang}")
 
+    def _run_pipeline_demo(self) -> None:
+        outdir = QFileDialog.getExistingDirectory(
+            self,
+            "파이프라인 데모 출력 폴더 선택",
+            "",
+        )
+        if outdir:
+            self._run_pipeline_demo_path(Path(outdir))
+
+    def _run_pipeline_demo_path(self, outdir: Path) -> None:
+        """CLI pipeline-demo 워크플로우를 GUI에서 실행한다."""
+        try:
+            code = self._run_pipeline_demo_cli(outdir)
+        except Exception as exc:  # noqa: BLE001
+            self._set_status("파이프라인 데모 실패")
+            QMessageBox.warning(self, "파이프라인 데모 실패", str(exc))
+            return
+        if code != 0:
+            self._set_status("파이프라인 데모 실패")
+            QMessageBox.warning(
+                self,
+                "파이프라인 데모 실패",
+                f"pipeline-demo 종료 코드: {code}",
+            )
+            return
+        self._set_status("파이프라인 데모 완료")
+        QMessageBox.information(
+            self,
+            "파이프라인 데모 완료",
+            f"metrics.json 및 report.html 생성 위치:\n{outdir}",
+        )
+
+    def _run_pipeline_demo_cli(self, outdir: Path) -> int:
+        """테스트에서 대체 가능한 pipeline-demo 실행 래퍼."""
+        from naviertwin.main import _run_pipeline_demo
+
+        return _run_pipeline_demo(outdir=str(outdir), n_modes=3, surrogate="rbf")
+
+    def _start_api_server(self) -> None:
+        """FastAPI 서버를 GUI에서 백그라운드 프로세스로 시작한다."""
+        if (
+            self._server_process is not None
+            and self._server_process.state() != QProcess.ProcessState.NotRunning
+        ):
+            self._set_status("API 서버 이미 실행 중")
+            QMessageBox.information(self, "API 서버", "API 서버가 이미 실행 중입니다.")
+            return
+
+        process = self._create_api_server_process()
+        process.setProgram(sys.executable)
+        process.setArguments([
+            "-m",
+            "naviertwin.main",
+            "server",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8000",
+        ])
+        self._server_process = process
+        process.start()
+        if not process.waitForStarted(1000):
+            self._set_status("API 서버 시작 실패")
+            QMessageBox.warning(self, "API 서버 시작 실패", "서버 프로세스를 시작하지 못했습니다.")
+            return
+
+        self._set_status("API 서버 실행 중: http://127.0.0.1:8000")
+        QMessageBox.information(
+            self,
+            "API 서버 시작",
+            "API 서버를 시작했습니다.\nURL: http://127.0.0.1:8000",
+        )
+
+    def _stop_api_server(self) -> None:
+        """GUI에서 시작한 API 서버 프로세스를 중지한다."""
+        process = self._server_process
+        if process is None or process.state() == QProcess.ProcessState.NotRunning:
+            self._set_status("API 서버 실행 중 아님")
+            return
+        process.terminate()
+        if not process.waitForFinished(1000):
+            process.kill()
+            process.waitForFinished(1000)
+        self._server_process = None
+        self._set_status("API 서버 중지됨")
+
+    def _create_api_server_process(self) -> QProcess:
+        """테스트에서 대체 가능한 API 서버 프로세스 팩토리."""
+        process = QProcess(self)
+        process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        return process
+
     def _show_about(self) -> None:
         QMessageBox.about(
             self,
@@ -814,6 +923,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if not self._confirm_on_close:
+            self._stop_api_server_on_close()
             event.accept()
             return
 
@@ -825,6 +935,18 @@ class MainWindow(QMainWindow):
             QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
+            self._stop_api_server_on_close()
             event.accept()
         else:
             event.ignore()
+
+    def _stop_api_server_on_close(self) -> None:
+        """윈도우 종료 시 GUI가 시작한 서버 프로세스를 정리한다."""
+        process = self._server_process
+        if process is None or process.state() == QProcess.ProcessState.NotRunning:
+            return
+        process.terminate()
+        if not process.waitForFinished(1000):
+            process.kill()
+            process.waitForFinished(1000)
+        self._server_process = None
