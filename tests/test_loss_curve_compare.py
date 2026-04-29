@@ -8,7 +8,7 @@ import pytest
 class TestLossCurveWidget:
     def test_can_be_imported(self) -> None:
         pytest.importorskip("PySide6")
-        from naviertwin.gui.widgets.loss_curve_widget import LossCurveWidget
+        from naviertwin.gui.widgets import LossCurveWidget
 
         assert LossCurveWidget is not None
 

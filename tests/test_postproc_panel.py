@@ -16,7 +16,7 @@ def app(qtbot):
 
 class TestPanelConstruction:
     def test_panel_creates(self, qtbot) -> None:
-        from naviertwin.gui.panels.postproc_panel import PostProcessPanel
+        from naviertwin.gui.panels import PostProcessPanel
 
         panel = PostProcessPanel()
         qtbot.addWidget(panel)
@@ -24,7 +24,7 @@ class TestPanelConstruction:
         assert panel._op_list.count() > 0
 
     def test_category_filter(self, qtbot) -> None:
-        from naviertwin.gui.panels.postproc_panel import PostProcessPanel
+        from naviertwin.gui.panels import PostProcessPanel
 
         panel = PostProcessPanel()
         qtbot.addWidget(panel)

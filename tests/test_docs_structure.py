@@ -39,6 +39,7 @@ class TestDocsStructure:
             "dimensionality_reduction",
             "active_learning",
             "operator_learning",
+            "gui",
             "post_process_facade",
         ]:
             assert (api / f"{pkg}.rst").exists()
@@ -66,6 +67,19 @@ class TestDocsStructure:
             "naviertwin.core.cfd_reader.foamlib_case",
             "naviertwin.core.cfd_reader.cgns_advanced",
             "naviertwin.core.cfd_reader.fluent_cas_ext",
+        ]:
+            assert f".. automodule:: {automodule}" in page
+
+    def test_gui_api_docs_are_discoverable(self) -> None:
+        """GUI API docs should expose the shipped desktop public surface."""
+        index = (DOCS / "source" / "index.rst").read_text(encoding="utf-8")
+        page = (DOCS / "source" / "api" / "gui.rst").read_text(encoding="utf-8")
+
+        assert "api/gui" in index
+        for automodule in [
+            "naviertwin.gui",
+            "naviertwin.gui.panels",
+            "naviertwin.gui.widgets",
         ]:
             assert f".. automodule:: {automodule}" in page
 
@@ -170,6 +184,23 @@ class TestDocsStructure:
     def test_public_api_package_initializers_are_not_placeholders(self) -> None:
         """Customer-visible API packages should export real implemented symbols."""
         expected = {
+            "naviertwin.gui": ["MainWindow"],
+            "naviertwin.gui.panels": [
+                "ImportPanel",
+                "AnalyzePanel",
+                "ReducePanel",
+                "ModelPanel",
+                "TwinPanel",
+                "ExplainabilityPanel",
+                "ExportPanel",
+                "SimulationPanel",
+                "PostProcessPanel",
+            ],
+            "naviertwin.gui.widgets": [
+                "VtkViewer",
+                "ModelCompareWidget",
+                "LossCurveWidget",
+            ],
             "naviertwin.core.cfd_reader": [
                 "BaseReader",
                 "CFDDataset",

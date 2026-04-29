@@ -8,7 +8,7 @@ import pytest
 class TestSimulationPanelImport:
     def test_module_loads(self) -> None:
         pytest.importorskip("PySide6")
-        from naviertwin.gui.panels.simulation_panel import SimulationPanel
+        from naviertwin.gui.panels import SimulationPanel
 
         assert SimulationPanel is not None
 

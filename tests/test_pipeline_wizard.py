@@ -108,7 +108,7 @@ class TestModelCompareWidget:
     def test_import_only(self) -> None:
         """PySide6 import 가능한지 + 클래스 정의만 확인."""
         pytest.importorskip("PySide6")
-        from naviertwin.gui.widgets.model_compare_widget import ModelCompareWidget
+        from naviertwin.gui.widgets import ModelCompareWidget
 
         # 생성은 QApplication 필요 — 여기선 단순 import 확인으로 대체
         assert ModelCompareWidget is not None

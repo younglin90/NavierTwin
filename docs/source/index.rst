@@ -44,6 +44,7 @@ GUI 툴입니다.
    api/turbulence
    api/flow_control
    api/solver_interfaces
+   api/gui
    api/numerics
    api/sampling
    api/benchmarks
