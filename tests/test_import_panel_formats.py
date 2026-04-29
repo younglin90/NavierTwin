@@ -20,6 +20,19 @@ class TestImportPanelFormatVisibility:
 
         assert missing == []
 
+    def test_main_window_open_filter_includes_registered_readers_and_projects(self) -> None:
+        from naviertwin.core.cfd_reader import ReaderFactory
+        from naviertwin.gui.main_window import open_file_filter
+
+        file_filter = open_file_filter()
+        missing = [
+            ext for ext in ReaderFactory.registered_extensions()
+            if f"*{ext}" not in file_filter
+        ]
+
+        assert missing == []
+        assert "*.ntwin" in file_filter
+
     def test_supported_format_label_mentions_commercial_formats(self) -> None:
         from naviertwin.gui.panels.import_panel import supported_format_label
 

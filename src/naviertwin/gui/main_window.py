@@ -47,6 +47,19 @@ from naviertwin.gui.panels.reduce_panel import ReducePanel
 from naviertwin.gui.panels.twin_panel import TwinPanel
 
 
+def open_file_filter() -> str:
+    """File → Open에서 사용할 프로젝트/CFD 통합 파일 필터."""
+    from naviertwin.core.cfd_reader import ReaderFactory
+    from naviertwin.gui.panels.import_panel import cfd_file_filter
+
+    registered = " ".join(f"*{ext}" for ext in ReaderFactory.registered_extensions())
+    return (
+        f"All NavierTwin Inputs (*.ntwin {registered});;"
+        "NavierTwin Project (*.ntwin);;"
+        f"{cfd_file_filter()}"
+    )
+
+
 def _load_stylesheet() -> str:
     """다크 테마 QSS를 로드한다."""
     qss_path = Path(__file__).parent / "styles" / "dark_theme.qss"
@@ -383,10 +396,7 @@ class MainWindow(QMainWindow):
             self,
             "CFD 파일 열기",
             "",
-            "All CFD Files (*.foam *.OpenFOAM *.vtk *.vtu *.vtp *.stl *.ntwin);;"
-            "NavierTwin Project (*.ntwin);;"
-            "OpenFOAM (*.foam *.OpenFOAM);;"
-            "VTK (*.vtk *.vtu *.vtp *.stl);;All Files (*)",
+            open_file_filter(),
         )
         if path:
             self._open_selected_path(Path(path))
