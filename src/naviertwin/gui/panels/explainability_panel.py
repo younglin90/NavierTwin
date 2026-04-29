@@ -8,6 +8,7 @@ from typing import Optional
 import numpy as np
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
+    QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -51,7 +52,7 @@ class ExplainabilityPanel(QWidget):
         layout.addWidget(title)
 
         subtitle = QLabel(
-            "학습된 surrogate의 Kernel SHAP과 attention 모델의 token 가중치를 설명합니다."
+            "학습된 surrogate의 SHAP/심볼릭 식과 attention 모델의 token 가중치를 설명합니다."
         )
         subtitle.setObjectName("subtitleLabel")
         layout.addWidget(subtitle)
@@ -89,6 +90,28 @@ class ExplainabilityPanel(QWidget):
         self._explain_btn.clicked.connect(self._run_shap)
         btn_row.addWidget(self._explain_btn)
         layout.addLayout(btn_row)
+
+        symbolic_group = QGroupBox("Symbolic Regression 옵션")
+        symbolic_form = QFormLayout(symbolic_group)
+        self._symbolic_degree_spin = QSpinBox()
+        self._symbolic_degree_spin.setRange(1, 5)
+        self._symbolic_degree_spin.setValue(3)
+        symbolic_form.addRow("Max degree:", self._symbolic_degree_spin)
+
+        self._symbolic_threshold_spin = QDoubleSpinBox()
+        self._symbolic_threshold_spin.setRange(0.0, 1.0)
+        self._symbolic_threshold_spin.setDecimals(6)
+        self._symbolic_threshold_spin.setSingleStep(0.001)
+        self._symbolic_threshold_spin.setValue(0.001)
+        symbolic_form.addRow("Coefficient threshold:", self._symbolic_threshold_spin)
+        layout.addWidget(symbolic_group)
+
+        symbolic_btn_row = QHBoxLayout()
+        symbolic_btn_row.addStretch()
+        self._symbolic_btn = QPushButton("Symbolic 식 추정")
+        self._symbolic_btn.clicked.connect(self._run_symbolic)
+        symbolic_btn_row.addWidget(self._symbolic_btn)
+        layout.addLayout(symbolic_btn_row)
 
         attention_group = QGroupBox("Attention 옵션")
         attention_form = QFormLayout(attention_group)
@@ -130,6 +153,13 @@ class ExplainabilityPanel(QWidget):
         self._table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         table_layout.addWidget(self._table)
         layout.addWidget(table_group, stretch=1)
+
+        symbolic_result_group = QGroupBox("Symbolic expression")
+        symbolic_result_layout = QVBoxLayout(symbolic_result_group)
+        self._symbolic_text = QTextEdit()
+        self._symbolic_text.setReadOnly(True)
+        symbolic_result_layout.addWidget(self._symbolic_text)
+        layout.addWidget(symbolic_result_group)
 
         attention_result_group = QGroupBox("Attention weights")
         attention_result_layout = QVBoxLayout(attention_result_group)
@@ -289,6 +319,37 @@ class ExplainabilityPanel(QWidget):
         except Exception as exc:
             self._log(f"[ERROR] SHAP 실패: {exc}")
 
+    def _run_symbolic(self) -> None:
+        if self._model is None or self._background is None:
+            self._log("[WARN] Symbolic regression을 실행할 모델/background가 없습니다.")
+            return
+
+        try:
+            from naviertwin.core.explainability.symbolic_regression import (
+                SymbolicRegressor,
+            )
+
+            X = self._background
+            y = self._predict_scalar(X)
+            regressor = SymbolicRegressor(
+                max_degree=int(self._symbolic_degree_spin.value()),
+                threshold=float(self._symbolic_threshold_spin.value()),
+            )
+            regressor.fit(X, y)
+            expression = regressor.expression_
+            self._symbolic_text.setPlainText(expression)
+            result = {
+                "symbolic_expression": expression,
+                "max_degree": int(self._symbolic_degree_spin.value()),
+                "threshold": float(self._symbolic_threshold_spin.value()),
+                "n_samples": int(X.shape[0]),
+                "output_index": int(self._output_index_spin.value()),
+            }
+            self._log(f"Symbolic 완료: samples={X.shape[0]}, expr={expression}")
+            self.explanation_done.emit(result)
+        except Exception as exc:
+            self._log(f"[ERROR] Symbolic regression 실패: {exc}")
+
     def _run_attention(self) -> None:
         if self._attention_source is None:
             self._log("[WARN] Attention module이 감지되지 않았습니다.")
@@ -402,6 +463,7 @@ class ExplainabilityPanel(QWidget):
 
     def _refresh_enabled(self) -> None:
         self._explain_btn.setEnabled(self._model is not None and self._background is not None)
+        self._symbolic_btn.setEnabled(self._model is not None and self._background is not None)
         self._attention_btn.setEnabled(self._attention_source is not None)
 
     def _log(self, msg: str) -> None:

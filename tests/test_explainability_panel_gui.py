@@ -85,9 +85,42 @@ def test_explainability_panel_requires_background(qtbot) -> None:
     panel.set_model(_NoMetadataModel())
 
     assert not panel._explain_btn.isEnabled()
+    assert not panel._symbolic_btn.isEnabled()
     assert not panel._attention_btn.isEnabled()
     panel._run_shap()
     assert "background가 없습니다" in panel._log_text.toPlainText()
+
+
+def test_explainability_panel_runs_symbolic_regression(
+    qtbot,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from naviertwin.core.explainability.symbolic_regression import SymbolicRegressor
+    from naviertwin.gui.panels.explainability_panel import ExplainabilityPanel
+
+    panel = ExplainabilityPanel()
+    qtbot.addWidget(panel)
+    emitted: list[dict[str, object]] = []
+    captured: dict[str, object] = {}
+    panel.explanation_done.connect(emitted.append)
+    panel.set_model(_DummySurrogate())
+
+    def fake_fit(self: SymbolicRegressor, X: np.ndarray, y: np.ndarray) -> None:
+        captured["X_shape"] = tuple(X.shape)
+        captured["y"] = np.asarray(y, dtype=float)
+        self.expression_ = "1.0*x0 + -1.0*x1"
+        self.is_fitted = True
+
+    monkeypatch.setattr(SymbolicRegressor, "fit", fake_fit)
+
+    panel._run_symbolic()
+
+    assert panel._symbolic_btn.isEnabled()
+    assert captured["X_shape"] == (3, 2)
+    assert np.allclose(captured["y"], np.array([0.0, 1.0, -1.0]))
+    assert panel._symbolic_text.toPlainText() == "1.0*x0 + -1.0*x1"
+    assert emitted and emitted[0]["symbolic_expression"] == "1.0*x0 + -1.0*x1"
+    assert "Symbolic 완료" in panel._log_text.toPlainText()
 
 
 def test_explainability_panel_runs_attention_visualization(qtbot) -> None:
