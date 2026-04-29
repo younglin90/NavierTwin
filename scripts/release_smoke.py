@@ -59,6 +59,7 @@ CUSTOMER_SMOKE_TESTS = [
     "tests/test_ntwin_project_open_gui.py",
     "tests/test_post_process_facade.py",
     "tests/test_postproc_panel.py",
+    "tests/test_twin_panel_optimization_gui.py",
 ]
 
 

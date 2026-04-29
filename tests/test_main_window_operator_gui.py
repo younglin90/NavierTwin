@@ -30,18 +30,25 @@ def test_operator_training_does_not_build_twin_engine(
     win._latest_reducer = object()
     operator = _DummyOperator()
     build_calls: list[object] = []
+    export_models: list[object] = []
 
     def fail_if_called(reducer: object, surrogate: object) -> object:
         build_calls.append((reducer, surrogate))
         raise AssertionError("operator models must not build TwinEngine")
 
     monkeypatch.setattr(win, "_build_engine", fail_if_called)
+    monkeypatch.setattr(
+        win._export_panel,
+        "set_model",
+        lambda value: export_models.append(value),
+    )
 
     win._on_model_trained("fno1d", operator)
 
     assert build_calls == []
     assert win._latest_operator is operator
     assert win._latest_engine is None
+    assert export_models == [operator]
     assert win._tabs.currentWidget() is win._model_panel
     assert "TwinEngine 자동 연결 생략" in win._status_label.text()
 

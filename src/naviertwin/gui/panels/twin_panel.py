@@ -2,16 +2,18 @@
 
 Signals:
     prediction_done(object): 예측 완료 시 복원된 필드 배열 발생.
+    optimization_done(object): 최적화 완료 시 최적 파라미터/목적값 dict 발생.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
+    QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -32,9 +34,11 @@ class TwinPanel(QWidget):
 
     Signals:
         prediction_done: 예측 완료 시 결과 배열과 함께 발생.
+        optimization_done: 최적화 완료 시 결과 dict와 함께 발생.
     """
 
     prediction_done = Signal(object)
+    optimization_done = Signal(object)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -69,7 +73,6 @@ class TwinPanel(QWidget):
         engine_layout = QFormLayout(engine_group)
 
         reducer_row = QHBoxLayout()
-        from PySide6.QtWidgets import QComboBox
         self._reducer_combo = QComboBox()
         self._reducer_combo.addItems(["pod", "randomized_pod"])
         reducer_row.addWidget(self._reducer_combo)
@@ -130,6 +133,56 @@ class TwinPanel(QWidget):
         self._predict_btn.setObjectName("primaryButton")
         self._predict_btn.clicked.connect(self._run_predict)
         left_layout.addWidget(self._predict_btn)
+
+        # 최적화
+        opt_group = QGroupBox("Optimization")
+        opt_form = QFormLayout(opt_group)
+
+        self._optimizer_combo = QComboBox()
+        self._optimizer_combo.addItems(["SurrogateOptimizer", "BayesianOptimizer"])
+        opt_form.addRow("Optimizer:", self._optimizer_combo)
+
+        self._objective_combo = QComboBox()
+        self._objective_combo.addItems([
+            "min field mean",
+            "min field norm",
+            "match target scalar",
+        ])
+        opt_form.addRow("Objective:", self._objective_combo)
+
+        self._target_spin = QDoubleSpinBox()
+        self._target_spin.setRange(-1e9, 1e9)
+        self._target_spin.setDecimals(6)
+        self._target_spin.setValue(0.0)
+        opt_form.addRow("Target:", self._target_spin)
+
+        self._bound_low_spin = QDoubleSpinBox()
+        self._bound_low_spin.setRange(-1e9, 1e9)
+        self._bound_low_spin.setDecimals(4)
+        self._bound_low_spin.setValue(0.0)
+        opt_form.addRow("Lower bound:", self._bound_low_spin)
+
+        self._bound_high_spin = QDoubleSpinBox()
+        self._bound_high_spin.setRange(-1e9, 1e9)
+        self._bound_high_spin.setDecimals(4)
+        self._bound_high_spin.setValue(1.0)
+        opt_form.addRow("Upper bound:", self._bound_high_spin)
+
+        self._n_initial_spin = QSpinBox()
+        self._n_initial_spin.setRange(2, 200)
+        self._n_initial_spin.setValue(6)
+        opt_form.addRow("Initial evals:", self._n_initial_spin)
+
+        self._max_iter_spin = QSpinBox()
+        self._max_iter_spin.setRange(0, 200)
+        self._max_iter_spin.setValue(8)
+        opt_form.addRow("Max iter:", self._max_iter_spin)
+
+        self._optimize_btn = QPushButton("최적화 실행")
+        self._optimize_btn.clicked.connect(self._run_optimize)
+        opt_form.addRow(self._optimize_btn)
+
+        left_layout.addWidget(opt_group)
 
         # 데모 학습 버튼
         self._demo_btn = QPushButton("데모 학습 & 예측")
@@ -247,6 +300,86 @@ class TwinPanel(QWidget):
             self.prediction_done.emit(result)
         except Exception as exc:
             self._log(f"[ERROR] {exc}")
+
+    def _run_optimize(self) -> None:
+        if self._engine is None:
+            self._log("[WARN] TwinEngine이 없습니다. 먼저 로드하거나 데모를 실행하세요.")
+            return
+
+        low = float(self._bound_low_spin.value())
+        high = float(self._bound_high_spin.value())
+        if not low < high:
+            self._log("[WARN] 최적화 bounds는 lower < upper 이어야 합니다.")
+            return
+
+        n_dims = max(1, int(self._n_params_spin.value()))
+        bounds = np.tile(np.array([[low, high]], dtype=np.float64), (n_dims, 1))
+        objective_name = self._objective_combo.currentText()
+
+        try:
+            optimizer = self._build_optimizer(bounds)
+            objective = self._build_objective(objective_name)
+            x_best, f_best = optimizer.minimize(objective)  # type: ignore[attr-defined]
+            x_best = np.asarray(x_best, dtype=float).reshape(-1)
+            for spin, value in zip(self._param_spins, x_best):
+                spin.setValue(float(value))
+            n_eval = len(getattr(optimizer, "y_", []))
+            result = {
+                "optimizer": self._optimizer_combo.currentText(),
+                "objective": objective_name,
+                "x_best": x_best,
+                "f_best": float(f_best),
+                "n_eval": int(n_eval),
+            }
+            self._log(
+                "최적화 완료: "
+                f"objective={objective_name}, f_best={float(f_best):.6g}, "
+                f"x_best={np.array2string(x_best, precision=4)}, n_eval={n_eval}"
+            )
+            self._status_label.setText("최적화 완료.")
+            self.optimization_done.emit(result)
+        except Exception as exc:
+            self._log(f"[ERROR] 최적화 실패: {exc}")
+
+    def _build_optimizer(self, bounds: np.ndarray) -> object:
+        optimizer_name = self._optimizer_combo.currentText()
+        n_initial = int(self._n_initial_spin.value())
+        max_iter = int(self._max_iter_spin.value())
+        if optimizer_name == "BayesianOptimizer":
+            from naviertwin.core.optimization.bayesian_opt import BayesianOptimizer
+
+            return BayesianOptimizer(
+                bounds=bounds,
+                n_initial=n_initial,
+                max_iter=max_iter,
+                seed=0,
+            )
+
+        from naviertwin.core.optimization.surrogate_opt import SurrogateOptimizer
+
+        return SurrogateOptimizer(
+            bounds=bounds,
+            surrogate_kind="rbf",
+            n_initial=n_initial,
+            max_iter=max_iter,
+            seed=0,
+        )
+
+    def _build_objective(self, objective_name: str) -> Callable[[np.ndarray], float]:
+        target = float(self._target_spin.value())
+
+        def objective(x: np.ndarray) -> float:
+            assert self._engine is not None
+            params = np.asarray(x, dtype=float).reshape(1, -1)
+            field = np.asarray(self._engine.predict(params), dtype=float)  # type: ignore[union-attr]
+            if objective_name == "min field norm":
+                return float(np.linalg.norm(field))
+            mean = float(np.mean(field))
+            if objective_name == "match target scalar":
+                return float((mean - target) ** 2)
+            return mean
+
+        return objective
 
     def _run_demo(self) -> None:
         """데모: 랜덤 데이터로 TwinEngine을 학습하고 예측한다."""

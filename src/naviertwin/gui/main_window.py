@@ -389,6 +389,11 @@ class MainWindow(QMainWindow):
         self._twin_panel.prediction_done.connect(
             lambda _: self._set_status("예측 완료")
         )
+        self._twin_panel.optimization_done.connect(
+            lambda result: self._set_status(
+                f"최적화 완료: f_best={float(result.get('f_best', 0.0)):.4g}"
+            )
+        )
 
         # Simulation 결과 → 상태바 + 전역 viewer 연동 훅
         if self._simulation_panel is not None:
