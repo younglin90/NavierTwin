@@ -26,7 +26,7 @@ GUI 사용법
    * - ⑧ Simulation
      - LBM cavity / StreamingTwin / RL / Burgers FVM 런처
    * - ⑨ Explain
-     - Kernel SHAP feature attribution
+     - Kernel SHAP feature attribution, Attention weight matrix/top-k token viz
    * - ⑩ Post-Tools
      - 상용 후처리 parity 기능: 통계, PSD, 적분, flux, interpolation, derivatives, EOF 등 facade 실행
 

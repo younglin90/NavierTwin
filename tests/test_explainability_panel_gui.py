@@ -85,5 +85,71 @@ def test_explainability_panel_requires_background(qtbot) -> None:
     panel.set_model(_NoMetadataModel())
 
     assert not panel._explain_btn.isEnabled()
+    assert not panel._attention_btn.isEnabled()
     panel._run_shap()
     assert "background가 없습니다" in panel._log_text.toPlainText()
+
+
+def test_explainability_panel_runs_attention_visualization(qtbot) -> None:
+    torch = pytest.importorskip("torch")
+    import torch.nn as nn
+
+    from naviertwin.gui.panels.explainability_panel import ExplainabilityPanel
+
+    class _AttentionModel:
+        def __init__(self) -> None:
+            self.attn = nn.MultiheadAttention(
+                embed_dim=4, num_heads=2, batch_first=True, dropout=0.0
+            )
+            self.training_metadata = {
+                "attention": {
+                    "module_path": "attn",
+                    "probe": np.ones((1, 3, 4), dtype=np.float32),
+                    "token_names": ["inlet", "wake", "outlet"],
+                }
+            }
+
+    torch.manual_seed(0)
+    panel = ExplainabilityPanel()
+    qtbot.addWidget(panel)
+    emitted: list[dict[str, object]] = []
+    panel.explanation_done.connect(emitted.append)
+    panel.set_model(_AttentionModel())
+
+    panel._run_attention()
+
+    assert panel._attention_btn.isEnabled()
+    assert panel._attention_source_label.text() == "attn"
+    assert panel._attention_matrix_table.rowCount() == 3
+    assert panel._attention_matrix_table.columnCount() == 3
+    assert panel._attention_matrix_table.horizontalHeaderItem(0).text() == "inlet"
+    assert panel._attention_top_table.item(0, 0).text() == "inlet"
+    assert emitted
+    weights = emitted[0]["attention_weights"]
+    assert isinstance(weights, np.ndarray)
+    assert weights.shape == (1, 3, 3)
+    assert "Attention 완료" in panel._log_text.toPlainText()
+
+
+def test_explainability_panel_detects_direct_multihead_attention(qtbot) -> None:
+    torch = pytest.importorskip("torch")
+    import torch.nn as nn
+
+    from naviertwin.gui.panels.explainability_panel import ExplainabilityPanel
+
+    torch.manual_seed(0)
+    panel = ExplainabilityPanel()
+    qtbot.addWidget(panel)
+    emitted: list[dict[str, object]] = []
+    panel.explanation_done.connect(emitted.append)
+    panel.set_model(nn.MultiheadAttention(embed_dim=4, num_heads=2, batch_first=True))
+    panel._attention_tokens_spin.setValue(2)
+
+    panel._run_attention()
+
+    assert panel._attention_btn.isEnabled()
+    assert panel._attention_source_label.text() == "model"
+    assert emitted
+    weights = emitted[0]["attention_weights"]
+    assert isinstance(weights, np.ndarray)
+    assert weights.shape == (1, 2, 2)

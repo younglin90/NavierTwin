@@ -95,6 +95,7 @@ class TestDocsStructure:
             "Post-Tools",
             "Explain",
             "Kernel SHAP",
+            "Attention viz",
             "Active Learning",
             "SINDy",
             "ONNX",

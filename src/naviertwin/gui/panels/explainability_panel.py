@@ -1,4 +1,4 @@
-"""Explainability panel for trained surrogate models."""
+"""Explainability panel for trained surrogate and attention models."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 
 
 class ExplainabilityPanel(QWidget):
-    """SHAP explainability tab for GUI-trained surrogate models."""
+    """SHAP and attention explainability tab for GUI-trained models."""
 
     explanation_done = Signal(object)
 
@@ -34,6 +34,10 @@ class ExplainabilityPanel(QWidget):
         self._model: object | None = None
         self._background: np.ndarray | None = None
         self._feature_names: list[str] = []
+        self._attention_source: object | None = None
+        self._attention_source_name = ""
+        self._attention_probe: np.ndarray | None = None
+        self._attention_token_names: list[str] = []
         self._setup_ui()
         self._refresh_enabled()
 
@@ -46,7 +50,9 @@ class ExplainabilityPanel(QWidget):
         title.setObjectName("titleLabel")
         layout.addWidget(title)
 
-        subtitle = QLabel("학습된 surrogate 모델의 파라미터 기여도를 Kernel SHAP으로 설명합니다.")
+        subtitle = QLabel(
+            "학습된 surrogate의 Kernel SHAP과 attention 모델의 token 가중치를 설명합니다."
+        )
         subtitle.setObjectName("subtitleLabel")
         layout.addWidget(subtitle)
 
@@ -84,6 +90,39 @@ class ExplainabilityPanel(QWidget):
         btn_row.addWidget(self._explain_btn)
         layout.addLayout(btn_row)
 
+        attention_group = QGroupBox("Attention 옵션")
+        attention_form = QFormLayout(attention_group)
+        self._attention_source_label = QLabel("감지 안됨")
+        attention_form.addRow("Attention module:", self._attention_source_label)
+
+        self._attention_batch_spin = QSpinBox()
+        self._attention_batch_spin.setRange(1, 128)
+        self._attention_batch_spin.setValue(1)
+        attention_form.addRow("Batch:", self._attention_batch_spin)
+
+        self._attention_tokens_spin = QSpinBox()
+        self._attention_tokens_spin.setRange(1, 2048)
+        self._attention_tokens_spin.setValue(8)
+        attention_form.addRow("Tokens:", self._attention_tokens_spin)
+
+        self._attention_dim_spin = QSpinBox()
+        self._attention_dim_spin.setRange(1, 65536)
+        self._attention_dim_spin.setValue(64)
+        attention_form.addRow("Embedding dim:", self._attention_dim_spin)
+
+        self._attention_topk_spin = QSpinBox()
+        self._attention_topk_spin.setRange(1, 32)
+        self._attention_topk_spin.setValue(3)
+        attention_form.addRow("Top-k keys:", self._attention_topk_spin)
+        layout.addWidget(attention_group)
+
+        attention_btn_row = QHBoxLayout()
+        attention_btn_row.addStretch()
+        self._attention_btn = QPushButton("Attention 시각화 실행")
+        self._attention_btn.clicked.connect(self._run_attention)
+        attention_btn_row.addWidget(self._attention_btn)
+        layout.addLayout(attention_btn_row)
+
         table_group = QGroupBox("Feature 기여도")
         table_layout = QVBoxLayout(table_group)
         self._table = QTableWidget(0, 3)
@@ -91,6 +130,23 @@ class ExplainabilityPanel(QWidget):
         self._table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         table_layout.addWidget(self._table)
         layout.addWidget(table_group, stretch=1)
+
+        attention_result_group = QGroupBox("Attention weights")
+        attention_result_layout = QVBoxLayout(attention_result_group)
+        self._attention_matrix_table = QTableWidget(0, 0)
+        self._attention_matrix_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        attention_result_layout.addWidget(self._attention_matrix_table)
+        self._attention_top_table = QTableWidget(0, 3)
+        self._attention_top_table.setHorizontalHeaderLabels(
+            ["Query token", "Top key tokens", "Max weight"]
+        )
+        self._attention_top_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        attention_result_layout.addWidget(self._attention_top_table)
+        layout.addWidget(attention_result_group, stretch=1)
 
         log_group = QGroupBox("로그")
         log_layout = QVBoxLayout(log_group)
@@ -116,34 +172,88 @@ class ExplainabilityPanel(QWidget):
     def _load_explainability_metadata(self, model: object) -> None:
         self._background = None
         self._feature_names = []
+        self._attention_source = None
+        self._attention_source_name = ""
+        self._attention_probe = None
+        self._attention_token_names = []
         metadata = getattr(model, "training_metadata", None)
         if not isinstance(metadata, Mapping):
             self._log("[WARN] 모델에 explainability metadata가 없습니다.")
+            self._load_attention_metadata(model, None)
             return
         explain_meta = metadata.get("explainability")
         if not isinstance(explain_meta, Mapping):
             self._log("[WARN] 모델에 explainability background가 없습니다.")
+        else:
+            background = np.asarray(explain_meta.get("background"), dtype=float)
+            if background.ndim != 2 or background.shape[0] == 0 or background.shape[1] == 0:
+                self._log("[WARN] explainability background shape이 유효하지 않습니다.")
+            else:
+                self._background = background
+                self._background_size_spin.setMaximum(max(1, background.shape[0]))
+                self._background_size_spin.setValue(min(background.shape[0], 16))
+                feature_names = self._normalize_feature_names(
+                    explain_meta.get("feature_names"),
+                    background.shape[1],
+                )
+                self._feature_names = feature_names
+                output_index = self._safe_int(explain_meta.get("output_index"), default=0)
+                self._output_index_spin.setValue(max(0, output_index))
+                self._log(
+                    f"Explainability background 설정: rows={background.shape[0]}, "
+                    f"features={background.shape[1]}"
+                )
+
+        self._load_attention_metadata(model, metadata.get("attention"))
+
+    def _load_attention_metadata(
+        self, model: object, attention_meta: object | None,
+    ) -> None:
+        source = None
+        source_name = ""
+        if isinstance(attention_meta, Mapping):
+            path = attention_meta.get("module_path") or attention_meta.get("path")
+            if path is not None:
+                source = self._resolve_attr_path(model, str(path))
+                source_name = str(path)
+            if source is None:
+                for key in ("module", "attention_module", "mha", "source"):
+                    value = attention_meta.get(key)
+                    if value is not None:
+                        source = value
+                        source_name = key
+                        break
+            probe_value = attention_meta.get("probe")
+            if probe_value is None:
+                probe_value = attention_meta.get("input")
+            self._attention_probe = self._coerce_attention_probe(probe_value)
+            if self._attention_probe is not None:
+                self._apply_probe_shape_to_attention_options(self._attention_probe)
+            token_count = self._attention_tokens_spin.value()
+            self._attention_token_names = self._normalize_feature_names(
+                attention_meta.get("token_names"), token_count,
+            )
+
+        if source is None:
+            source, source_name = self._find_first_multihead_attention(model)
+
+        if source is None:
+            self._attention_source_label.setText("감지 안됨")
             return
 
-        background = np.asarray(explain_meta.get("background"), dtype=float)
-        if background.ndim != 2 or background.shape[0] == 0 or background.shape[1] == 0:
-            self._log("[WARN] explainability background shape이 유효하지 않습니다.")
-            return
-
-        self._background = background
-        self._background_size_spin.setMaximum(max(1, background.shape[0]))
-        self._background_size_spin.setValue(min(background.shape[0], 16))
-        feature_names = self._normalize_feature_names(
-            explain_meta.get("feature_names"),
-            background.shape[1],
+        self._attention_source = source
+        self._attention_source_name = source_name or type(source).__name__
+        self._attention_source_label.setText(self._attention_source_name)
+        embed_dim = self._safe_int(
+            getattr(source, "embed_dim", None),
+            default=self._attention_dim_spin.value(),
         )
-        self._feature_names = feature_names
-        output_index = self._safe_int(explain_meta.get("output_index"), default=0)
-        self._output_index_spin.setValue(max(0, output_index))
-        self._log(
-            f"Explainability background 설정: rows={background.shape[0]}, "
-            f"features={background.shape[1]}"
-        )
+        self._attention_dim_spin.setValue(max(1, embed_dim))
+        if not self._attention_token_names:
+            self._attention_token_names = self._normalize_feature_names(
+                None, self._attention_tokens_spin.value(),
+            )
+        self._log(f"Attention module 설정: {self._attention_source_name}")
 
     def _run_shap(self) -> None:
         if self._model is None or self._background is None:
@@ -179,6 +289,53 @@ class ExplainabilityPanel(QWidget):
         except Exception as exc:
             self._log(f"[ERROR] SHAP 실패: {exc}")
 
+    def _run_attention(self) -> None:
+        if self._attention_source is None:
+            self._log("[WARN] Attention module이 감지되지 않았습니다.")
+            return
+
+        try:
+            from naviertwin.core.explainability.attention_viz import (
+                extract_attention,
+                topk_attention_tokens,
+            )
+
+            source = self._attention_source
+            training = bool(getattr(source, "training", False))
+            eval_fn = getattr(source, "eval", None)
+            if callable(eval_fn):
+                eval_fn()
+            x = self._make_attention_input(source)
+            try:
+                import torch
+
+                with torch.no_grad():
+                    _, weights = extract_attention(source, x)
+            finally:
+                train_fn = getattr(source, "train", None)
+                if training and callable(train_fn):
+                    train_fn()
+
+            weights = np.asarray(weights, dtype=float)
+            top_tokens = topk_attention_tokens(
+                weights,
+                k=min(self._attention_topk_spin.value(), weights.shape[-1]),
+            )
+            self._render_attention(weights, top_tokens)
+            result = {
+                "attention_weights": weights,
+                "top_tokens": top_tokens,
+                "token_names": list(self._attention_token_names),
+                "source": self._attention_source_name,
+            }
+            self._log(
+                f"Attention 완료: source={self._attention_source_name}, "
+                f"shape={weights.shape}"
+            )
+            self.explanation_done.emit(result)
+        except Exception as exc:
+            self._log(f"[ERROR] Attention 실패: {exc}")
+
     def _predict_scalar(self, X: np.ndarray) -> np.ndarray:
         assert self._model is not None
         raw = self._model.predict(np.asarray(X, dtype=float))  # type: ignore[attr-defined]
@@ -203,8 +360,49 @@ class ExplainabilityPanel(QWidget):
             self._table.setItem(row, 1, QTableWidgetItem(f"{mean_phi[row]:.6g}"))
             self._table.setItem(row, 2, QTableWidgetItem(f"{mean_abs[row]:.6g}"))
 
+    def _render_attention(self, weights: np.ndarray, top_tokens: np.ndarray) -> None:
+        if weights.ndim != 3:
+            raise ValueError(f"Attention weights must be 3D, got shape={weights.shape}")
+        mat = weights[0]
+        max_rows = min(mat.shape[0], 32)
+        max_cols = min(mat.shape[1], 32)
+        row_names = self._attention_labels(max_rows)
+        col_names = self._attention_labels(max_cols)
+
+        self._attention_matrix_table.setRowCount(max_rows)
+        self._attention_matrix_table.setColumnCount(max_cols)
+        self._attention_matrix_table.setVerticalHeaderLabels(row_names)
+        self._attention_matrix_table.setHorizontalHeaderLabels(col_names)
+        for row in range(max_rows):
+            for col in range(max_cols):
+                self._attention_matrix_table.setItem(
+                    row, col, QTableWidgetItem(f"{mat[row, col]:.4f}")
+                )
+
+        self._attention_top_table.setRowCount(max_rows)
+        for row in range(max_rows):
+            keys = [
+                int(idx)
+                for idx in top_tokens[0, row, : min(top_tokens.shape[-1], max_cols)]
+            ]
+            key_labels = [
+                f"{self._attention_label_for(idx)} ({mat[row, idx]:.4f})"
+                for idx in keys
+                if idx < mat.shape[1]
+            ]
+            self._attention_top_table.setItem(
+                row, 0, QTableWidgetItem(self._attention_label_for(row))
+            )
+            self._attention_top_table.setItem(
+                row, 1, QTableWidgetItem(", ".join(key_labels))
+            )
+            self._attention_top_table.setItem(
+                row, 2, QTableWidgetItem(f"{float(np.max(mat[row])):.4f}")
+            )
+
     def _refresh_enabled(self) -> None:
         self._explain_btn.setEnabled(self._model is not None and self._background is not None)
+        self._attention_btn.setEnabled(self._attention_source is not None)
 
     def _log(self, msg: str) -> None:
         self._log_text.append(msg)
@@ -225,6 +423,109 @@ class ExplainabilityPanel(QWidget):
             return int(value)  # type: ignore[arg-type]
         except (TypeError, ValueError):
             return default
+
+    @staticmethod
+    def _resolve_attr_path(root: object, path: str) -> object | None:
+        current: object = root
+        for part in path.split("."):
+            if not part:
+                continue
+            if part.isdigit() and hasattr(current, "__getitem__"):
+                try:
+                    current = current[int(part)]  # type: ignore[index]
+                    continue
+                except (IndexError, KeyError, TypeError):
+                    return None
+            if isinstance(current, Mapping):
+                current = current.get(part)
+                if current is None:
+                    return None
+                continue
+            if not hasattr(current, part):
+                return None
+            current = getattr(current, part)
+        return current
+
+    @staticmethod
+    def _coerce_attention_probe(value: object) -> np.ndarray | None:
+        if value is None:
+            return None
+        if hasattr(value, "detach"):
+            value = value.detach().cpu().numpy()  # type: ignore[union-attr]
+        arr = np.asarray(value, dtype=np.float32)
+        if arr.ndim != 3 or 0 in arr.shape:
+            return None
+        return arr
+
+    def _apply_probe_shape_to_attention_options(self, probe: np.ndarray) -> None:
+        self._attention_batch_spin.setValue(max(1, int(probe.shape[0])))
+        self._attention_tokens_spin.setValue(max(1, int(probe.shape[1])))
+        self._attention_dim_spin.setValue(max(1, int(probe.shape[2])))
+
+    @staticmethod
+    def _find_first_multihead_attention(model: object) -> tuple[object | None, str]:
+        try:
+            import torch.nn as nn
+        except ImportError:
+            return None, ""
+
+        candidates = [
+            ("model", model),
+            ("model._model", getattr(model, "_model", None)),
+            ("model.model", getattr(model, "model", None)),
+            ("model.module", getattr(model, "module", None)),
+            ("model.net", getattr(model, "net", None)),
+            ("model.network", getattr(model, "network", None)),
+        ]
+        seen: set[int] = set()
+        for prefix, candidate in candidates:
+            if candidate is None or id(candidate) in seen:
+                continue
+            seen.add(id(candidate))
+            if isinstance(candidate, nn.MultiheadAttention):
+                return candidate, prefix
+            modules = getattr(candidate, "modules", None)
+            if callable(modules):
+                for module in modules():
+                    if isinstance(module, nn.MultiheadAttention):
+                        return module, f"{prefix}.{type(module).__name__}"
+            for attr in ("attn", "mha", "attention"):
+                value = getattr(candidate, attr, None)
+                if isinstance(value, nn.MultiheadAttention):
+                    return value, f"{prefix}.{attr}"
+        return None, ""
+
+    def _make_attention_input(self, source: object) -> object:
+        import torch
+
+        try:
+            param = next(source.parameters())  # type: ignore[attr-defined]
+            device = param.device
+            dtype = param.dtype
+        except (AttributeError, StopIteration):
+            device = torch.device("cpu")
+            dtype = torch.float32
+
+        if self._attention_probe is not None:
+            return torch.as_tensor(self._attention_probe, dtype=dtype, device=device)
+
+        batch = self._attention_batch_spin.value()
+        tokens = self._attention_tokens_spin.value()
+        dim = self._attention_dim_spin.value()
+        shape = (batch, tokens, dim) if bool(getattr(source, "batch_first", True)) else (
+            tokens,
+            batch,
+            dim,
+        )
+        return torch.zeros(shape, dtype=dtype, device=device)
+
+    def _attention_labels(self, count: int) -> list[str]:
+        return [self._attention_label_for(i) for i in range(count)]
+
+    def _attention_label_for(self, index: int) -> str:
+        if index < len(self._attention_token_names):
+            return self._attention_token_names[index]
+        return f"token_{index}"
 
 
 __all__ = ["ExplainabilityPanel"]
