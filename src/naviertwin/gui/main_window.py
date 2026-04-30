@@ -303,6 +303,10 @@ class MainWindow(QMainWindow):
         package_twin_action.triggered.connect(self._package_twin_artifacts)
         self._tools_menu.addAction(package_twin_action)
 
+        verify_twin_package_action = QAction("트윈 패키지 검증(&Y)", self)
+        verify_twin_package_action.triggered.connect(self._verify_twin_package)
+        self._tools_menu.addAction(verify_twin_package_action)
+
         server_start_action = QAction("API 서버 시작(&S)", self)
         server_start_action.triggered.connect(self._start_api_server)
         self._tools_menu.addAction(server_start_action)
@@ -1128,6 +1132,47 @@ class MainWindow(QMainWindow):
             output=str(output),
             as_json=False,
         )
+
+    def _verify_twin_package(self) -> None:
+        """고객 전달용 트윈 ZIP의 MANIFEST.json 무결성을 검증한다."""
+        package_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "트윈 ZIP 선택",
+            "",
+            "ZIP (*.zip)",
+        )
+        if package_path:
+            self._verify_twin_package_path(Path(package_path))
+
+    def _verify_twin_package_path(self, package_path: Path) -> None:
+        """GUI에서 verify-twin-package CLI 워크플로우를 실행한다."""
+        try:
+            code = self._run_verify_twin_package_cli(package_path)
+        except Exception as exc:  # noqa: BLE001
+            self._set_status("트윈 패키지 검증 실패")
+            QMessageBox.warning(self, "트윈 패키지 검증 실패", str(exc))
+            return
+        if code != 0:
+            self._set_status("트윈 패키지 검증 실패")
+            QMessageBox.warning(
+                self,
+                "트윈 패키지 검증 실패",
+                f"verify-twin-package 종료 코드: {code}",
+            )
+            return
+
+        self._set_status("트윈 패키지 검증 완료")
+        QMessageBox.information(
+            self,
+            "트윈 패키지 검증 완료",
+            f"ZIP 무결성 검증 완료:\n{package_path}",
+        )
+
+    def _run_verify_twin_package_cli(self, package_path: Path) -> int:
+        """테스트에서 대체 가능한 verify-twin-package 실행 래퍼."""
+        from naviertwin.main import _run_verify_twin_package
+
+        return _run_verify_twin_package(package_path=str(package_path), as_json=False)
 
     def _load_engine_artifact(self, engine_path: Path) -> bool:
         """저장된 TwinEngine 아티팩트를 Twin/Export 패널에 연결한다."""

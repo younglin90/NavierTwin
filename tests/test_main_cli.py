@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import sys
+import zipfile
+from hashlib import sha256
 
 import numpy as np
 import pytest
@@ -165,6 +167,22 @@ class TestBuildParser:
         assert args.output.endswith("twin.zip")
         assert args.as_json is True
 
+    def test_parse_verify_twin_package_subcommand(self, tmp_path) -> None:
+        from naviertwin.main import _build_parser
+
+        p = _build_parser()
+        args = p.parse_args(
+            [
+                "verify-twin-package",
+                "--package",
+                str(tmp_path / "twin.zip"),
+                "--json",
+            ]
+        )
+        assert args.command == "verify-twin-package"
+        assert args.package.endswith("twin.zip")
+        assert args.as_json is True
+
     def test_parse_autorefine_subcommand(self) -> None:
         from naviertwin.main import _build_parser
 
@@ -283,6 +301,7 @@ class TestRunBuildTwin:
             _run_package_twin,
             _run_predict_twin,
             _run_validate_twin,
+            _run_verify_twin_package,
         )
 
         paths = []
@@ -403,6 +422,41 @@ class TestRunBuildTwin:
         assert "engine.pkl" in package_payload["files"]
         assert "validation.json" in package_payload["files"]
         assert (tmp_path / "twin-delivery.zip").exists()
+
+        verify_code = _run_verify_twin_package(
+            package_path=str(tmp_path / "twin-delivery.zip"),
+            as_json=True,
+        )
+        verify_payload = json.loads(capsys.readouterr().out)
+
+        assert verify_code == 0
+        assert verify_payload["status"] == "ok"
+        assert verify_payload["manifest_entry_count"] >= 5
+        assert not verify_payload["errors"]
+
+        bad_zip = tmp_path / "bad-delivery.zip"
+        with zipfile.ZipFile(bad_zip, "w") as archive:
+            archive.writestr("engine.pkl", b"tampered")
+            archive.writestr("manifest.json", b"{}")
+            archive.writestr(
+                "MANIFEST.json",
+                json.dumps(
+                    [
+                        {"name": "engine.pkl", "bytes": 999, "sha256": "0" * 64},
+                        {
+                            "name": "manifest.json",
+                            "bytes": 2,
+                            "sha256": sha256(b"{}").hexdigest(),
+                        },
+                    ]
+                ),
+            )
+        bad_code = _run_verify_twin_package(package_path=str(bad_zip), as_json=True)
+        bad_payload = json.loads(capsys.readouterr().out)
+
+        assert bad_code == 1
+        assert bad_payload["status"] == "failed"
+        assert any("integrity mismatch" in error for error in bad_payload["errors"])
 
         (tmp_path / "twin" / "engine.pkl").write_bytes(b"tampered")
         tampered_code = _run_package_twin(

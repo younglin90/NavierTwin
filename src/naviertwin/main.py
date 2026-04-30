@@ -179,6 +179,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_package.add_argument("--json", dest="as_json", action="store_true", help="JSON으로 출력")
 
+    # verify-twin-package
+    p_verify_package = sub.add_parser(
+        "verify-twin-package",
+        help="고객 전달용 트윈 ZIP 무결성 검증",
+    )
+    p_verify_package.add_argument("--package", required=True, help="검증할 package-twin ZIP 경로")
+    p_verify_package.add_argument("--json", dest="as_json", action="store_true", help="JSON으로 출력")
+
     # preflight
     p_preflight = sub.add_parser("preflight", help="CFD 입력 데이터 readiness 점검")
     p_preflight.add_argument("path", help="점검할 CFD 파일 또는 케이스 디렉토리")
@@ -373,6 +381,8 @@ def main() -> None:
                 as_json=args.as_json,
             )
         )
+    elif args.command == "verify-twin-package":
+        sys.exit(_run_verify_twin_package(package_path=args.package, as_json=args.as_json))
     elif args.command == "preflight":
         sys.exit(_run_preflight(path=args.path, as_json=args.as_json, output=args.output))
     elif args.command == "support-bundle":
@@ -1292,6 +1302,90 @@ def _collect_twin_package_artifacts(
     if validation_path.exists():
         files.append(validation_path)
     return list(dict.fromkeys(path.resolve() for path in files))
+
+
+def _run_verify_twin_package(*, package_path: str, as_json: bool) -> int:
+    """package-twin ZIP의 MANIFEST.json 무결성 기록을 검증한다."""
+    try:
+        payload = _verify_twin_package_archive(Path(package_path).expanduser())
+    except (OSError, RuntimeError, ValueError, KeyError) as exc:
+        print(f"verify-twin-package error: {exc}", file=sys.stderr)
+        return 2
+
+    if as_json:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    else:
+        print(
+            "verify-twin-package 완료: "
+            f"status={payload['status']}, checks={len(payload['checks'])}"
+        )
+        if payload["errors"]:
+            print("errors: " + "; ".join(payload["errors"]))
+    return 0 if payload["status"] == "ok" else 1
+
+
+def _verify_twin_package_archive(package_path: Path) -> dict[str, Any]:
+    """ZIP 내부 MANIFEST.json의 bytes/SHA256과 실제 archive entry를 대조한다."""
+    import zipfile
+    from hashlib import sha256
+
+    if not package_path.exists():
+        raise FileNotFoundError(f"package not found: {package_path}")
+
+    required_entries = {"engine.pkl", "manifest.json"}
+    errors: list[str] = []
+    checks: list[dict[str, Any]] = []
+    with zipfile.ZipFile(package_path) as archive:
+        names = set(archive.namelist())
+        if "MANIFEST.json" not in names:
+            errors.append("missing MANIFEST.json")
+            manifest_entries: list[Any] = []
+        else:
+            manifest_entries = json.loads(archive.read("MANIFEST.json").decode("utf-8"))
+            if not isinstance(manifest_entries, list):
+                raise ValueError("MANIFEST.json must contain a list")
+
+        manifest_names: set[str] = set()
+        for entry in manifest_entries:
+            if not isinstance(entry, dict):
+                errors.append("invalid MANIFEST.json entry")
+                continue
+            name = str(entry.get("name", ""))
+            manifest_names.add(name)
+            if name not in names:
+                errors.append(f"missing archived file: {name}")
+                checks.append({"name": name, "passed": False, "error": "missing"})
+                continue
+            data = archive.read(name)
+            actual_bytes = len(data)
+            actual_sha256 = sha256(data).hexdigest()
+            expected_bytes = int(entry.get("bytes", -1))
+            expected_sha256 = str(entry.get("sha256", ""))
+            passed = actual_bytes == expected_bytes and actual_sha256 == expected_sha256
+            if not passed:
+                errors.append(f"integrity mismatch: {name}")
+            checks.append(
+                {
+                    "name": name,
+                    "bytes": actual_bytes,
+                    "expected_bytes": expected_bytes,
+                    "sha256": actual_sha256,
+                    "expected_sha256": expected_sha256,
+                    "passed": passed,
+                }
+            )
+
+    for name in sorted(required_entries - manifest_names):
+        errors.append(f"missing required artifact in MANIFEST.json: {name}")
+    passed = not errors and all(check.get("passed") is True for check in checks)
+    return {
+        "status": "ok" if passed else "failed",
+        "package": str(package_path),
+        "required_entries": sorted(required_entries),
+        "manifest_entry_count": len(checks),
+        "checks": checks,
+        "errors": errors,
+    }
 
 
 def _run_preflight(*, path: str, as_json: bool, output: str | None = None) -> int:

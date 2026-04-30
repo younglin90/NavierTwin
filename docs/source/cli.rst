@@ -113,6 +113,17 @@ ZIP with an archive ``MANIFEST.json`` containing bytes and SHA256 hashes.
 Before packaging, ``manifest.json`` integrity records are checked against the
 current files so tampered build artifacts fail fast.
 
+verify-twin-package
+-------------------
+
+.. code-block:: bash
+
+   naviertwin verify-twin-package --package /tmp/naviertwin-twin.zip --json
+
+Expected: reads the delivery ZIP ``MANIFEST.json`` and verifies each archived
+entry's bytes/SHA256. It also checks that ``engine.pkl`` and ``manifest.json``
+are covered by the archive manifest. Integrity mismatch exits non-zero.
+
 preflight
 ---------
 

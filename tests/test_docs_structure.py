@@ -267,11 +267,13 @@ class TestDocsStructure:
             "predict-twin",
             "validate-twin",
             "package-twin",
+            "verify-twin-package",
             "acceptance gate",
             "MANIFEST.json",
             "SHA256",
             "CSV 스냅샷으로 트윈 생성",
             "트윈 산출물 패키징",
+            "트윈 패키지 검증",
         ]:
             assert token in content
 
@@ -319,6 +321,7 @@ class TestDocsStructure:
             "저장된 트윈 예측",
             "저장된 트윈 검증",
             "트윈 산출물 패키징",
+            "트윈 패키지 검증",
             "API 서버",
         ]:
             assert token in combined

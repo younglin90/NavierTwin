@@ -17,6 +17,7 @@ EXPECTED_SUBCOMMANDS = [
     "predict-twin",
     "validate-twin",
     "package-twin",
+    "verify-twin-package",
     "preflight",
     "support-bundle",
     "autorefine",
@@ -217,3 +218,23 @@ class TestCLISubcommands:
         assert "engine.pkl" in package_payload["files"]
         assert "validation.json" in package_payload["files"]
         assert (tmp_path / "twin-delivery.zip").exists()
+
+        verify_package_result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "naviertwin.main",
+                "verify-twin-package",
+                "--package",
+                str(tmp_path / "twin-delivery.zip"),
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert verify_package_result.returncode == 0, verify_package_result.stderr
+
+        verify_payload = json.loads(verify_package_result.stdout)
+        assert verify_payload["status"] == "ok"
+        assert verify_payload["manifest_entry_count"] >= 5

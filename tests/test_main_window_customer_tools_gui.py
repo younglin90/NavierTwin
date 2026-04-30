@@ -26,6 +26,7 @@ def test_tools_menu_exposes_pipeline_demo_and_server_actions(qtbot) -> None:
     assert any("저장된 트윈 예측" in text for text in actions)
     assert any("저장된 트윈 검증" in text for text in actions)
     assert any("트윈 산출물 패키징" in text for text in actions)
+    assert any("트윈 패키지 검증" in text for text in actions)
     assert any("API 서버 시작" in text for text in actions)
     assert any("API 서버 중지" in text for text in actions)
 
@@ -415,6 +416,65 @@ def test_package_twin_from_paths_surfaces_failure(
     assert warnings[0][0] == "트윈 패키징 실패"
     assert "2" in warnings[0][1]
     assert win._status_label.text() == "트윈 패키징 실패"
+
+
+def test_verify_twin_package_path_runs_cli_and_surfaces_result(
+    qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    from naviertwin.gui.main_window import MainWindow
+
+    win = MainWindow(confirm_on_close=False)
+    qtbot.addWidget(win)
+    calls: list[Path] = []
+    messages: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        win,
+        "_run_verify_twin_package_cli",
+        lambda package_path: calls.append(package_path) or 0,
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda parent, title, text: messages.append((title, text)),
+    )
+
+    package_path = tmp_path / "delivery.zip"
+    win._verify_twin_package_path(package_path)
+
+    assert calls == [package_path]
+    assert messages
+    assert messages[0][0] == "트윈 패키지 검증 완료"
+    assert str(package_path) in messages[0][1]
+    assert win._status_label.text() == "트윈 패키지 검증 완료"
+
+
+def test_verify_twin_package_path_surfaces_failure(
+    qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    from naviertwin.gui.main_window import MainWindow
+
+    win = MainWindow(confirm_on_close=False)
+    qtbot.addWidget(win)
+    warnings: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(win, "_run_verify_twin_package_cli", lambda package_path: 1)
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda parent, title, text: warnings.append((title, text)),
+    )
+
+    win._verify_twin_package_path(tmp_path / "delivery.zip")
+
+    assert warnings
+    assert warnings[0][0] == "트윈 패키지 검증 실패"
+    assert "1" in warnings[0][1]
+    assert win._status_label.text() == "트윈 패키지 검증 실패"
 
 
 def test_api_server_start_uses_qprocess(qtbot, monkeypatch: pytest.MonkeyPatch) -> None:

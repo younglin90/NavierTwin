@@ -48,6 +48,7 @@ GUI 사용법
 - **저장된 트윈 예측** — ``engine.pkl`` 과 쉼표 구분 파라미터로 예측을 실행하고 CSV로 저장
 - **저장된 트윈 검증** — ``engine.pkl`` 예측장을 기준 CSV snapshot과 비교하고, RMSE/R²/relative-L2 기준값으로 acceptance gate 실행
 - **트윈 산출물 패키징** — build/validate 산출물을 고객 전달용 ZIP과 무결성 manifest로 묶고, 별도 validation JSON 포함 가능
+- **트윈 패키지 검증** — 고객 전달 ZIP 내부 ``MANIFEST.json`` 의 bytes/SHA256을 다시 대조
 - **API 서버 시작/중지** — FastAPI 서버를 GUI 백그라운드 프로세스로 관리
 
 언어 전환
