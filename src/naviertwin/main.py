@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -335,6 +336,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="doctor 리포트에 GUI/API/GPU 선택 의존성 점검 포함",
     )
 
+    # inspect-support-bundle
+    p_inspect_support = sub.add_parser(
+        "inspect-support-bundle",
+        help="기존 고객 지원 번들 디렉토리/ZIP 요약 및 무결성 점검",
+    )
+    p_inspect_support.add_argument("path", help="점검할 support-bundle 디렉토리 또는 ZIP")
+    p_inspect_support.add_argument("--json", dest="as_json", action="store_true", help="JSON으로 출력")
+
     # autorefine
     p_refine = sub.add_parser(
         "autorefine",
@@ -574,6 +583,8 @@ def main() -> None:
                 acceptance_summary=args.acceptance_summary,
             )
         )
+    elif args.command == "inspect-support-bundle":
+        sys.exit(_run_inspect_support_bundle(path=args.path, as_json=args.as_json))
     elif args.command == "autorefine":
         sys.exit(
             _run_autorefine(
@@ -2903,6 +2914,23 @@ def _run_support_bundle(
         return 2
     print(report_to_json(report))
     return 0
+
+
+def _run_inspect_support_bundle(*, path: str, as_json: bool) -> int:
+    """기존 고객 지원 번들을 read-only로 점검한다."""
+    from naviertwin.utils.support_bundle import (
+        format_support_bundle_inspection,
+        inspect_support_bundle,
+        report_to_json,
+    )
+
+    try:
+        report = inspect_support_bundle(path)
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        print(f"inspect-support-bundle error: {exc}", file=sys.stderr)
+        return 2
+    print(report_to_json(report) if as_json else format_support_bundle_inspection(report))
+    return 0 if report.get("status") == "ok" else 1
 
 
 def _run_autorefine(

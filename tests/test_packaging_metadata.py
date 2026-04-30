@@ -143,6 +143,7 @@ def test_readme_documents_shipped_cli_surface() -> None:
         "naviertwin doctor --json",
         "naviertwin preflight tests/fixtures/tiny_square.su2 --json --output",
         "naviertwin support-bundle --outdir",
+        "naviertwin inspect-support-bundle",
         "python scripts/license_report.py --json --output",
         "naviertwin pipeline-demo --outdir",
         "naviertwin model-sweep --reducers pod",

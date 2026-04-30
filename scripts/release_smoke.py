@@ -292,7 +292,49 @@ def _run_support_bundle_smoke(*, env: dict[str, str]) -> int:
     if payload.get("status") not in {"ok", "warn"}:
         print(f"support-bundle status mismatch: {payload.get('status')!r}", file=sys.stderr)
         return 1
-    return _validate_support_bundle_artifacts(payload, outdir)
+    validation_code = _validate_support_bundle_artifacts(payload, outdir)
+    if validation_code != 0:
+        return validation_code
+
+    inspect_command = [
+        sys.executable,
+        "-m",
+        "naviertwin.main",
+        "inspect-support-bundle",
+        str(outdir / "support-bundle.zip"),
+        "--json",
+    ]
+    print("+", " ".join(inspect_command), flush=True)
+    inspect_result = subprocess.run(
+        inspect_command,
+        cwd=_repo_root(),
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if inspect_result.stdout:
+        print(inspect_result.stdout, end="" if inspect_result.stdout.endswith("\n") else "\n")
+    if inspect_result.stderr:
+        print(
+            inspect_result.stderr,
+            end="" if inspect_result.stderr.endswith("\n") else "\n",
+            file=sys.stderr,
+        )
+    if inspect_result.returncode != 0:
+        return inspect_result.returncode
+    try:
+        inspection = json.loads(inspect_result.stdout)
+    except json.JSONDecodeError as exc:
+        print(f"inspect-support-bundle JSON parse failed: {exc}", file=sys.stderr)
+        return 1
+    if inspection.get("status") != "ok":
+        print(f"inspect-support-bundle status mismatch: {inspection!r}", file=sys.stderr)
+        return 1
+    if not (inspection.get("manifest") or {}).get("verified"):
+        print("inspect-support-bundle manifest verification failed", file=sys.stderr)
+        return 1
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -23,6 +23,7 @@ EXPECTED_SUBCOMMANDS = [
     "accept-twin-package",
     "preflight",
     "support-bundle",
+    "inspect-support-bundle",
     "autorefine",
     "update-check",
     "doctor",

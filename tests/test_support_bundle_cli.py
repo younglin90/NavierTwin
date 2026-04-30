@@ -46,6 +46,18 @@ def test_support_bundle_parser_accepts_customer_flags() -> None:
     assert args.zip_bundle is True
 
 
+def test_inspect_support_bundle_parser_accepts_customer_flags() -> None:
+    from naviertwin.main import _build_parser
+
+    args = _build_parser().parse_args(
+        ["inspect-support-bundle", "/tmp/naviertwin-support/support-bundle.zip", "--json"]
+    )
+
+    assert args.command == "inspect-support-bundle"
+    assert args.path == "/tmp/naviertwin-support/support-bundle.zip"
+    assert args.as_json is True
+
+
 def test_run_support_bundle_outputs_json(monkeypatch, capsys, tmp_path) -> None:
     import naviertwin.utils.support_bundle as support_bundle
     from naviertwin.main import _run_support_bundle
@@ -330,3 +342,102 @@ def test_build_support_bundle_includes_acceptance_artifacts(
     with zipfile.ZipFile(outdir / "support-bundle.zip") as zf:
         names = set(zf.namelist())
     assert {"acceptance.json", "acceptance.md", "README.txt", "MANIFEST.json"}.issubset(names)
+
+
+def test_inspect_support_bundle_reports_directory_and_zip(tmp_path, monkeypatch) -> None:
+    from naviertwin.utils import doctor
+    from naviertwin.utils.support_bundle import build_support_bundle, inspect_support_bundle
+
+    monkeypatch.setattr(
+        doctor,
+        "build_doctor_report",
+        lambda include_optional=False: {
+            "status": "ok",
+            "version": "x.y.z",
+            "checks": [],
+            "warnings": [],
+            "errors": [],
+        },
+    )
+
+    outdir = tmp_path / "support"
+    build_support_bundle(outdir, zip_bundle=True)
+
+    directory_report = inspect_support_bundle(outdir)
+    assert directory_report["status"] == "ok"
+    assert directory_report["kind"] == "directory"
+    assert directory_report["metadata"]["schema_version"] == 2
+    assert directory_report["artifacts"]["verified"] is True
+    assert directory_report["manifest"]["present"] is False
+
+    zip_report = inspect_support_bundle(outdir / "support-bundle.zip")
+    assert zip_report["status"] == "ok"
+    assert zip_report["kind"] == "zip"
+    assert zip_report["manifest"]["verified"] is True
+    assert zip_report["artifacts"]["verified"] is True
+    assert "README.txt" in zip_report["metadata"]["files"]
+
+
+def test_inspect_support_bundle_detects_tampered_zip(tmp_path, monkeypatch) -> None:
+    from naviertwin.utils import doctor
+    from naviertwin.utils.support_bundle import build_support_bundle, inspect_support_bundle
+
+    monkeypatch.setattr(
+        doctor,
+        "build_doctor_report",
+        lambda include_optional=False: {
+            "status": "ok",
+            "version": "x.y.z",
+            "checks": [],
+            "warnings": [],
+            "errors": [],
+        },
+    )
+
+    outdir = tmp_path / "support"
+    build_support_bundle(outdir, zip_bundle=True)
+    zip_path = outdir / "support-bundle.zip"
+    original_entries: dict[str, bytes] = {}
+    with zipfile.ZipFile(zip_path) as archive:
+        for name in archive.namelist():
+            original_entries[name] = archive.read(name)
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        for name, data in original_entries.items():
+            archive.writestr(name, b"tampered" if name == "README.txt" else data)
+
+    report = inspect_support_bundle(zip_path)
+
+    assert report["status"] == "error"
+    assert report["manifest"]["verified"] is False
+    assert any("README.txt" in item for item in report["errors"])
+
+
+def test_run_inspect_support_bundle_outputs_json(capsys, tmp_path, monkeypatch) -> None:
+    from naviertwin.main import _run_inspect_support_bundle
+    from naviertwin.utils import doctor
+    from naviertwin.utils.support_bundle import build_support_bundle
+
+    monkeypatch.setattr(
+        doctor,
+        "build_doctor_report",
+        lambda include_optional=False: {
+            "status": "ok",
+            "version": "x.y.z",
+            "checks": [],
+            "warnings": [],
+            "errors": [],
+        },
+    )
+
+    outdir = tmp_path / "support"
+    build_support_bundle(outdir, zip_bundle=True)
+
+    code = _run_inspect_support_bundle(
+        path=str(outdir / "support-bundle.zip"),
+        as_json=True,
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert code == 0
+    assert payload["status"] == "ok"
+    assert payload["kind"] == "zip"

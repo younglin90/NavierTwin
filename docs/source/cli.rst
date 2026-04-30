@@ -218,6 +218,18 @@ before being copied into the bundle. ``metadata.json`` records schema version,
 input presence, file suffixes, and non-reversible path hashes, not customer
 absolute paths.
 
+inspect-support-bundle
+----------------------
+
+.. code-block:: bash
+
+   naviertwin inspect-support-bundle /tmp/naviertwin-support/support-bundle.zip --json
+
+Expected: reads an existing support-bundle directory or ZIP without extracting
+it, verifies ``metadata.json`` artifact hashes, verifies ZIP ``MANIFEST.json``
+when present, and prints a summary for support triage. The command exits non-zero
+when required files are missing or bytes/SHA256 do not match.
+
 autorefine
 ----------
 

@@ -268,6 +268,7 @@ class TestDocsStructure:
             "validate-twin",
             "package-twin",
             "verify-twin-package",
+            "inspect-support-bundle",
             "acceptance gate",
             "MANIFEST.json",
             "SHA256",
