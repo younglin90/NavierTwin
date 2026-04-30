@@ -703,6 +703,7 @@ def _run_build_twin(
         from naviertwin.core.digital_twin.manifest import build_manifest, save_manifest
         from naviertwin.core.digital_twin.pipeline import NavierTwinPipeline
         from naviertwin.core.digital_twin.pipeline_checkpoint import save_pipeline_state
+        from naviertwin.core.digital_twin.twin_engine import TwinEngine
 
         snapshots, selected_field, source_meta = _load_build_twin_snapshots(
             input_path=input_path,
@@ -748,10 +749,13 @@ def _run_build_twin(
         output_dir.mkdir(parents=True, exist_ok=True)
         metrics_path = output_dir / "metrics.json"
         checkpoint_path = output_dir / "pipeline.h5"
+        engine_path = output_dir / "engine.pkl"
         manifest_path = output_dir / "manifest.json"
         report_path = output_dir / "report.html"
 
         save_pipeline_state(pipe, checkpoint_path)
+        engine = TwinEngine.from_fitted_components(pipe.state.reducer, pipe.state.surrogate)
+        engine.save(engine_path)
         pipe.export_report(str(report_path), project="NavierTwin Build Twin")
 
         manifest = build_manifest(
@@ -768,6 +772,8 @@ def _run_build_twin(
                 "train_count": train_count,
                 "validation_count": val_count,
                 "param_dim": int(params_array.shape[1]),
+                "has_engine": True,
+                "engine_path": str(engine_path),
             },
         )
         save_manifest(manifest, manifest_path)
@@ -776,6 +782,7 @@ def _run_build_twin(
             "status": "ok",
             "artifacts": {
                 "checkpoint": str(checkpoint_path),
+                "engine": str(engine_path),
                 "manifest": str(manifest_path),
                 "metrics": str(metrics_path),
                 "report": str(report_path),

@@ -74,7 +74,7 @@ build-twin
 
 Expected: loads a CFD reader input or CSV snapshot sequence, trains a
 ``NavierTwinPipeline`` with a validation split, and writes ``metrics.json``,
-``manifest.json``, ``pipeline.h5``, and ``report.html``.
+``manifest.json``, ``pipeline.h5``, loadable ``engine.pkl``, and ``report.html``.
 
 preflight
 ---------

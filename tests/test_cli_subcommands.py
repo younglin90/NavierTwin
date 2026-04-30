@@ -131,4 +131,5 @@ class TestCLISubcommands:
         assert payload["training"]["n_snapshots"] == 10
         assert payload["training"]["validation_count"] == 2
         assert (outdir / "pipeline.h5").exists()
+        assert (outdir / "engine.pkl").exists()
         assert (outdir / "manifest.json").exists()

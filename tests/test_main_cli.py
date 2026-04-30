@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 
+import numpy as np
 import pytest
 
 
@@ -240,12 +241,18 @@ class TestRunBuildTwin:
             as_json=True,
         )
         payload = json.loads(capsys.readouterr().out)
+        from naviertwin.core.digital_twin.twin_engine import TwinEngine
 
         assert code == 0
         assert payload["status"] == "ok"
         assert payload["artifacts"]["checkpoint"].endswith("pipeline.h5")
+        assert payload["artifacts"]["engine"].endswith("engine.pkl")
         assert payload["training"]["train_count"] == 8
         assert "rmse" in payload["metrics"]
+
+        engine = TwinEngine.load(tmp_path / "twin" / "engine.pkl")
+        prediction = engine.predict(np.array([0.25]))
+        assert prediction.shape == (8,)
 
     def test_run_build_twin_reports_small_dataset(self, tmp_path, capsys) -> None:
         from naviertwin.main import _run_build_twin
