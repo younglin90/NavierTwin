@@ -28,6 +28,17 @@ def test_advertised_rest_endpoints_return_json() -> None:
     assert "/twin/package/accept" in route_map
 
     assert route_map["/health"]() == {"status": "ok", "service": "naviertwin"}
+    doctor_payload = route_map["/doctor"]()
+    assert doctor_payload["status"] in {"ok", "warn", "error"}
+    assert {"timestamp", "version", "environment", "checks", "warnings", "errors"} <= set(
+        doctor_payload
+    )
+    assert any(check["name"] == "python_version" for check in doctor_payload["checks"])
+    optional_doctor_payload = route_map["/doctor"](include_optional=True)
+    assert any(
+        check["name"] == "optional_dependencies"
+        for check in optional_doctor_payload["checks"]
+    )
 
     couette_payload = route_map["/analytic/couette"](
         CouetteReq(U_top=1.0, H=1.0, n_points=5)

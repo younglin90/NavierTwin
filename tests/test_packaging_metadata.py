@@ -121,6 +121,7 @@ def test_release_docs_do_not_conflict_with_packaging_policy() -> None:
     assert "python scripts/sdist_smoke.py --install-smoke" in readme
     assert "pytest --collect-only -q" in readme
     assert "NAVIER_TWIN_RUN_PYMOR=1" in readme
+    assert "`GET /doctor`" in readme
     assert "`POST /preflight`" in readme
     assert "`POST /reduce`" in readme
     assert "`POST /twin/build`" in readme

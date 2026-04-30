@@ -2,6 +2,7 @@
 
 엔드포인트:
     - GET  /health                        : 헬스 체크
+    - GET  /doctor                        : 설치/런타임 환경 진단
     - POST /reduce                         : reducer 수행, 모드/에너지 반환
     - POST /reduce/pod                     : POD 전용(하위 호환)
     - POST /preflight                      : CFD 입력 readiness 점검
@@ -148,6 +149,12 @@ def create_app() -> Any:
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "service": "naviertwin"}
+
+    @app.get("/doctor")
+    def doctor(include_optional: bool = False) -> dict[str, Any]:
+        from naviertwin.utils.doctor import build_doctor_report
+
+        return build_doctor_report(include_optional=include_optional)
 
     @app.post("/analytic/couette")
     def couette(req: CouetteReq = Body(...)) -> dict[str, list]:

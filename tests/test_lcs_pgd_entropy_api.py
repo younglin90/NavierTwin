@@ -119,6 +119,9 @@ class TestFastAPI:
         # health
         health = route_map["/health"]()
         assert health["status"] == "ok"
+        doctor = route_map["/doctor"]()
+        assert doctor["status"] in {"ok", "warn", "error"}
+        assert any(check["name"] == "python_version" for check in doctor["checks"])
 
         # 해석해
         couette = route_map["/analytic/couette"](

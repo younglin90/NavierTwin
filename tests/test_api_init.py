@@ -68,6 +68,7 @@ def test_api_root_create_app_exposes_advertised_routes() -> None:
 
     assert {
         "/health",
+        "/doctor",
         "/reduce",
         "/reduce/pod",
         "/preflight",
