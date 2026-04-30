@@ -122,6 +122,7 @@ def test_release_docs_do_not_conflict_with_packaging_policy() -> None:
     assert "pytest --collect-only -q" in readme
     assert "NAVIER_TWIN_RUN_PYMOR=1" in readme
     assert "`POST /reduce`" in readme
+    assert "`POST /twin/build`" in readme
     assert "`POST /twin/predict`" in readme
     assert "`POST /twin/benchmark`" in readme
     assert "`POST /simulate/lbm_cavity`" in readme

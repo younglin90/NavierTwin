@@ -1024,6 +1024,141 @@ def _load_build_twin_snapshots(
     return snapshots, selected_field, metadata
 
 
+def _build_twin_payload(
+    *,
+    input_path: str | None,
+    csv_snapshots: str | None,
+    field: str | None,
+    field_column: str | None,
+    params: str | None,
+    param_columns: str | None,
+    outdir: str,
+    reducer: str,
+    n_modes: int,
+    surrogate: str,
+    validation_count: int,
+) -> dict[str, Any]:
+    """CFD/CSV dataset을 학습 가능한 디지털 트윈 산출물 payload로 변환한다."""
+    from naviertwin.core.digital_twin.manifest import build_manifest, save_manifest
+    from naviertwin.core.digital_twin.pipeline import NavierTwinPipeline
+    from naviertwin.core.digital_twin.pipeline_checkpoint import save_pipeline_state
+    from naviertwin.core.digital_twin.twin_engine import TwinEngine
+
+    snapshots, selected_field, source_meta = _load_build_twin_snapshots(
+        input_path=input_path,
+        csv_snapshots=csv_snapshots,
+        field=field,
+        field_column=field_column,
+    )
+    if snapshots.ndim != 2:
+        raise ValueError(f"snapshots must be 2D, got shape {snapshots.shape}")
+    n_features, n_snapshots = snapshots.shape
+    if n_snapshots < 4:
+        raise ValueError("build-twin requires at least 4 snapshots")
+    if n_modes < 1:
+        raise ValueError("n-modes must be positive")
+
+    params_array, parameter_contract = _load_build_twin_params(
+        params_path=params,
+        param_columns=param_columns,
+        n_snapshots=n_snapshots,
+    )
+    val_count = min(max(1, validation_count), max(1, n_snapshots // 3))
+    train_count = n_snapshots - val_count
+    if train_count < 3:
+        raise ValueError("not enough training snapshots after validation split")
+
+    train_snapshots = snapshots[:, :train_count]
+    val_snapshots = snapshots[:, train_count:]
+    train_params = params_array[:train_count]
+    val_params = params_array[train_count:]
+
+    pipe = NavierTwinPipeline(
+        reducer_kind=reducer,
+        n_modes=n_modes,
+        surrogate_kind=surrogate,
+    )
+    pipe.load_snapshots(train_snapshots, field_name=selected_field)
+    pipe.reduce()
+    pipe.fit_surrogate(train_params)
+    y_true = pipe.state.reducer.encode(val_snapshots)
+    metrics = pipe.validate(val_params, y_true)
+
+    output_dir = Path(outdir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    metrics_path = output_dir / "metrics.json"
+    checkpoint_path = output_dir / "pipeline.h5"
+    engine_path = output_dir / "engine.pkl"
+    manifest_path = output_dir / "manifest.json"
+    report_path = output_dir / "report.html"
+
+    save_pipeline_state(pipe, checkpoint_path)
+    engine = TwinEngine.from_fitted_components(pipe.state.reducer, pipe.state.surrogate)
+    engine.save(engine_path)
+    pipe.export_report(str(report_path), project="NavierTwin Build Twin")
+
+    payload = {
+        "status": "ok",
+        "artifacts": {
+            "checkpoint": str(checkpoint_path),
+            "engine": str(engine_path),
+            "manifest": str(manifest_path),
+            "metrics": str(metrics_path),
+            "report": str(report_path),
+        },
+        "source": source_meta,
+        "field": selected_field,
+        "training": {
+            "reducer": reducer,
+            "n_modes": int(n_modes),
+            "surrogate": surrogate,
+            "n_features": int(n_features),
+            "n_snapshots": int(n_snapshots),
+            "train_count": int(train_count),
+            "validation_count": int(val_count),
+            "param_dim": int(params_array.shape[1]),
+            "parameter_contract": parameter_contract,
+        },
+        "metrics": metrics,
+    }
+    metrics_path.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    artifact_integrity = _artifact_integrity_map(
+        {
+            "metrics": metrics_path,
+            "checkpoint": checkpoint_path,
+            "engine": engine_path,
+            "report": report_path,
+        }
+    )
+    manifest = build_manifest(
+        reducer=reducer,
+        n_modes=n_modes,
+        surrogate=surrogate,
+        metrics=metrics,
+        extra={
+            "command": "build-twin",
+            "manifest_schema": "naviertwin-build-twin-v1",
+            "source": source_meta,
+            "field": selected_field,
+            "n_features": n_features,
+            "n_snapshots": n_snapshots,
+            "train_count": train_count,
+            "validation_count": val_count,
+            "param_dim": int(params_array.shape[1]),
+            "parameter_contract": parameter_contract,
+            "has_engine": True,
+            "engine_path": str(engine_path),
+            "artifact_integrity": artifact_integrity,
+        },
+    )
+    save_manifest(manifest, manifest_path)
+    return payload
+
+
 def _run_build_twin(
     *,
     input_path: str | None,
@@ -1041,123 +1176,19 @@ def _run_build_twin(
 ) -> int:
     """CFD/CSV dataset을 학습 가능한 디지털 트윈 산출물로 변환한다."""
     try:
-        from naviertwin.core.digital_twin.manifest import build_manifest, save_manifest
-        from naviertwin.core.digital_twin.pipeline import NavierTwinPipeline
-        from naviertwin.core.digital_twin.pipeline_checkpoint import save_pipeline_state
-        from naviertwin.core.digital_twin.twin_engine import TwinEngine
-
-        snapshots, selected_field, source_meta = _load_build_twin_snapshots(
+        payload = _build_twin_payload(
             input_path=input_path,
             csv_snapshots=csv_snapshots,
             field=field,
             field_column=field_column,
-        )
-        if snapshots.ndim != 2:
-            raise ValueError(f"snapshots must be 2D, got shape {snapshots.shape}")
-        n_features, n_snapshots = snapshots.shape
-        if n_snapshots < 4:
-            raise ValueError("build-twin requires at least 4 snapshots")
-        if n_modes < 1:
-            raise ValueError("n-modes must be positive")
-
-        params_array, parameter_contract = _load_build_twin_params(
-            params_path=params,
+            params=params,
             param_columns=param_columns,
-            n_snapshots=n_snapshots,
-        )
-        val_count = min(max(1, validation_count), max(1, n_snapshots // 3))
-        train_count = n_snapshots - val_count
-        if train_count < 3:
-            raise ValueError("not enough training snapshots after validation split")
-
-        train_snapshots = snapshots[:, :train_count]
-        val_snapshots = snapshots[:, train_count:]
-        train_params = params_array[:train_count]
-        val_params = params_array[train_count:]
-
-        pipe = NavierTwinPipeline(
-            reducer_kind=reducer,
-            n_modes=n_modes,
-            surrogate_kind=surrogate,
-        )
-        pipe.load_snapshots(train_snapshots, field_name=selected_field)
-        pipe.reduce()
-        pipe.fit_surrogate(train_params)
-        y_true = pipe.state.reducer.encode(val_snapshots)
-        metrics = pipe.validate(val_params, y_true)
-
-        output_dir = Path(outdir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        metrics_path = output_dir / "metrics.json"
-        checkpoint_path = output_dir / "pipeline.h5"
-        engine_path = output_dir / "engine.pkl"
-        manifest_path = output_dir / "manifest.json"
-        report_path = output_dir / "report.html"
-
-        save_pipeline_state(pipe, checkpoint_path)
-        engine = TwinEngine.from_fitted_components(pipe.state.reducer, pipe.state.surrogate)
-        engine.save(engine_path)
-        pipe.export_report(str(report_path), project="NavierTwin Build Twin")
-
-        payload = {
-            "status": "ok",
-            "artifacts": {
-                "checkpoint": str(checkpoint_path),
-                "engine": str(engine_path),
-                "manifest": str(manifest_path),
-                "metrics": str(metrics_path),
-                "report": str(report_path),
-            },
-            "source": source_meta,
-            "field": selected_field,
-            "training": {
-                "reducer": reducer,
-                "n_modes": int(n_modes),
-                "surrogate": surrogate,
-                "n_features": int(n_features),
-                "n_snapshots": int(n_snapshots),
-                "train_count": int(train_count),
-                "validation_count": int(val_count),
-                "param_dim": int(params_array.shape[1]),
-                "parameter_contract": parameter_contract,
-            },
-            "metrics": metrics,
-        }
-        metrics_path.write_text(
-            json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-            encoding="utf-8",
-        )
-
-        artifact_integrity = _artifact_integrity_map(
-            {
-                "metrics": metrics_path,
-                "checkpoint": checkpoint_path,
-                "engine": engine_path,
-                "report": report_path,
-            }
-        )
-        manifest = build_manifest(
+            outdir=outdir,
             reducer=reducer,
             n_modes=n_modes,
             surrogate=surrogate,
-            metrics=metrics,
-            extra={
-                "command": "build-twin",
-                "manifest_schema": "naviertwin-build-twin-v1",
-                "source": source_meta,
-                "field": selected_field,
-                "n_features": n_features,
-                "n_snapshots": n_snapshots,
-                "train_count": train_count,
-                "validation_count": val_count,
-                "param_dim": int(params_array.shape[1]),
-                "parameter_contract": parameter_contract,
-                "has_engine": True,
-                "engine_path": str(engine_path),
-                "artifact_integrity": artifact_integrity,
-            },
+            validation_count=validation_count,
         )
-        save_manifest(manifest, manifest_path)
     except (ImportError, RuntimeError, OSError, ValueError, KeyError) as exc:
         print(f"build-twin error: {exc}", file=sys.stderr)
         return 2
@@ -1165,12 +1196,14 @@ def _run_build_twin(
     if as_json:
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
     else:
+        training = payload["training"]
+        metrics = payload["metrics"]
         print(
             "build-twin 완료: "
-            f"field={selected_field}, snapshots={n_snapshots}, "
+            f"field={payload['field']}, snapshots={training['n_snapshots']}, "
             f"rmse={metrics.get('rmse', float('nan')):.6g}"
         )
-        print(f"artifacts: {output_dir}")
+        print(f"artifacts: {Path(outdir)}")
     return 0
 
 

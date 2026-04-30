@@ -18,6 +18,7 @@ def test_advertised_rest_endpoints_return_json() -> None:
         for route in app.routes
         if hasattr(route, "path") and hasattr(route, "endpoint")
     }
+    assert "/twin/build" in route_map
     assert "/twin/predict" in route_map
     assert "/twin/benchmark" in route_map
 
@@ -43,6 +44,83 @@ def test_advertised_rest_endpoints_return_json() -> None:
     assert lbm_payload["n_snapshots"] == 2
     assert lbm_payload["shape"] == [2, 6, 6, 3]
     assert abs(lbm_payload["ux_max"]) < 1.0
+
+
+def _write_snapshot_series(tmp_path, *, steps: int = 8, width: int = 6) -> list:
+    paths = []
+    for step in range(steps):
+        path = tmp_path / f"snapshot_{step:03d}.csv"
+        rows = ["x,U"]
+        for index in range(width):
+            rows.append(f"{index},{step * 0.2 + index * 0.01}")
+        path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        paths.append(path)
+    return paths
+
+
+def test_twin_build_endpoint_creates_predictable_artifacts(tmp_path) -> None:
+    from naviertwin.api import TwinBuildReq, TwinPredictReq, create_app
+
+    paths = _write_snapshot_series(tmp_path)
+    outdir = tmp_path / "twin"
+    app = create_app()
+    route_map = {
+        route.path: route.endpoint
+        for route in app.routes
+        if hasattr(route, "path") and hasattr(route, "endpoint")
+    }
+
+    payload = route_map["/twin/build"](
+        TwinBuildReq(
+            csv_snapshots=",".join(str(path) for path in paths),
+            field_column="U",
+            outdir=str(outdir),
+            n_modes=2,
+            surrogate="rbf",
+            validation_count=2,
+        )
+    )
+
+    assert payload["status"] == "ok"
+    assert payload["field"] == "U"
+    assert payload["training"]["n_snapshots"] == len(paths)
+    assert payload["training"]["validation_count"] == 2
+    assert payload["training"]["parameter_contract"]["names"] == ["normalized_index"]
+    assert (outdir / "engine.pkl").exists()
+    assert (outdir / "manifest.json").exists()
+    assert (outdir / "metrics.json").exists()
+
+    predict_payload = route_map["/twin/predict"](
+        TwinPredictReq(artifacts_dir=str(outdir), params=[0.25])
+    )
+    assert predict_payload["status"] == "ok"
+    assert predict_payload["artifacts_dir"] == str(outdir)
+    assert predict_payload["prediction_shape"] == [6]
+
+
+def test_twin_build_endpoint_reports_invalid_source_contract(tmp_path) -> None:
+    from fastapi import HTTPException
+
+    from naviertwin.api import TwinBuildReq, create_app
+
+    app = create_app()
+    route_map = {
+        route.path: route.endpoint
+        for route in app.routes
+        if hasattr(route, "path") and hasattr(route, "endpoint")
+    }
+
+    with pytest.raises(HTTPException) as exc:
+        route_map["/twin/build"](
+            TwinBuildReq(
+                input_path=str(tmp_path / "case.vtu"),
+                csv_snapshots=str(tmp_path / "snapshot.csv"),
+                outdir=str(tmp_path / "twin"),
+            )
+        )
+
+    assert exc.value.status_code == 400
+    assert "exactly one of input_path or csv_snapshots" in str(exc.value.detail)
 
 
 def test_twin_predict_endpoint_serves_saved_engine(tmp_path) -> None:

@@ -4,6 +4,7 @@
     - GET  /health                        : 헬스 체크
     - POST /reduce                         : reducer 수행, 모드/에너지 반환
     - POST /reduce/pod                     : POD 전용(하위 호환)
+    - POST /twin/build                     : CFD/CSV dataset → TwinEngine 산출물 생성
     - POST /twin/predict                   : 저장/배포된 TwinEngine 예측
     - POST /twin/benchmark                 : TwinEngine 예측 latency/SLO 측정
     - POST /analytic/couette              : Couette 해석해 샘플
@@ -54,6 +55,19 @@ if _HAS_FASTAPI:
         n_initial: int = 5
         max_iter: int = 10
         problem: str = "quadratic"
+
+    class TwinBuildReq(BaseModel):
+        input_path: Optional[str] = None
+        csv_snapshots: Optional[str] = None
+        field: Optional[str] = None
+        field_column: Optional[str] = None
+        params: Optional[str] = None
+        param_columns: Optional[str] = None
+        outdir: str
+        reducer: str = "pod"
+        n_modes: int = 3
+        surrogate: str = "rbf"
+        validation_count: int = 3
 
     class TwinPredictReq(BaseModel):
         engine_path: Optional[str] = None
@@ -158,6 +172,38 @@ def create_app() -> Any:
         # 하위 호환: 기존 요청은 reducer_kind 없이 /reduce/pod를 호출한다.
         req.reducer_kind = "pod"
         return _run_reducer(req)
+
+    @app.post("/twin/build")
+    def twin_build(req: TwinBuildReq = Body(...)) -> dict[str, Any]:
+        from naviertwin.main import _build_twin_payload
+
+        try:
+            sources = [bool(req.input_path), bool(req.csv_snapshots)]
+            if sum(sources) != 1:
+                raise ValueError("exactly one of input_path or csv_snapshots is required")
+            if not req.outdir.strip():
+                raise ValueError("outdir is required")
+            if req.reducer not in {"pod", "incremental_pod", "mrpod", "ae"}:
+                raise ValueError(f"unsupported reducer: {req.reducer}")
+            if req.surrogate not in {"kriging", "rbf"}:
+                raise ValueError(f"unsupported surrogate: {req.surrogate}")
+            payload = _build_twin_payload(
+                input_path=req.input_path,
+                csv_snapshots=req.csv_snapshots,
+                field=req.field,
+                field_column=req.field_column,
+                params=req.params,
+                param_columns=req.param_columns,
+                outdir=req.outdir,
+                reducer=req.reducer,
+                n_modes=req.n_modes,
+                surrogate=req.surrogate,
+                validation_count=req.validation_count,
+            )
+        except (ImportError, KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
+            raise fastapi.HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return payload
 
     @app.post("/twin/predict")
     def twin_predict(req: TwinPredictReq = Body(...)) -> dict[str, Any]:
@@ -291,6 +337,7 @@ __all__ = [
     "LBMReq",
     "PODReq",
     "PoiseuilleReq",
+    "TwinBuildReq",
     "TwinBenchmarkReq",
     "TwinPredictReq",
     "app",
