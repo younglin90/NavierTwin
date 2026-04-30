@@ -7,6 +7,7 @@
     - POST /twin/build                     : CFD/CSV dataset → TwinEngine 산출물 생성
     - POST /twin/predict                   : 저장/배포된 TwinEngine 예측
     - POST /twin/benchmark                 : TwinEngine 예측 latency/SLO 측정
+    - POST /twin/package                   : TwinEngine 산출물 → 전달 ZIP 패키징
     - POST /twin/package/accept            : 전달 ZIP 검증/예측/latency 수락 검사
     - POST /analytic/couette              : Couette 해석해 샘플
     - POST /analytic/poiseuille_2d        : Poiseuille 2D 해석해 샘플
@@ -100,6 +101,17 @@ if _HAS_FASTAPI:
         max_p99_ms: Optional[float] = None
         min_throughput_hz: Optional[float] = None
         skip_benchmark: bool = False
+
+    class TwinPackageCreateReq(BaseModel):
+        artifacts_dir: str
+        output: str
+        include_validation: Optional[str] = None
+        max_mean_ms: Optional[float] = None
+        max_p50_ms: Optional[float] = None
+        max_p95_ms: Optional[float] = 100.0
+        max_p99_ms: Optional[float] = None
+        min_throughput_hz: Optional[float] = 10.0
+        no_latency_slo: bool = False
 
     class LBMReq(BaseModel):
         nx: int = 32
@@ -301,6 +313,31 @@ def create_app() -> Any:
 
         return payload
 
+    @app.post("/twin/package")
+    def twin_package(req: TwinPackageCreateReq = Body(...)) -> dict[str, Any]:
+        from naviertwin.main import _package_twin_payload
+
+        try:
+            if not req.artifacts_dir.strip():
+                raise ValueError("artifacts_dir is required")
+            if not req.output.strip():
+                raise ValueError("output is required")
+            payload = _package_twin_payload(
+                artifacts_dir=req.artifacts_dir,
+                output=req.output,
+                include_validation=req.include_validation,
+                max_mean_ms=req.max_mean_ms,
+                max_p50_ms=req.max_p50_ms,
+                max_p95_ms=req.max_p95_ms,
+                max_p99_ms=req.max_p99_ms,
+                min_throughput_hz=req.min_throughput_hz,
+                no_latency_slo=req.no_latency_slo,
+            )
+        except (ImportError, KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
+            raise fastapi.HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return payload
+
     @app.post("/twin/package/accept")
     def twin_package_accept(req: TwinPackageAcceptReq = Body(...)) -> dict[str, Any]:
         import tempfile
@@ -413,6 +450,7 @@ __all__ = [
     "TwinBuildReq",
     "TwinBenchmarkReq",
     "TwinPackageAcceptReq",
+    "TwinPackageCreateReq",
     "TwinPredictReq",
     "app",
     "create_app",

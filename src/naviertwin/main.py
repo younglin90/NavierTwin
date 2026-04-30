@@ -1786,6 +1786,59 @@ def _align_twin_prediction(prediction: Any, expected_shape: tuple[int, int]) -> 
     )
 
 
+def _package_twin_payload(
+    *,
+    artifacts_dir: str,
+    output: str,
+    include_validation: str | None,
+    max_mean_ms: float | None = None,
+    max_p50_ms: float | None = None,
+    max_p95_ms: float | None = 100.0,
+    max_p99_ms: float | None = None,
+    min_throughput_hz: float | None = 10.0,
+    no_latency_slo: bool = False,
+) -> dict[str, Any]:
+    """build-twin 산출물을 고객 전달 ZIP payload로 패키징한다."""
+    from naviertwin.utils.workflow.artifact_zip import read_manifest, zip_artifacts
+
+    root = Path(artifacts_dir).expanduser()
+    if not root.exists() or not root.is_dir():
+        raise FileNotFoundError(f"artifacts-dir not found: {root}")
+
+    source_integrity = _verify_twin_source_integrity(root)
+    files = _collect_twin_package_artifacts(root, include_validation=include_validation)
+    output_path = Path(output).expanduser()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    latency_slo = None
+    if not no_latency_slo:
+        latency_slo = _build_latency_slo_policy(
+            max_mean_ms=max_mean_ms,
+            max_p50_ms=max_p50_ms,
+            max_p95_ms=max_p95_ms,
+            max_p99_ms=max_p99_ms,
+            min_throughput_hz=min_throughput_hz,
+            source="package-twin",
+        )
+    delivery_entries = _build_twin_delivery_entries(
+        root,
+        files=files,
+        source_integrity=source_integrity,
+        latency_slo=latency_slo,
+    )
+    zip_artifacts(files, output_path, extra_entries=delivery_entries)
+    zip_manifest = read_manifest(output_path)
+    return {
+        "status": "ok",
+        "output": str(output_path),
+        "artifacts_dir": str(root),
+        "files": [path.name for path in files],
+        "generated_entries": list(delivery_entries),
+        "source_integrity": source_integrity,
+        "latency_slo": latency_slo,
+        "manifest_entries": zip_manifest,
+    }
+
+
 def _run_package_twin(
     *,
     artifacts_dir: str,
@@ -1801,44 +1854,17 @@ def _run_package_twin(
 ) -> int:
     """build-twin 산출물을 무결성 manifest가 포함된 ZIP으로 패키징한다."""
     try:
-        from naviertwin.utils.workflow.artifact_zip import read_manifest, zip_artifacts
-
-        root = Path(artifacts_dir).expanduser()
-        if not root.exists() or not root.is_dir():
-            raise FileNotFoundError(f"artifacts-dir not found: {root}")
-
-        source_integrity = _verify_twin_source_integrity(root)
-        files = _collect_twin_package_artifacts(root, include_validation=include_validation)
-        output_path = Path(output).expanduser()
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        latency_slo = None
-        if not no_latency_slo:
-            latency_slo = _build_latency_slo_policy(
-                max_mean_ms=max_mean_ms,
-                max_p50_ms=max_p50_ms,
-                max_p95_ms=max_p95_ms,
-                max_p99_ms=max_p99_ms,
-                min_throughput_hz=min_throughput_hz,
-                source="package-twin",
-            )
-        delivery_entries = _build_twin_delivery_entries(
-            root,
-            files=files,
-            source_integrity=source_integrity,
-            latency_slo=latency_slo,
+        payload = _package_twin_payload(
+            artifacts_dir=artifacts_dir,
+            output=output,
+            include_validation=include_validation,
+            max_mean_ms=max_mean_ms,
+            max_p50_ms=max_p50_ms,
+            max_p95_ms=max_p95_ms,
+            max_p99_ms=max_p99_ms,
+            min_throughput_hz=min_throughput_hz,
+            no_latency_slo=no_latency_slo,
         )
-        zip_artifacts(files, output_path, extra_entries=delivery_entries)
-        zip_manifest = read_manifest(output_path)
-        payload = {
-            "status": "ok",
-            "output": str(output_path),
-            "artifacts_dir": str(root),
-            "files": [path.name for path in files],
-            "generated_entries": list(delivery_entries),
-            "source_integrity": source_integrity,
-            "latency_slo": latency_slo,
-            "manifest_entries": zip_manifest,
-        }
     except (ImportError, RuntimeError, OSError, ValueError, KeyError) as exc:
         print(f"package-twin error: {exc}", file=sys.stderr)
         return 2
@@ -1848,7 +1874,7 @@ def _run_package_twin(
     else:
         print(
             "package-twin 완료: "
-            f"files={len(payload['files'])}, output={output_path}"
+            f"files={len(payload['files'])}, output={payload['output']}"
         )
     return 0
 

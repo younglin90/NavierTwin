@@ -21,6 +21,7 @@ def test_advertised_rest_endpoints_return_json() -> None:
     assert "/twin/build" in route_map
     assert "/twin/predict" in route_map
     assert "/twin/benchmark" in route_map
+    assert "/twin/package" in route_map
     assert "/twin/package/accept" in route_map
 
     assert route_map["/health"]() == {"status": "ok", "service": "naviertwin"}
@@ -60,8 +61,7 @@ def _write_snapshot_series(tmp_path, *, steps: int = 8, width: int = 6) -> list:
 
 
 def _build_packaged_twin(tmp_path):
-    from naviertwin.api import TwinBuildReq, create_app
-    from naviertwin.main import _run_package_twin
+    from naviertwin.api import TwinBuildReq, TwinPackageCreateReq, create_app
 
     paths = _write_snapshot_series(tmp_path)
     outdir = tmp_path / "twin"
@@ -83,15 +83,128 @@ def _build_packaged_twin(tmp_path):
         )
     )
     assert build_payload["status"] == "ok"
-    package_code = _run_package_twin(
+    package_payload = route_map["/twin/package"](
+        TwinPackageCreateReq(
+            artifacts_dir=str(outdir),
+            output=str(package_path),
+            no_latency_slo=True,
+        )
+    )
+    assert package_payload["status"] == "ok"
+    assert package_payload["output"] == str(package_path)
+    assert package_payload["latency_slo"] is None
+    return app, route_map, package_path
+
+
+def test_twin_package_endpoint_creates_delivery_zip(tmp_path) -> None:
+    import zipfile
+
+    from naviertwin.api import TwinBuildReq, TwinPackageCreateReq, create_app
+
+    paths = _write_snapshot_series(tmp_path)
+    outdir = tmp_path / "twin"
+    package_path = tmp_path / "delivery.zip"
+    app = create_app()
+    route_map = {
+        route.path: route.endpoint
+        for route in app.routes
+        if hasattr(route, "path") and hasattr(route, "endpoint")
+    }
+    build_payload = route_map["/twin/build"](
+        TwinBuildReq(
+            csv_snapshots=",".join(str(path) for path in paths),
+            field_column="U",
+            outdir=str(outdir),
+            n_modes=2,
+            surrogate="rbf",
+            validation_count=2,
+        )
+    )
+    assert build_payload["status"] == "ok"
+
+    payload = route_map["/twin/package"](
+        TwinPackageCreateReq(
+            artifacts_dir=str(outdir),
+            output=str(package_path),
+            max_p95_ms=123.0,
+            min_throughput_hz=4.5,
+        )
+    )
+
+    assert payload["status"] == "ok"
+    assert payload["output"] == str(package_path)
+    assert payload["latency_slo"]["thresholds"]["max_p95_ms"] == 123.0
+    assert payload["latency_slo"]["thresholds"]["min_throughput_hz"] == 4.5
+    assert {"README.txt", "delivery.json", "sample_params.csv"} <= set(
+        payload["generated_entries"]
+    )
+    assert {"engine.pkl", "manifest.json"} <= set(payload["files"])
+    assert package_path.exists()
+    with zipfile.ZipFile(package_path) as archive:
+        assert {"MANIFEST.json", "delivery.json", "README.txt", "engine.pkl", "manifest.json"} <= set(
+            archive.namelist()
+        )
+
+
+def test_twin_package_endpoint_reports_invalid_artifacts_dir(tmp_path) -> None:
+    from fastapi import HTTPException
+
+    from naviertwin.api import TwinPackageCreateReq, create_app
+
+    app = create_app()
+    route_map = {
+        route.path: route.endpoint
+        for route in app.routes
+        if hasattr(route, "path") and hasattr(route, "endpoint")
+    }
+
+    with pytest.raises(HTTPException) as exc:
+        route_map["/twin/package"](
+            TwinPackageCreateReq(
+                artifacts_dir=str(tmp_path / "missing"),
+                output=str(tmp_path / "missing.zip"),
+            )
+        )
+
+    assert exc.value.status_code == 400
+    assert "artifacts-dir not found" in str(exc.value.detail)
+
+
+def test_twin_package_cli_text_mode_uses_payload_output(tmp_path, capsys) -> None:
+    from naviertwin.api import TwinBuildReq, create_app
+    from naviertwin.main import _run_package_twin
+
+    paths = _write_snapshot_series(tmp_path)
+    outdir = tmp_path / "twin"
+    package_path = tmp_path / "cli-package.zip"
+    app = create_app()
+    route_map = {
+        route.path: route.endpoint
+        for route in app.routes
+        if hasattr(route, "path") and hasattr(route, "endpoint")
+    }
+    route_map["/twin/build"](
+        TwinBuildReq(
+            csv_snapshots=",".join(str(path) for path in paths),
+            field_column="U",
+            outdir=str(outdir),
+            n_modes=2,
+            surrogate="rbf",
+            validation_count=2,
+        )
+    )
+
+    code = _run_package_twin(
         artifacts_dir=str(outdir),
         output=str(package_path),
         include_validation=None,
         no_latency_slo=True,
-        as_json=True,
+        as_json=False,
     )
-    assert package_code == 0
-    return app, route_map, package_path
+
+    output = capsys.readouterr().out
+    assert code == 0
+    assert f"output={package_path}" in output
 
 
 def test_twin_build_endpoint_creates_predictable_artifacts(tmp_path) -> None:
