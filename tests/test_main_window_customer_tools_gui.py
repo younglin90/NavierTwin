@@ -343,14 +343,26 @@ def test_benchmark_twin_from_artifacts_dir_path_runs_cli_and_surfaces_result(
 
     win = MainWindow(confirm_on_close=False)
     qtbot.addWidget(win)
-    calls: list[tuple[Path, str, int, int, Path | None]] = []
+    calls: list[tuple[Path, str, int, int, float | None, float | None, Path | None]] = []
     messages: list[tuple[str, str]] = []
 
     monkeypatch.setattr(
         win,
         "_run_benchmark_twin_artifacts_cli",
-        lambda artifacts_dir, *, params, params_csv, warmup, repeat, output: (
-            calls.append((artifacts_dir, params, warmup, repeat, output)) or 0
+        lambda artifacts_dir, *, params, params_csv, warmup, repeat, max_p95_ms,
+        min_throughput_hz, output: (
+            calls.append(
+                (
+                    artifacts_dir,
+                    params,
+                    warmup,
+                    repeat,
+                    max_p95_ms,
+                    min_throughput_hz,
+                    output,
+                )
+            )
+            or 0
         ),
     )
     monkeypatch.setattr(
@@ -367,10 +379,12 @@ def test_benchmark_twin_from_artifacts_dir_path_runs_cli_and_surfaces_result(
         params_csv=None,
         warmup=1,
         repeat=3,
+        max_p95_ms=100.0,
+        min_throughput_hz=10.0,
         output=output,
     )
 
-    assert calls == [(artifacts_dir, "0.25", 1, 3, output)]
+    assert calls == [(artifacts_dir, "0.25", 1, 3, 100.0, 10.0, output)]
     assert messages
     assert messages[0][0] == "배포 트윈 지연시간 측정 완료"
     assert str(output) in messages[0][1]
@@ -401,6 +415,8 @@ def test_benchmark_twin_from_artifacts_dir_path_surfaces_failure(
         params_csv=None,
         warmup=1,
         repeat=3,
+        max_p95_ms=None,
+        min_throughput_hz=None,
         output=None,
     )
 
@@ -419,13 +435,28 @@ def test_benchmark_twin_from_artifacts_dir_path_accepts_params_csv(
 
     win = MainWindow(confirm_on_close=False)
     qtbot.addWidget(win)
-    calls: list[tuple[Path, str | None, Path | None, int, int, Path | None]] = []
+    calls: list[
+        tuple[Path, str | None, Path | None, int, int, float | None, float | None, Path | None]
+    ] = []
 
     monkeypatch.setattr(
         win,
         "_run_benchmark_twin_artifacts_cli",
-        lambda artifacts_dir, *, params, params_csv, warmup, repeat, output: (
-            calls.append((artifacts_dir, params, params_csv, warmup, repeat, output)) or 0
+        lambda artifacts_dir, *, params, params_csv, warmup, repeat, max_p95_ms,
+        min_throughput_hz, output: (
+            calls.append(
+                (
+                    artifacts_dir,
+                    params,
+                    params_csv,
+                    warmup,
+                    repeat,
+                    max_p95_ms,
+                    min_throughput_hz,
+                    output,
+                )
+            )
+            or 0
         ),
     )
     monkeypatch.setattr(QMessageBox, "information", lambda *args: None)
@@ -437,10 +468,64 @@ def test_benchmark_twin_from_artifacts_dir_path_accepts_params_csv(
         params_csv=params_csv,
         warmup=1,
         repeat=3,
+        max_p95_ms=None,
+        min_throughput_hz=None,
         output=None,
     )
 
-    assert calls == [(tmp_path / "deployed-twin", None, params_csv, 1, 3, None)]
+    assert calls == [(tmp_path / "deployed-twin", None, params_csv, 1, 3, None, None, None)]
+
+
+def test_benchmark_twin_dialog_defaults_to_no_slo_gate(
+    qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
+
+    from naviertwin.gui.main_window import MainWindow
+
+    win = MainWindow(confirm_on_close=False)
+    qtbot.addWidget(win)
+    dialogs: list[tuple[str, str]] = []
+    calls: list[tuple[float | None, float | None]] = []
+
+    monkeypatch.setattr(
+        QFileDialog,
+        "getExistingDirectory",
+        lambda *args, **kwargs: str(tmp_path / "deployed-twin"),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.No,
+    )
+
+    def fake_get_text(parent, title, label, *args, **kwargs):
+        dialogs.append((title, str(kwargs.get("text", ""))))
+        if title == "벤치마크 파라미터":
+            return "0.25", True
+        if title == "벤치마크 반복":
+            return "1,3", True
+        if title == "벤치마크 SLO":
+            return "", True
+        raise AssertionError(f"unexpected dialog: {title}")
+
+    monkeypatch.setattr(QInputDialog, "getText", fake_get_text)
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: (str(tmp_path / "latency.json"), ""),
+    )
+    monkeypatch.setattr(
+        win,
+        "_benchmark_twin_from_artifacts_dir_path",
+        lambda artifacts_dir, *, params, params_csv, warmup, repeat, max_p95_ms,
+        min_throughput_hz, output: calls.append((max_p95_ms, min_throughput_hz)),
+    )
+
+    win._benchmark_twin_from_artifacts_dir()
+
+    assert ("벤치마크 SLO", "") in dialogs
+    assert calls == [(None, None)]
 
 
 def test_validate_twin_from_paths_runs_cli_and_surfaces_result(
@@ -540,6 +625,16 @@ def test_parse_benchmark_counts() -> None:
     assert MainWindow._parse_benchmark_counts(",5") == (2, 5)
     with pytest.raises(ValueError):
         MainWindow._parse_benchmark_counts("1,0")
+
+
+def test_parse_benchmark_slo() -> None:
+    from naviertwin.gui.main_window import MainWindow
+
+    assert MainWindow._parse_benchmark_slo("") == (None, None)
+    assert MainWindow._parse_benchmark_slo("100,10") == (100.0, 10.0)
+    assert MainWindow._parse_benchmark_slo(",5") == (None, 5.0)
+    with pytest.raises(ValueError):
+        MainWindow._parse_benchmark_slo("0,10")
 
 
 def test_validate_twin_from_artifacts_dir_paths_runs_cli_and_surfaces_result(

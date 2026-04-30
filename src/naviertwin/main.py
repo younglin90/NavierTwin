@@ -167,6 +167,16 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_benchmark_twin.add_argument("--warmup", type=int, default=2, help="측정 전 warmup 예측 횟수")
     p_benchmark_twin.add_argument("--repeat", type=int, default=20, help="latency 측정 반복 횟수")
+    p_benchmark_twin.add_argument("--max-mean-ms", type=float, default=None, help="허용 최대 mean latency(ms)")
+    p_benchmark_twin.add_argument("--max-p50-ms", type=float, default=None, help="허용 최대 p50 latency(ms)")
+    p_benchmark_twin.add_argument("--max-p95-ms", type=float, default=None, help="허용 최대 p95 latency(ms)")
+    p_benchmark_twin.add_argument("--max-p99-ms", type=float, default=None, help="허용 최대 p99 latency(ms)")
+    p_benchmark_twin.add_argument(
+        "--min-throughput-hz",
+        type=float,
+        default=None,
+        help="허용 최소 예측 처리량(Hz)",
+    )
     p_benchmark_twin.add_argument("--output", default=None, help="latency JSON 리포트 저장 경로")
     p_benchmark_twin.add_argument("--json", dest="as_json", action="store_true", help="JSON으로 출력")
 
@@ -416,6 +426,11 @@ def main() -> None:
                 param_columns=args.param_columns,
                 warmup=args.warmup,
                 repeat=args.repeat,
+                max_mean_ms=args.max_mean_ms,
+                max_p50_ms=args.max_p50_ms,
+                max_p95_ms=args.max_p95_ms,
+                max_p99_ms=args.max_p99_ms,
+                min_throughput_hz=args.min_throughput_hz,
                 output=args.output,
                 as_json=args.as_json,
             )
@@ -1157,6 +1172,11 @@ def _run_benchmark_twin(
     param_columns: str | None,
     warmup: int,
     repeat: int,
+    max_mean_ms: float | None = None,
+    max_p50_ms: float | None = None,
+    max_p95_ms: float | None = None,
+    max_p99_ms: float | None = None,
+    min_throughput_hz: float | None = None,
     output: str | None,
     as_json: bool,
 ) -> int:
@@ -1205,8 +1225,18 @@ def _run_benchmark_twin(
             "p99": float(np.percentile(durations, 99)),
             "max": float(np.max(durations)),
         }
+        throughput_hz = float(1000.0 / mean_ms) if mean_ms > 0 else None
+        acceptance = _benchmark_twin_acceptance(
+            latency,
+            throughput_hz=throughput_hz,
+            max_mean_ms=max_mean_ms,
+            max_p50_ms=max_p50_ms,
+            max_p95_ms=max_p95_ms,
+            max_p99_ms=max_p99_ms,
+            min_throughput_hz=min_throughput_hz,
+        )
         payload = {
-            "status": "ok",
+            "status": "ok" if acceptance["passed"] else "failed",
             "engine": str(engine_file),
             "artifacts_dir": str(Path(artifacts_dir).expanduser()) if artifacts_dir else None,
             "input_shape": list(params_array.shape),
@@ -1215,7 +1245,8 @@ def _run_benchmark_twin(
             "repeat": int(repeat),
             "latency_ms": latency,
             "samples_ms": durations_ms,
-            "throughput_hz": float(1000.0 / mean_ms) if mean_ms > 0 else None,
+            "throughput_hz": throughput_hz,
+            "acceptance": acceptance,
         }
         output_path = Path(output).expanduser() if output else None
         if output_path is not None:
@@ -1236,9 +1267,62 @@ def _run_benchmark_twin(
             f"repeat={repeat}, p50={latency['p50']:.6g} ms, "
             f"p95={latency['p95']:.6g} ms"
         )
+        if not acceptance["passed"]:
+            print("acceptance: failed")
         if output_path is not None:
             print(f"output: {output_path}")
-    return 0
+    return 0 if acceptance["passed"] else 1
+
+
+def _benchmark_twin_acceptance(
+    latency_ms: dict[str, float],
+    *,
+    throughput_hz: float | None,
+    max_mean_ms: float | None,
+    max_p50_ms: float | None,
+    max_p95_ms: float | None,
+    max_p99_ms: float | None,
+    min_throughput_hz: float | None,
+) -> dict[str, Any]:
+    """benchmark-twin SLO 설정을 pass/fail 결과로 변환한다."""
+    checks: list[dict[str, Any]] = []
+    latency_specs = [
+        ("latency_ms.mean", "mean", max_mean_ms),
+        ("latency_ms.p50", "p50", max_p50_ms),
+        ("latency_ms.p95", "p95", max_p95_ms),
+        ("latency_ms.p99", "p99", max_p99_ms),
+    ]
+    for metric, key, threshold in latency_specs:
+        if threshold is None:
+            continue
+        value = float(latency_ms[key])
+        checks.append(
+            {
+                "metric": metric,
+                "op": "<=",
+                "threshold": float(threshold),
+                "value": value,
+                "passed": bool(value <= threshold),
+            }
+        )
+
+    if min_throughput_hz is not None:
+        value = float(throughput_hz) if throughput_hz is not None else 0.0
+        checks.append(
+            {
+                "metric": "throughput_hz",
+                "op": ">=",
+                "threshold": float(min_throughput_hz),
+                "value": value,
+                "passed": bool(value >= min_throughput_hz),
+            }
+        )
+
+    return {
+        "configured": bool(checks),
+        "passed": all(check["passed"] for check in checks),
+        "checks": checks,
+    }
 
 
 def _run_validate_twin(
@@ -1462,7 +1546,8 @@ def _build_twin_delivery_entries(
     )
     benchmark_command = (
         "naviertwin benchmark-twin --artifacts-dir <extracted-dir> --params 0.25 "
-        "--warmup 2 --repeat 20 --output latency.json --json"
+        "--warmup 2 --repeat 20 --max-p95-ms 100 --min-throughput-hz 10 "
+        "--output latency.json --json"
     )
     validate_command = (
         "naviertwin validate-twin --artifacts-dir <extracted-dir> "
@@ -1516,6 +1601,7 @@ def _build_twin_delivery_entries(
             f"   {predict_command}",
             "3. Benchmark prediction latency:",
             f"   {benchmark_command}",
+            "   Adjust --max-p95-ms/--min-throughput-hz to your deployment SLO.",
             "4. Validate against held-out snapshots:",
             f"   {validate_command}",
             "",

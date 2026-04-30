@@ -1047,6 +1047,21 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "배포 트윈 지연시간 측정 실패", str(exc))
             return
 
+        slo_text, ok = QInputDialog.getText(
+            self,
+            "벤치마크 SLO",
+            "max_p95_ms,min_throughput_hz (비우면 게이트 없음):",
+            text="",
+        )
+        if not ok:
+            return
+        try:
+            max_p95_ms, min_throughput_hz = self._parse_benchmark_slo(slo_text)
+        except ValueError as exc:
+            self._set_status("배포 트윈 지연시간 측정 실패")
+            QMessageBox.warning(self, "배포 트윈 지연시간 측정 실패", str(exc))
+            return
+
         output, _ = QFileDialog.getSaveFileName(
             self,
             "지연시간 JSON 저장",
@@ -1059,6 +1074,8 @@ class MainWindow(QMainWindow):
             params_csv=params_csv,
             warmup=warmup,
             repeat=repeat,
+            max_p95_ms=max_p95_ms,
+            min_throughput_hz=min_throughput_hz,
             output=Path(output) if output else None,
         )
 
@@ -1070,6 +1087,8 @@ class MainWindow(QMainWindow):
         params_csv: Path | None = None,
         warmup: int,
         repeat: int,
+        max_p95_ms: float | None = None,
+        min_throughput_hz: float | None = None,
         output: Path | None,
     ) -> None:
         """GUI에서 benchmark-twin --artifacts-dir 워크플로우를 실행한다."""
@@ -1080,6 +1099,8 @@ class MainWindow(QMainWindow):
                 params_csv=params_csv,
                 warmup=warmup,
                 repeat=repeat,
+                max_p95_ms=max_p95_ms,
+                min_throughput_hz=min_throughput_hz,
                 output=output,
             )
         except Exception as exc:  # noqa: BLE001
@@ -1111,6 +1132,8 @@ class MainWindow(QMainWindow):
         params_csv: Path | None = None,
         warmup: int,
         repeat: int,
+        max_p95_ms: float | None = None,
+        min_throughput_hz: float | None = None,
         output: Path | None,
     ) -> int:
         """테스트에서 대체 가능한 benchmark-twin --artifacts-dir 실행 래퍼."""
@@ -1124,6 +1147,11 @@ class MainWindow(QMainWindow):
             param_columns=None,
             warmup=warmup,
             repeat=repeat,
+            max_mean_ms=None,
+            max_p50_ms=None,
+            max_p95_ms=max_p95_ms,
+            max_p99_ms=None,
+            min_throughput_hz=min_throughput_hz,
             output=str(output) if output is not None else None,
             as_json=False,
         )
@@ -1444,6 +1472,32 @@ class MainWindow(QMainWindow):
         if repeat < 1:
             raise ValueError("repeat는 1 이상이어야 합니다.")
         return warmup, repeat
+
+    @staticmethod
+    def _parse_benchmark_slo(value: str) -> tuple[float | None, float | None]:
+        """GUI benchmark SLO 입력 문자열을 p95/throughput 게이트로 변환한다."""
+        stripped = value.strip()
+        if not stripped:
+            return None, None
+        parts = [part.strip() for part in stripped.split(",")]
+        if len(parts) > 2:
+            raise ValueError("SLO는 max_p95_ms,min_throughput_hz 순서로 최대 2개입니다.")
+
+        parsed: list[float | None] = []
+        for part in parts:
+            if not part:
+                parsed.append(None)
+                continue
+            try:
+                number = float(part)
+            except ValueError as exc:
+                raise ValueError(f"SLO 값은 숫자여야 합니다: {part}") from exc
+            if number <= 0:
+                raise ValueError("SLO 값은 양수여야 합니다.")
+            parsed.append(number)
+        while len(parsed) < 2:
+            parsed.append(None)
+        return parsed[0], parsed[1]
 
     def _package_twin_artifacts(self) -> None:
         """build-twin 산출물 디렉토리를 고객 전달용 ZIP으로 패키징한다."""

@@ -95,12 +95,13 @@ benchmark-twin
 
 .. code-block:: bash
 
-   naviertwin benchmark-twin --artifacts-dir /tmp/naviertwin-deploy --params 0.25 --warmup 2 --repeat 20 --output /tmp/naviertwin-latency.json --json
+   naviertwin benchmark-twin --artifacts-dir /tmp/naviertwin-deploy --params 0.25 --warmup 2 --repeat 20 --max-p95-ms 100 --min-throughput-hz 10 --output /tmp/naviertwin-latency.json --json
 
 Expected: runs warmup predictions, measures repeated prediction latency, and
-reports min/mean/p50/p95/p99/max milliseconds plus approximate throughput.
-Use this to verify the near-real-time behavior of a delivered twin on the
-customer machine.
+reports min/mean/p50/p95/p99/max milliseconds plus approximate throughput. When
+``--max-mean-ms``, ``--max-p50-ms``, ``--max-p95-ms``, ``--max-p99-ms``, or
+``--min-throughput-hz`` is set, the JSON includes an ``acceptance`` block and
+the command exits 1 if the delivered twin misses the configured performance SLO.
 
 validate-twin
 -------------

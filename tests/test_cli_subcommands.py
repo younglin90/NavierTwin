@@ -311,6 +311,10 @@ class TestCLISubcommands:
                 "1",
                 "--repeat",
                 "3",
+                "--max-p95-ms",
+                "100000",
+                "--min-throughput-hz",
+                "0.0001",
                 "--output",
                 str(tmp_path / "latency.json"),
                 "--json",
@@ -326,6 +330,8 @@ class TestCLISubcommands:
         assert benchmark_payload["repeat"] == 3
         assert len(benchmark_payload["samples_ms"]) == 3
         assert benchmark_payload["latency_ms"]["p95"] >= benchmark_payload["latency_ms"]["min"]
+        assert benchmark_payload["acceptance"]["configured"] is True
+        assert benchmark_payload["acceptance"]["passed"] is True
         assert (tmp_path / "latency.json").exists()
 
         deployed_validate_result = subprocess.run(

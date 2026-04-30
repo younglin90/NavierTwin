@@ -158,6 +158,10 @@ class TestBuildParser:
                 "1",
                 "--repeat",
                 "3",
+                "--max-p95-ms",
+                "100",
+                "--min-throughput-hz",
+                "10",
                 "--json",
             ]
         )
@@ -166,6 +170,8 @@ class TestBuildParser:
         assert args.params == "0.25"
         assert args.warmup == 1
         assert args.repeat == 3
+        assert args.max_p95_ms == 100
+        assert args.min_throughput_hz == 10
         assert args.as_json is True
 
     def test_parse_validate_twin_subcommand(self, tmp_path) -> None:
@@ -521,8 +527,10 @@ class TestRunBuildTwin:
             readme = archive.read("README.txt").decode("utf-8")
             delivery = json.loads(archive.read("delivery.json").decode("utf-8"))
         assert "verify-twin-package" in readme
+        assert "--max-p95-ms" in readme
         assert delivery["format"] == "NavierTwin delivery package"
         assert delivery["commands"]["predict"].startswith("naviertwin predict-twin")
+        assert "--min-throughput-hz" in delivery["commands"]["benchmark"]
 
         inspect_code = _run_inspect_twin_package(
             package_path=str(tmp_path / "twin-delivery.zip"),
@@ -589,7 +597,32 @@ class TestRunBuildTwin:
         assert benchmark_payload["repeat"] == 3
         assert len(benchmark_payload["samples_ms"]) == 3
         assert benchmark_payload["latency_ms"]["p95"] >= benchmark_payload["latency_ms"]["min"]
+        assert benchmark_payload["acceptance"]["passed"] is True
+        assert benchmark_payload["acceptance"]["configured"] is False
         assert (tmp_path / "latency.json").exists()
+
+        gated_benchmark_code = _run_benchmark_twin(
+            engine_path=None,
+            artifacts_dir=str(tmp_path / "deployed-twin"),
+            params="0.25",
+            params_csv=None,
+            param_columns=None,
+            warmup=0,
+            repeat=1,
+            max_mean_ms=0.0,
+            max_p50_ms=None,
+            max_p95_ms=None,
+            max_p99_ms=None,
+            min_throughput_hz=None,
+            output=None,
+            as_json=True,
+        )
+        gated_benchmark_payload = json.loads(capsys.readouterr().out)
+
+        assert gated_benchmark_code == 1
+        assert gated_benchmark_payload["status"] == "failed"
+        assert gated_benchmark_payload["acceptance"]["configured"] is True
+        assert gated_benchmark_payload["acceptance"]["checks"][0]["metric"] == "latency_ms.mean"
 
         deployed_validate_code = _run_validate_twin(
             engine_path=None,
