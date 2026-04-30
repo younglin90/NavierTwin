@@ -408,7 +408,8 @@ def build_support_bundle(
 
     if zip_bundle:
         zip_path = output_dir / "support-bundle.zip"
-        metadata["zip_path"] = str(zip_path)
+        metadata["zip_path"] = zip_path.name
+        metadata["zip_path_sha256"] = sha256(str(zip_path).encode("utf-8")).hexdigest()
     metadata = redact_object(metadata)
 
     readme_path = output_dir / "README.txt"

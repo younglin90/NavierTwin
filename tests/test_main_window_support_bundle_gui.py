@@ -46,7 +46,7 @@ def test_support_bundle_action_surfaces_success(
         assert acceptance_summary is None
         return {
             "status": "ok",
-            "zip_path": str(Path(outdir) / "support-bundle.zip"),
+            "zip_path": "support-bundle.zip",
             "files": ["doctor.json", "metadata.json"],
         }
 
@@ -65,6 +65,7 @@ def test_support_bundle_action_surfaces_success(
     assert messages
     assert messages[0][0] == "지원 번들 생성 완료"
     assert "support-bundle.zip" in messages[0][1]
+    assert str(tmp_path / "support-bundle.zip") in messages[0][1]
     assert win._status_label.text() == "지원 번들 생성: ok"
 
 
@@ -91,7 +92,7 @@ def test_support_bundle_includes_current_import_path_preflight(
         captured["acceptance_summary"] = acceptance_summary
         return {
             "status": "ok",
-            "zip_path": str(Path(outdir) / "support-bundle.zip"),
+            "zip_path": "support-bundle.zip",
             "files": ["doctor.json", "preflight.json", "metadata.json"],
         }
 
@@ -132,7 +133,7 @@ def test_support_bundle_includes_recent_acceptance_artifacts(
         captured["acceptance_summary"] = acceptance_summary
         return {
             "status": "ok",
-            "zip_path": str(Path(outdir) / "support-bundle.zip"),
+            "zip_path": "support-bundle.zip",
             "files": ["doctor.json", "acceptance.json", "acceptance.md", "metadata.json"],
         }
 
@@ -177,7 +178,7 @@ def test_support_bundle_dialog_can_attach_acceptance_artifacts(
         captured["acceptance_summary"] = acceptance_summary
         return {
             "status": "ok",
-            "zip_path": str(Path(outdir) / "support-bundle.zip"),
+            "zip_path": "support-bundle.zip",
             "files": ["doctor.json", "acceptance.json", "acceptance.md", "metadata.json"],
         }
 

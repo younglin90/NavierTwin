@@ -215,8 +215,8 @@ Expected: writes ``doctor.json``, optional ``preflight.json``, optional
 ``metadata.json``, and when ``--zip`` is used, ``support-bundle.zip`` with
 ``MANIFEST.json``. Acceptance artifacts and the read-first summary are redacted
 before being copied into the bundle. ``metadata.json`` records schema version,
-input presence, file suffixes, and non-reversible path hashes, not customer
-absolute paths.
+input presence, file suffixes, the ZIP filename, and non-reversible path
+hashes, not customer absolute paths.
 
 inspect-support-bundle
 ----------------------

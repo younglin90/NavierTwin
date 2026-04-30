@@ -2054,7 +2054,10 @@ class MainWindow(QMainWindow):
             return
 
         status = str(metadata.get("status", "unknown"))
-        zip_path = str(metadata.get("zip_path", outdir / "support-bundle.zip"))
+        zip_name = str(metadata.get("zip_path", "support-bundle.zip"))
+        zip_path = Path(zip_name)
+        if not zip_path.is_absolute():
+            zip_path = outdir / zip_path
         self._set_status(f"지원 번들 생성: {status}")
         QMessageBox.information(
             self,

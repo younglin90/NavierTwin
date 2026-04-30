@@ -260,7 +260,7 @@ src/naviertwin/
 - CFD 입력 데이터 readiness 점검: `naviertwin preflight tests/fixtures/tiny_square.su2 --json --output /tmp/naviertwin-preflight.json`
 - 고객 지원 번들 생성: `naviertwin support-bundle --outdir /tmp/naviertwin-support --preflight tests/fixtures/tiny_square.su2`
 - 고객 지원 번들 생성(ZIP 포함): `naviertwin support-bundle --outdir /tmp/naviertwin-support --preflight tests/fixtures/tiny_square.su2 --zip`
-- 고객 지원 번들에 acceptance 산출물과 읽기용 README.txt 첨부(absolute path는 metadata에 저장하지 않고 path hash만 기록): `naviertwin support-bundle --outdir /tmp/naviertwin-support --acceptance-json /tmp/naviertwin-acceptance.json --acceptance-summary /tmp/naviertwin-acceptance.md --zip`
+- 고객 지원 번들에 acceptance 산출물과 읽기용 README.txt 첨부(입력/출력 absolute path는 metadata에 저장하지 않고 파일명과 path hash만 기록): `naviertwin support-bundle --outdir /tmp/naviertwin-support --acceptance-json /tmp/naviertwin-acceptance.json --acceptance-summary /tmp/naviertwin-acceptance.md --zip`
 - 고객 지원 번들 수신 검증: `naviertwin inspect-support-bundle /tmp/naviertwin-support/support-bundle.zip --json`
 - 라이선스/의존성 실사 리포트: `python scripts/license_report.py --json --output /tmp/naviertwin-license-report.json`
 - 합성 파이프라인 데모: `naviertwin pipeline-demo --outdir /tmp/naviertwin-pipeline-demo`

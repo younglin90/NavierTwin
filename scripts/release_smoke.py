@@ -218,8 +218,11 @@ def _validate_support_bundle_artifacts(payload: dict[str, object], outdir: Path)
 
     zip_path = payload.get("zip_path")
     expected_zip = outdir / "support-bundle.zip"
-    if zip_path != str(expected_zip):
+    if zip_path != expected_zip.name:
         print(f"support-bundle zip_path mismatch: {zip_path!r}", file=sys.stderr)
+        return 1
+    if payload.get("zip_path_sha256") != sha256(str(expected_zip).encode("utf-8")).hexdigest():
+        print("support-bundle zip_path_sha256 mismatch", file=sys.stderr)
         return 1
     if not expected_zip.exists():
         print("support-bundle missing support-bundle.zip", file=sys.stderr)

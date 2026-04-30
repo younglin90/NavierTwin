@@ -248,7 +248,9 @@ def test_build_support_bundle_zip_writes_archive_and_manifest(
     metadata = build_support_bundle(outdir, zip_bundle=True)
     zip_path = outdir / "support-bundle.zip"
 
-    assert metadata["zip_path"] == str(zip_path)
+    assert metadata["zip_path"] == "support-bundle.zip"
+    assert metadata["zip_path_sha256"] == _path_sha256(zip_path)
+    assert str(zip_path) not in json.dumps(metadata, ensure_ascii=False, sort_keys=True)
     assert zip_path.exists()
 
     with zipfile.ZipFile(zip_path) as zf:

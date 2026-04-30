@@ -128,3 +128,8 @@ def test_support_bundle_redacts_sensitive_values(tmp_path, monkeypatch) -> None:
         "suffix": ".md",
         "path_sha256": sha256(str(acceptance_summary).encode("utf-8")).hexdigest(),
     }
+    assert metadata["zip_path"] == "support-bundle.zip"
+    assert metadata["zip_path_sha256"] == sha256(
+        str(outdir / "support-bundle.zip").encode("utf-8")
+    ).hexdigest()
+    assert str(outdir / "support-bundle.zip") not in encoded
