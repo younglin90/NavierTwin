@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 
 import pytest
@@ -53,6 +54,28 @@ class TestBuildParser:
         assert args.command == "pipeline"
         assert args.reducer == "ae"
         assert args.n_modes == 8
+
+    def test_parse_model_sweep_subcommand(self) -> None:
+        from naviertwin.main import _build_parser
+
+        p = _build_parser()
+        args = p.parse_args(
+            [
+                "model-sweep",
+                "--reducers",
+                "pod",
+                "--n-modes",
+                "2,4",
+                "--surrogates",
+                "rbf",
+                "--json",
+            ]
+        )
+        assert args.command == "model-sweep"
+        assert args.reducers == "pod"
+        assert args.n_modes == "2,4"
+        assert args.surrogates == "rbf"
+        assert args.as_json is True
 
     def test_parse_autorefine_subcommand(self) -> None:
         from naviertwin.main import _build_parser
@@ -120,6 +143,46 @@ class TestRunPipeline:
 
         code = _run_pipeline("ae", 2, "rbf")
         assert code == 0
+
+
+class TestRunModelSweep:
+    def test_run_model_sweep_json(self, capsys) -> None:
+        pytest.importorskip("sklearn")
+        from naviertwin.main import _run_model_sweep
+
+        code = _run_model_sweep(
+            reducers="pod",
+            n_modes="2,3",
+            surrogates="rbf",
+            samples=14,
+            features=18,
+            seed=3,
+            as_json=True,
+        )
+        payload = json.loads(capsys.readouterr().out)
+
+        assert code == 0
+        assert payload["status"] == "ok"
+        assert payload["configs"] == 2
+        assert payload["rows"][0]["rmse"] <= payload["rows"][1]["rmse"]
+
+    def test_run_model_sweep_invalid_config(self, capsys) -> None:
+        from naviertwin.main import _run_model_sweep
+
+        code = _run_model_sweep(
+            reducers="unknown",
+            n_modes="2",
+            surrogates="rbf",
+            samples=14,
+            features=18,
+            seed=3,
+            as_json=True,
+        )
+        output = capsys.readouterr()
+
+        assert code == 2
+        assert output.out == ""
+        assert "model-sweep error:" in output.err
 
 
 class TestRunAutoRefine:

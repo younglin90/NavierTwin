@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -11,6 +12,7 @@ EXPECTED_SUBCOMMANDS = [
     "server",
     "pipeline",
     "pipeline-demo",
+    "model-sweep",
     "preflight",
     "support-bundle",
     "autorefine",
@@ -56,3 +58,33 @@ class TestCLISubcommands:
         )
         assert result.returncode == 0
         assert "파이프라인 완료" in result.stdout or "rmse" in result.stdout
+
+    def test_model_sweep_subcommand_runs_json(self) -> None:
+        env = {**os.environ, "PYTHONPATH": "src"}
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "naviertwin.main",
+                "model-sweep",
+                "--reducers",
+                "pod",
+                "--n-modes",
+                "2,3",
+                "--surrogates",
+                "rbf",
+                "--samples",
+                "14",
+                "--features",
+                "18",
+                "--json",
+            ],
+            capture_output=True, text=True, env=env,
+        )
+        assert result.returncode == 0, result.stderr
+
+        payload = json.loads(result.stdout)
+        assert payload["status"] == "ok"
+        assert payload["configs"] == 2
+        assert len(payload["rows"]) == 2
+        assert payload["best"]["reducer_kind"] == "pod"

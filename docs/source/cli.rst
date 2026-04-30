@@ -54,6 +54,17 @@ pipeline-demo
 Expected: writes ``metrics.json`` and ``report.html`` to the output directory.
 It returns code 2 for a clean dependency/runtime error rather than a traceback.
 
+model-sweep
+-----------
+
+.. code-block:: bash
+
+   naviertwin model-sweep --reducers pod --n-modes 2,3,5 --surrogates rbf,kriging --json
+
+Expected: evaluates the configured ROM/surrogate candidates on the same
+synthetic CFD-like snapshot set, sorts them by validation RMSE, and prints a
+ranked table or JSON payload with ``best`` and ``rows``.
+
 preflight
 ---------
 

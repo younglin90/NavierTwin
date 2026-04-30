@@ -81,6 +81,20 @@ def _build_parser() -> argparse.ArgumentParser:
     p_demo.add_argument("--n-modes", type=int, default=3)
     p_demo.add_argument("--surrogate", choices=["kriging", "rbf"], default="rbf")
 
+    # model-sweep
+    p_sweep = sub.add_parser("model-sweep", help="여러 ROM/surrogate 후보를 자동 비교")
+    p_sweep.add_argument("--reducers", default="pod", help="쉼표 구분 reducer 목록: pod,ae")
+    p_sweep.add_argument("--n-modes", default="2,3,5", help="쉼표 구분 모드 수 목록")
+    p_sweep.add_argument(
+        "--surrogates",
+        default="rbf,kriging",
+        help="쉼표 구분 surrogate 목록: rbf,kriging",
+    )
+    p_sweep.add_argument("--samples", type=int, default=24, help="합성 snapshot 개수")
+    p_sweep.add_argument("--features", type=int, default=48, help="합성 field feature 개수")
+    p_sweep.add_argument("--seed", type=int, default=7, help="재현 가능한 sweep seed")
+    p_sweep.add_argument("--json", dest="as_json", action="store_true", help="JSON으로 출력")
+
     # preflight
     p_preflight = sub.add_parser("preflight", help="CFD 입력 데이터 readiness 점검")
     p_preflight.add_argument("path", help="점검할 CFD 파일 또는 케이스 디렉토리")
@@ -207,6 +221,18 @@ def main() -> None:
                 outdir=args.outdir,
                 n_modes=args.n_modes,
                 surrogate=args.surrogate,
+            )
+        )
+    elif args.command == "model-sweep":
+        sys.exit(
+            _run_model_sweep(
+                reducers=args.reducers,
+                n_modes=args.n_modes,
+                surrogates=args.surrogates,
+                samples=args.samples,
+                features=args.features,
+                seed=args.seed,
+                as_json=args.as_json,
             )
         )
     elif args.command == "preflight":
@@ -382,6 +408,120 @@ def _run_pipeline_demo(*, outdir: str, n_modes: int, surrogate: str) -> int:
         )
         return 2
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def _parse_csv_tokens(value: str, *, allowed: set[str], label: str) -> list[str]:
+    """쉼표 구분 문자열을 검증된 토큰 목록으로 변환한다."""
+    parsed = [token.strip().lower() for token in value.split(",") if token.strip()]
+    if not parsed:
+        raise ValueError(f"{label} must include at least one value")
+    invalid = sorted(set(parsed) - allowed)
+    if invalid:
+        allowed_text = ",".join(sorted(allowed))
+        raise ValueError(f"unsupported {label}: {','.join(invalid)} (allowed: {allowed_text})")
+    return parsed
+
+
+def _parse_csv_ints(value: str, *, label: str) -> list[int]:
+    """쉼표 구분 문자열을 양의 정수 목록으로 변환한다."""
+    parsed: list[int] = []
+    for token in value.split(","):
+        stripped = token.strip()
+        if not stripped:
+            continue
+        try:
+            number = int(stripped)
+        except ValueError as exc:
+            raise ValueError(f"{label} must be positive integers: {stripped}") from exc
+        if number < 1:
+            raise ValueError(f"{label} must be positive integers: {number}")
+        parsed.append(number)
+    if not parsed:
+        raise ValueError(f"{label} must include at least one value")
+    return parsed
+
+
+def _run_model_sweep(
+    *,
+    reducers: str,
+    n_modes: str,
+    surrogates: str,
+    samples: int,
+    features: int,
+    seed: int,
+    as_json: bool,
+) -> int:
+    """여러 reducer/surrogate 후보를 같은 합성 데이터셋에서 비교한다."""
+    try:
+        import numpy as np
+
+        from naviertwin.core.digital_twin.pipeline_compare import (
+            compare_models,
+            rank_table,
+        )
+
+        reducer_values = _parse_csv_tokens(
+            reducers,
+            allowed={"pod", "ae"},
+            label="reducers",
+        )
+        mode_values = _parse_csv_ints(n_modes, label="n-modes")
+        surrogate_values = _parse_csv_tokens(
+            surrogates,
+            allowed={"kriging", "rbf"},
+            label="surrogates",
+        )
+        if samples < 8:
+            raise ValueError("samples must be at least 8")
+        if features < 4:
+            raise ValueError("features must be at least 4")
+
+        rng = np.random.default_rng(seed)
+        rank = max(max(mode_values), 2)
+        params = np.linspace(0, 1, samples).reshape(-1, 1)
+        t = params[:, 0]
+        basis = rng.standard_normal((features, rank))
+        coeff_rows = []
+        for mode in range(rank):
+            frequency = mode + 1
+            if mode % 3 == 0:
+                coeff_rows.append(np.sin(frequency * np.pi * t))
+            elif mode % 3 == 1:
+                coeff_rows.append(np.cos(frequency * np.pi * t))
+            else:
+                coeff_rows.append((t - 0.5) ** frequency)
+        coeffs = np.vstack(coeff_rows)
+        snapshots = basis @ coeffs + 0.005 * rng.standard_normal((features, samples))
+
+        configs = [
+            (reducer, mode_count, surrogate)
+            for reducer in reducer_values
+            for mode_count in mode_values
+            for surrogate in surrogate_values
+        ]
+        rows = compare_models(snapshots, params, configs, seed=seed)
+    except (ImportError, ValueError) as exc:
+        print(f"model-sweep error: {exc}", file=sys.stderr)
+        return 2
+
+    payload = {
+        "status": "ok",
+        "configs": len(rows),
+        "best": rows[0] if rows else None,
+        "rows": rows,
+    }
+    if as_json:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    else:
+        print(rank_table(rows))
+        if rows:
+            best = rows[0]
+            print(
+                "best: "
+                f"{best['reducer_kind']} n_modes={best['n_modes']} "
+                f"{best['surrogate_kind']} rmse={best['rmse']:.6g}"
+            )
     return 0
 
 
