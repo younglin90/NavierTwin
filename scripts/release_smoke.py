@@ -43,6 +43,7 @@ CUSTOMER_SMOKE_TESTS = [
     "tests/test_analyze_panel_advanced_gui.py",
     "tests/test_explainability_panel_gui.py",
     "tests/test_export_panel_report_gui.py",
+    "tests/test_fmu_export.py",
     "tests/test_import_panel_formats.py",
     "tests/test_import_panel_preflight_gui.py",
     "tests/test_main_window_customer_tools_gui.py",

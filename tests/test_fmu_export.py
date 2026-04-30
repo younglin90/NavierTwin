@@ -28,7 +28,11 @@ def _fitted_engine() -> object:
 
 
 def test_export_to_fmu_writes_fmi_archive(tmp_path: Path) -> None:
-    from naviertwin.core.export.fmu_export import export_to_fmu, inspect_fmu
+    from naviertwin.core.export.fmu_export import (
+        export_to_fmu,
+        inspect_fmu,
+        validate_fmu_archive,
+    )
 
     out = tmp_path / "naviertwin.fmu"
     info = export_to_fmu(
@@ -50,6 +54,7 @@ def test_export_to_fmu_writes_fmi_archive(tmp_path: Path) -> None:
         "resources/naviertwin_fmu.json",
         "resources/README.txt",
         "resources/engine.pkl",
+        "documentation/index.html",
     } <= names
     assert 'fmiVersion="2.0"' in model_description
     assert "<CoSimulation" in model_description
@@ -61,6 +66,20 @@ def test_export_to_fmu_writes_fmi_archive(tmp_path: Path) -> None:
     assert manifest["model_name"] == "NavierTwinROM"
     assert manifest["input_names"] == ["mach"]
     assert manifest["output_names"] == ["pressure", "velocity"]
+    assert validate_fmu_archive(out)["status"] == "ok"
+
+
+def test_validate_fmu_archive_reports_missing_entries(tmp_path: Path) -> None:
+    from naviertwin.core.export.fmu_export import validate_fmu_archive
+
+    out = tmp_path / "bad.fmu"
+    with zipfile.ZipFile(out, "w") as archive:
+        archive.writestr("modelDescription.xml", "<fmiModelDescription/>")
+
+    report = validate_fmu_archive(out)
+
+    assert report["status"] == "error"
+    assert "missing:" in report["errors"][0]
 
 
 def test_export_to_fmu_requires_predict() -> None:

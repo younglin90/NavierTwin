@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
 
 
@@ -96,6 +97,7 @@ def export_to_fmu(
         )
         archive.writestr("resources/README.txt", _resource_readme())
         archive.writestr("resources/engine.pkl", pickle.dumps(engine, protocol=pickle.HIGHEST_PROTOCOL))
+        archive.writestr("documentation/index.html", _documentation_html(manifest))
 
     return FMUExportInfo(
         path=out,
@@ -111,6 +113,55 @@ def inspect_fmu(path: str | Path) -> dict[str, Any]:
     with zipfile.ZipFile(path) as archive:
         data = archive.read("resources/naviertwin_fmu.json")
     return json.loads(data.decode("utf-8"))
+
+
+def validate_fmu_archive(path: str | Path) -> dict[str, Any]:
+    """Validate NavierTwin FMU archive structure and metadata consistency."""
+    required = {
+        "modelDescription.xml",
+        "resources/naviertwin_fmu.json",
+        "resources/README.txt",
+        "resources/engine.pkl",
+        "documentation/index.html",
+    }
+    with zipfile.ZipFile(path) as archive:
+        names = set(archive.namelist())
+        missing = sorted(required - names)
+        if missing:
+            return {"status": "error", "errors": [f"missing: {','.join(missing)}"]}
+        xml_text = archive.read("modelDescription.xml").decode("utf-8")
+        manifest = json.loads(archive.read("resources/naviertwin_fmu.json").decode("utf-8"))
+
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError as exc:
+        return {"status": "error", "errors": [f"invalid modelDescription.xml: {exc}"]}
+
+    errors: list[str] = []
+    if root.attrib.get("fmiVersion") != "2.0":
+        errors.append("fmiVersion must be 2.0")
+    if root.attrib.get("modelName") != manifest.get("model_name"):
+        errors.append("modelName does not match manifest")
+    if root.attrib.get("guid") != manifest.get("guid"):
+        errors.append("guid does not match manifest")
+    if root.find("CoSimulation") is None:
+        errors.append("CoSimulation element missing")
+
+    scalar_names = {
+        element.attrib.get("name")
+        for element in root.findall("./ModelVariables/ScalarVariable")
+    }
+    for name in [*manifest.get("input_names", []), *manifest.get("output_names", [])]:
+        if name not in scalar_names:
+            errors.append(f"ScalarVariable missing: {name}")
+
+    return {
+        "status": "error" if errors else "ok",
+        "errors": errors,
+        "entries": sorted(names),
+        "model_name": manifest.get("model_name"),
+        "guid": manifest.get("guid"),
+    }
 
 
 def _resolve_input_names(engine: object, names: list[str] | None) -> list[str]:
@@ -246,4 +297,19 @@ def _resource_readme() -> str:
     )
 
 
-__all__ = ["FMUExportInfo", "export_to_fmu", "inspect_fmu"]
+def _documentation_html(manifest: dict[str, Any]) -> str:
+    model_name = escape(str(manifest["model_name"]))
+    description = escape(str(manifest["description"]))
+    return (
+        "<!doctype html>\n"
+        "<html><head><meta charset=\"utf-8\"><title>NavierTwin FMU</title></head>\n"
+        "<body>\n"
+        f"<h1>{model_name}</h1>\n"
+        f"<p>{description}</p>\n"
+        "<p>This FMU contains FMI 2.0 metadata and a NavierTwin Python resource "
+        "for evaluating the exported digital twin.</p>\n"
+        "</body></html>\n"
+    )
+
+
+__all__ = ["FMUExportInfo", "export_to_fmu", "inspect_fmu", "validate_fmu_archive"]
