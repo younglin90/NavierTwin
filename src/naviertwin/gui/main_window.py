@@ -77,7 +77,7 @@ def format_update_check_message(result: UpdateCheckResult) -> tuple[str, str]:
                 f"채널: {result.channel}\n"
                 f"다운로드: {result.url}\n"
                 f"SHA256: {result.sha256}\n\n"
-                "다운로드 열기 또는 URL 복사 버튼으로 설치 파일을 받을 수 있습니다."
+                "다운로드 열기, URL 복사, 설치파일 검증 버튼으로 업데이트를 안전하게 진행할 수 있습니다."
             ),
         )
     return (
@@ -2222,6 +2222,7 @@ class MainWindow(QMainWindow):
         box.setText(message)
         open_button = box.addButton("다운로드 열기", QMessageBox.ButtonRole.AcceptRole)
         copy_button = box.addButton("URL 복사", QMessageBox.ButtonRole.ActionRole)
+        verify_button = box.addButton("설치파일 검증", QMessageBox.ButtonRole.ActionRole)
         box.addButton(QMessageBox.StandardButton.Close)
         box.exec()
 
@@ -2230,6 +2231,8 @@ class MainWindow(QMainWindow):
             self._open_update_download(result.url)
         elif clicked is copy_button:
             self._copy_update_url(result.url)
+        elif clicked is verify_button:
+            self._verify_update_artifact(result)
 
     def _open_update_download(self, url: str) -> bool:
         """검증된 릴리스 다운로드 URL을 기본 브라우저로 연다."""
@@ -2258,6 +2261,61 @@ class MainWindow(QMainWindow):
         QApplication.clipboard().setText(url)
         self._set_status("업데이트 다운로드 URL을 클립보드에 복사했습니다")
         return True
+
+    def _verify_update_artifact(self, result: UpdateCheckResult) -> bool:
+        """사용자가 선택한 설치 파일을 signed metadata SHA256으로 검증한다."""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "업데이트 설치파일 선택",
+            "",
+            "NavierTwin Installer (NavierTwinSetup.exe);;Windows Executable (*.exe);;All Files (*)",
+        )
+        if not path:
+            self._set_status("업데이트 설치파일 검증 취소")
+            return False
+        return self._verify_update_artifact_path(result, Path(path))
+
+    def _verify_update_artifact_path(
+        self,
+        result: UpdateCheckResult,
+        path: Path,
+    ) -> bool:
+        """선택된 설치 파일을 update-check 결과의 SHA256과 비교한다."""
+        from naviertwin.utils.updater import verify_release_artifact
+
+        try:
+            verification = verify_release_artifact(path, expected_sha256=result.sha256)
+        except (OSError, ValueError) as exc:
+            self._set_status("업데이트 설치파일 검증 실패")
+            QMessageBox.warning(self, "설치파일 검증 실패", str(exc))
+            return False
+
+        if verification.verified:
+            self._set_status("업데이트 설치파일 검증 성공")
+            QMessageBox.information(
+                self,
+                "설치파일 검증 성공",
+                (
+                    "다운로드한 설치 파일의 SHA256이 signed metadata와 일치합니다.\n\n"
+                    f"파일: {verification.path}\n"
+                    f"크기: {verification.size_bytes} bytes\n"
+                    f"SHA256: {verification.actual_sha256}"
+                ),
+            )
+            return True
+
+        self._set_status("업데이트 설치파일 검증 실패")
+        QMessageBox.warning(
+            self,
+            "설치파일 검증 실패",
+            (
+                "다운로드한 설치 파일의 SHA256이 signed metadata와 일치하지 않습니다.\n\n"
+                f"파일: {verification.path}\n"
+                f"기대값: {verification.expected_sha256}\n"
+                f"실제값: {verification.actual_sha256}"
+            ),
+        )
+        return False
 
     # ──────────────────────────────────────────────────────────────────
     # 헬퍼

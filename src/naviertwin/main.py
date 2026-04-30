@@ -371,6 +371,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p_update.add_argument("--metadata", required=True, help="릴리스 메타데이터 JSON 경로")
     p_update.add_argument("--channel", default="stable", choices=["stable", "beta", "nightly"])
     p_update.add_argument("--current-version", default=__version__)
+    p_update.add_argument(
+        "--verify-artifact",
+        default=None,
+        metavar="PATH",
+        help="다운로드한 설치 파일을 릴리스 메타데이터 SHA256으로 검증",
+    )
 
     # doctor
     p_doctor = sub.add_parser("doctor", help="설치/런타임 환경 진단 리포트 출력")
@@ -601,6 +607,7 @@ def main() -> None:
                 metadata=args.metadata,
                 channel=args.channel,
                 current_version=args.current_version,
+                verify_artifact=args.verify_artifact,
             )
         )
     elif args.command == "doctor":
@@ -2964,23 +2971,49 @@ def _run_autorefine(
     return 0
 
 
-def _run_update_check(*, metadata: str, channel: str, current_version: str) -> int:
+def _run_update_check(
+    *,
+    metadata: str,
+    channel: str,
+    current_version: str,
+    verify_artifact: str | None = None,
+    trusted_public_keys: dict[str, str] | None = None,
+) -> int:
     """로컬 릴리스 메타데이터를 사용해 업데이트 가능 여부를 출력한다."""
     from pathlib import Path
 
-    from naviertwin.utils.updater import check_for_update
+    from naviertwin.utils.updater import (
+        check_for_update,
+        load_release_metadata,
+        verify_release_artifact,
+    )
 
     try:
         result = check_for_update(
             Path(metadata),
             channel=channel,
             current_version=current_version,
+            trusted_public_keys=trusted_public_keys,
         )
+        payload = result.to_dict()
+        exit_code = 0
+        if verify_artifact:
+            release = load_release_metadata(
+                Path(metadata),
+                trusted_public_keys=trusted_public_keys,
+            )
+            verification = verify_release_artifact(
+                Path(verify_artifact),
+                expected_sha256=release.sha256,
+            )
+            payload["artifact_verification"] = verification.to_dict()
+            if not verification.verified:
+                exit_code = 3
     except (OSError, ValueError) as exc:
         print(f"update-check error: {exc}", file=sys.stderr)
         return 2
-    print(json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True))
-    return 0
+    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    return exit_code
 
 
 def _run_doctor(*, as_json: bool, include_optional: bool, output: str | None = None) -> int:

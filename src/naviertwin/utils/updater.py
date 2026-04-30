@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from naviertwin import __version__
+from naviertwin.utils.hashing import hash_file
 
 SUPPORTED_CHANNELS = {"stable", "beta", "nightly"}
 WINDOWS_INSTALLER_NAME = "NavierTwinSetup.exe"
@@ -50,6 +51,21 @@ class UpdateCheckResult:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class ArtifactVerificationResult:
+    """SHA-256 verification result for a downloaded release artifact."""
+
+    path: str
+    expected_sha256: str
+    actual_sha256: str
+    size_bytes: int
+    verified: bool
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-serializable representation."""
+        return asdict(self)
+
+
 def _version_key(version: str) -> tuple[int, ...]:
     """Convert a numeric release version into a comparable tuple."""
     parts = version.strip().split(".")
@@ -79,6 +95,14 @@ def _validate_release_url(url: str, version: str) -> None:
     filename = PurePosixPath(parsed.path).name
     if filename != WINDOWS_INSTALLER_NAME:
         raise ValueError(f"release metadata url must point to {WINDOWS_INSTALLER_NAME}")
+
+
+def _normalize_sha256(value: str) -> str:
+    """Validate and normalize a SHA-256 hex digest."""
+    digest = value.strip().lower()
+    if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise ValueError("expected a 64-character sha256 hex digest")
+    return digest
 
 
 def canonical_release_metadata_payload(data: Mapping[str, Any]) -> bytes:
@@ -167,8 +191,10 @@ def load_release_metadata(
     if not url:
         raise ValueError("release metadata requires url")
     _validate_release_url(url, version)
-    if re.fullmatch(r"[0-9a-f]{64}", sha256) is None:
-        raise ValueError("release metadata requires a 64-character sha256 hex digest")
+    try:
+        sha256 = _normalize_sha256(sha256)
+    except ValueError as exc:
+        raise ValueError("release metadata requires a 64-character sha256 hex digest") from exc
     signature_key_id = _validate_release_signature(
         data,
         trusted_public_keys=trusted_public_keys,
@@ -218,7 +244,23 @@ def check_for_update(
     )
 
 
+def verify_release_artifact(path: Path, *, expected_sha256: str) -> ArtifactVerificationResult:
+    """Verify a downloaded release artifact against signed metadata SHA-256."""
+    candidate = Path(path)
+    expected = _normalize_sha256(expected_sha256)
+    size_bytes = candidate.stat().st_size
+    actual = hash_file(candidate)
+    return ArtifactVerificationResult(
+        path=str(candidate),
+        expected_sha256=expected,
+        actual_sha256=actual,
+        size_bytes=size_bytes,
+        verified=actual == expected,
+    )
+
+
 __all__ = [
+    "ArtifactVerificationResult",
     "DEFAULT_RELEASE_PUBLIC_KEYS",
     "ReleaseMetadata",
     "SIGNATURE_ALGORITHM",
@@ -227,4 +269,5 @@ __all__ = [
     "canonical_release_metadata_payload",
     "is_newer_version",
     "load_release_metadata",
+    "verify_release_artifact",
 ]

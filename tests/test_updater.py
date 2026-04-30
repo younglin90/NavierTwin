@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 
 import pytest
@@ -15,12 +16,13 @@ def _metadata(
     version: str = "4.2.59",
     channel: str = "stable",
     url: str = "https://github.com/naviertwin/naviertwin/releases/download/v4.2.59/NavierTwinSetup.exe",
+    sha256: str = "a" * 64,
 ) -> dict[str, object]:
     return {
         "version": version,
         "channel": channel,
         "url": url,
-        "sha256": "a" * 64,
+        "sha256": sha256,
         "notes": "smoke",
     }
 
@@ -73,6 +75,35 @@ def test_update_metadata_detects_newer_version(tmp_path) -> None:
     assert result.update_available is True
     assert result.latest_version == "4.2.59"
     assert result.sha256 == "a" * 64
+
+
+def test_verify_release_artifact_matches_expected_hash(tmp_path) -> None:
+    from naviertwin.utils.updater import verify_release_artifact
+
+    data = b"naviertwin installer bytes"
+    artifact = tmp_path / "NavierTwinSetup.exe"
+    artifact.write_bytes(data)
+    expected = hashlib.sha256(data).hexdigest()
+
+    result = verify_release_artifact(artifact, expected_sha256=expected)
+
+    assert result.verified is True
+    assert result.path == str(artifact)
+    assert result.size_bytes == len(data)
+    assert result.actual_sha256 == expected
+
+
+def test_verify_release_artifact_reports_hash_mismatch(tmp_path) -> None:
+    from naviertwin.utils.updater import verify_release_artifact
+
+    artifact = tmp_path / "NavierTwinSetup.exe"
+    artifact.write_bytes(b"tampered installer bytes")
+
+    result = verify_release_artifact(artifact, expected_sha256="0" * 64)
+
+    assert result.verified is False
+    assert result.expected_sha256 == "0" * 64
+    assert result.actual_sha256 != result.expected_sha256
 
 
 def test_update_metadata_rejects_unsigned_metadata(tmp_path) -> None:
@@ -214,6 +245,57 @@ def test_update_check_cli_outputs_json(capsys) -> None:
     assert code == 0
     assert output["update_available"] is True
     assert output["channel"] == "stable"
+
+
+def test_update_check_cli_verifies_downloaded_artifact(tmp_path, capsys) -> None:
+    from naviertwin.main import _run_update_check
+
+    data = b"downloaded installer bytes"
+    artifact = tmp_path / "NavierTwinSetup.exe"
+    artifact.write_bytes(data)
+    metadata = tmp_path / "release.json"
+    metadata.write_text(
+        json.dumps(_signed_metadata(sha256=hashlib.sha256(data).hexdigest())),
+        encoding="utf-8",
+    )
+
+    code = _run_update_check(
+        metadata=str(metadata),
+        channel="stable",
+        current_version="4.2.58",
+        verify_artifact=str(artifact),
+        trusted_public_keys=_test_public_keys(),
+    )
+    output = json.loads(capsys.readouterr().out)
+
+    assert code == 0
+    assert output["artifact_verification"]["verified"] is True
+    assert output["artifact_verification"]["path"] == str(artifact)
+
+
+def test_update_check_cli_reports_downloaded_artifact_mismatch(tmp_path, capsys) -> None:
+    from naviertwin.main import _run_update_check
+
+    artifact = tmp_path / "NavierTwinSetup.exe"
+    artifact.write_bytes(b"unexpected installer bytes")
+    metadata = tmp_path / "release.json"
+    metadata.write_text(
+        json.dumps(_signed_metadata(sha256="f" * 64)),
+        encoding="utf-8",
+    )
+
+    code = _run_update_check(
+        metadata=str(metadata),
+        channel="stable",
+        current_version="4.2.58",
+        verify_artifact=str(artifact),
+        trusted_public_keys=_test_public_keys(),
+    )
+    output = json.loads(capsys.readouterr().out)
+
+    assert code == 3
+    assert output["artifact_verification"]["verified"] is False
+    assert output["artifact_verification"]["expected_sha256"] == "f" * 64
 
 
 def test_update_check_cli_reports_invalid_metadata_without_traceback(tmp_path, capsys) -> None:

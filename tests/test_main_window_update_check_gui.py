@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -64,6 +65,7 @@ def test_format_update_check_message_for_available_update() -> None:
     assert "4.2.59" in message
     assert "SHA256" in message
     assert "다운로드 열기" in message
+    assert "설치파일 검증" in message
 
 
 def test_main_window_update_check_path_surfaces_result(
@@ -137,6 +139,81 @@ def test_main_window_update_handoff_copies_download_url(qtbot) -> None:
     assert win._copy_update_url(url) is True
     assert QApplication.clipboard().text() == url
     assert "복사했습니다" in win._status_label.text()
+
+
+def test_main_window_update_artifact_verification_succeeds(
+    qtbot,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    from naviertwin.gui.main_window import MainWindow
+    from naviertwin.utils.updater import UpdateCheckResult
+
+    data = b"downloaded setup bytes"
+    artifact = tmp_path / "NavierTwinSetup.exe"
+    artifact.write_bytes(data)
+    messages: list[tuple[str, str]] = []
+
+    def capture_information(parent: object, title: str, text: str) -> None:
+        messages.append((title, text))
+
+    monkeypatch.setattr(QMessageBox, "information", capture_information)
+    win = MainWindow(confirm_on_close=False)
+    qtbot.addWidget(win)
+
+    result = UpdateCheckResult(
+        current_version="4.2.58",
+        latest_version="4.2.59",
+        channel="stable",
+        update_available=True,
+        url="https://github.com/naviertwin/naviertwin/releases/download/v4.2.59/NavierTwinSetup.exe",
+        sha256=hashlib.sha256(data).hexdigest(),
+    )
+
+    assert win._verify_update_artifact_path(result, artifact) is True
+    assert messages
+    assert messages[0][0] == "설치파일 검증 성공"
+    assert "SHA256" in messages[0][1]
+    assert win._status_label.text() == "업데이트 설치파일 검증 성공"
+
+
+def test_main_window_update_artifact_verification_rejects_mismatch(
+    qtbot,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    from naviertwin.gui.main_window import MainWindow
+    from naviertwin.utils.updater import UpdateCheckResult
+
+    artifact = tmp_path / "NavierTwinSetup.exe"
+    artifact.write_bytes(b"tampered setup bytes")
+    warnings: list[tuple[str, str]] = []
+
+    def capture_warning(parent: object, title: str, text: str) -> None:
+        warnings.append((title, text))
+
+    monkeypatch.setattr(QMessageBox, "warning", capture_warning)
+    win = MainWindow(confirm_on_close=False)
+    qtbot.addWidget(win)
+
+    result = UpdateCheckResult(
+        current_version="4.2.58",
+        latest_version="4.2.59",
+        channel="stable",
+        update_available=True,
+        url="https://github.com/naviertwin/naviertwin/releases/download/v4.2.59/NavierTwinSetup.exe",
+        sha256="f" * 64,
+    )
+
+    assert win._verify_update_artifact_path(result, artifact) is False
+    assert warnings
+    assert warnings[0][0] == "설치파일 검증 실패"
+    assert "기대값" in warnings[0][1]
+    assert win._status_label.text() == "업데이트 설치파일 검증 실패"
 
 
 def test_main_window_update_check_path_surfaces_metadata_errors(
