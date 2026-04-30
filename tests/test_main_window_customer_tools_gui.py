@@ -32,6 +32,7 @@ def test_tools_menu_exposes_pipeline_demo_and_server_actions(qtbot) -> None:
     assert any("트윈 패키지 정보 보기" in text for text in actions)
     assert any("트윈 패키지 검증" in text for text in actions)
     assert any("트윈 패키지 검증 후 추출" in text for text in actions)
+    assert any("트윈 패키지 원샷 수락 검사" in text for text in actions)
     assert any("API 서버 시작" in text for text in actions)
     assert any("API 서버 중지" in text for text in actions)
 
@@ -941,6 +942,149 @@ def test_verify_twin_package_path_can_extract_after_verification(
     assert messages[0][0] == "트윈 패키지 검증 및 추출 완료"
     assert str(extract_to) in messages[0][1]
     assert win._status_label.text() == "트윈 패키지 검증 및 추출 완료"
+
+
+def test_accept_twin_package_path_runs_cli_and_surfaces_result(
+    qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    from naviertwin.gui.main_window import MainWindow
+
+    win = MainWindow(confirm_on_close=False)
+    qtbot.addWidget(win)
+    calls: list[tuple[Path, Path, int, int, float | None, float | None, Path | None]] = []
+    messages: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        win,
+        "_run_accept_twin_package_cli",
+        lambda package_path, *, extract_to, warmup, repeat, max_p95_ms,
+        min_throughput_hz, output: (
+            calls.append(
+                (
+                    package_path,
+                    extract_to,
+                    warmup,
+                    repeat,
+                    max_p95_ms,
+                    min_throughput_hz,
+                    output,
+                )
+            )
+            or 0
+        ),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda parent, title, text: messages.append((title, text)),
+    )
+
+    package_path = tmp_path / "delivery.zip"
+    extract_to = tmp_path / "accepted"
+    output = tmp_path / "acceptance.json"
+    win._accept_twin_package_path(
+        package_path,
+        extract_to=extract_to,
+        warmup=1,
+        repeat=3,
+        max_p95_ms=100.0,
+        min_throughput_hz=10.0,
+        output=output,
+    )
+
+    assert calls == [(package_path, extract_to, 1, 3, 100.0, 10.0, output)]
+    assert messages
+    assert messages[0][0] == "트윈 패키지 수락 검사 완료"
+    assert str(extract_to) in messages[0][1]
+    assert str(output) in messages[0][1]
+    assert win._status_label.text() == "트윈 패키지 수락 검사 완료"
+
+
+def test_accept_twin_package_path_surfaces_failure(
+    qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    from naviertwin.gui.main_window import MainWindow
+
+    win = MainWindow(confirm_on_close=False)
+    qtbot.addWidget(win)
+    warnings: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(win, "_run_accept_twin_package_cli", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda parent, title, text: warnings.append((title, text)),
+    )
+
+    win._accept_twin_package_path(
+        tmp_path / "delivery.zip",
+        extract_to=tmp_path / "accepted",
+        warmup=0,
+        repeat=1,
+        output=None,
+    )
+
+    assert warnings
+    assert warnings[0][0] == "트윈 패키지 수락 검사 실패"
+    assert "1" in warnings[0][1]
+    assert win._status_label.text() == "트윈 패키지 수락 검사 실패"
+
+
+def test_accept_twin_package_dialog_uses_slo_defaults(
+    qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtWidgets import QFileDialog, QInputDialog
+
+    from naviertwin.gui.main_window import MainWindow
+
+    win = MainWindow(confirm_on_close=False)
+    qtbot.addWidget(win)
+    dialogs: list[tuple[str, str]] = []
+    calls: list[tuple[int, int, float | None, float | None, Path | None]] = []
+
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileName",
+        lambda *args, **kwargs: (str(tmp_path / "delivery.zip"), ""),
+    )
+    monkeypatch.setattr(
+        QFileDialog,
+        "getExistingDirectory",
+        lambda *args, **kwargs: str(tmp_path / "accepted"),
+    )
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: (str(tmp_path / "acceptance.json"), ""),
+    )
+
+    def fake_get_text(parent, title, label, *args, **kwargs):
+        dialogs.append((title, str(kwargs.get("text", ""))))
+        if title == "수락 검사 반복":
+            return "1,3", True
+        if title == "수락 검사 SLO":
+            return "100,10", True
+        raise AssertionError(f"unexpected dialog: {title}")
+
+    monkeypatch.setattr(QInputDialog, "getText", fake_get_text)
+    monkeypatch.setattr(
+        win,
+        "_accept_twin_package_path",
+        lambda package_path, *, extract_to, warmup, repeat, max_p95_ms,
+        min_throughput_hz, output: calls.append(
+            (warmup, repeat, max_p95_ms, min_throughput_hz, output)
+        ),
+    )
+
+    win._accept_twin_package()
+
+    assert ("수락 검사 반복", "2,20") in dialogs
+    assert ("수락 검사 SLO", "100,10") in dialogs
+    assert calls == [(1, 3, 100.0, 10.0, tmp_path / "acceptance.json")]
 
 
 def test_api_server_start_uses_qprocess(qtbot, monkeypatch: pytest.MonkeyPatch) -> None:

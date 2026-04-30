@@ -327,6 +327,10 @@ class MainWindow(QMainWindow):
         extract_twin_package_action.triggered.connect(self._verify_and_extract_twin_package)
         self._tools_menu.addAction(extract_twin_package_action)
 
+        accept_twin_package_action = QAction("트윈 패키지 원샷 수락 검사(&C)", self)
+        accept_twin_package_action.triggered.connect(self._accept_twin_package)
+        self._tools_menu.addAction(accept_twin_package_action)
+
         server_start_action = QAction("API 서버 시작(&S)", self)
         server_start_action.triggered.connect(self._start_api_server)
         self._tools_menu.addAction(server_start_action)
@@ -1718,6 +1722,148 @@ class MainWindow(QMainWindow):
         return _run_verify_twin_package(
             package_path=str(package_path),
             extract_to=str(extract_to) if extract_to is not None else None,
+            as_json=False,
+        )
+
+    def _accept_twin_package(self) -> None:
+        """고객 전달용 트윈 ZIP을 검증부터 latency SLO까지 원샷 검사한다."""
+        package_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "트윈 ZIP 선택",
+            "",
+            "ZIP (*.zip)",
+        )
+        if not package_path:
+            return
+
+        extract_dir = QFileDialog.getExistingDirectory(
+            self,
+            "트윈 패키지 추출 디렉토리 선택",
+            "",
+        )
+        if not extract_dir:
+            return
+
+        counts, ok = QInputDialog.getText(
+            self,
+            "수락 검사 반복",
+            "warmup,repeat:",
+            text="2,20",
+        )
+        if not ok:
+            return
+        try:
+            warmup, repeat = self._parse_benchmark_counts(counts)
+        except ValueError as exc:
+            self._set_status("트윈 패키지 수락 검사 실패")
+            QMessageBox.warning(self, "트윈 패키지 수락 검사 실패", str(exc))
+            return
+
+        slo_text, ok = QInputDialog.getText(
+            self,
+            "수락 검사 SLO",
+            "max_p95_ms,min_throughput_hz (비우면 게이트 없음):",
+            text="100,10",
+        )
+        if not ok:
+            return
+        try:
+            max_p95_ms, min_throughput_hz = self._parse_benchmark_slo(slo_text)
+        except ValueError as exc:
+            self._set_status("트윈 패키지 수락 검사 실패")
+            QMessageBox.warning(self, "트윈 패키지 수락 검사 실패", str(exc))
+            return
+
+        output, _ = QFileDialog.getSaveFileName(
+            self,
+            "수락 검사 JSON 저장",
+            "acceptance.json",
+            "JSON (*.json)",
+        )
+        self._accept_twin_package_path(
+            Path(package_path),
+            extract_to=Path(extract_dir),
+            warmup=warmup,
+            repeat=repeat,
+            max_p95_ms=max_p95_ms,
+            min_throughput_hz=min_throughput_hz,
+            output=Path(output) if output else None,
+        )
+
+    def _accept_twin_package_path(
+        self,
+        package_path: Path,
+        *,
+        extract_to: Path,
+        warmup: int,
+        repeat: int,
+        max_p95_ms: float | None = None,
+        min_throughput_hz: float | None = None,
+        output: Path | None,
+    ) -> None:
+        """GUI에서 accept-twin-package CLI 워크플로우를 실행한다."""
+        try:
+            code = self._run_accept_twin_package_cli(
+                package_path,
+                extract_to=extract_to,
+                warmup=warmup,
+                repeat=repeat,
+                max_p95_ms=max_p95_ms,
+                min_throughput_hz=min_throughput_hz,
+                output=output,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._set_status("트윈 패키지 수락 검사 실패")
+            QMessageBox.warning(self, "트윈 패키지 수락 검사 실패", str(exc))
+            return
+        if code != 0:
+            self._set_status("트윈 패키지 수락 검사 실패")
+            QMessageBox.warning(
+                self,
+                "트윈 패키지 수락 검사 실패",
+                f"accept-twin-package 종료 코드: {code}",
+            )
+            return
+
+        self._set_status("트윈 패키지 수락 검사 완료")
+        suffix = f"\n리포트 저장 위치: {output}" if output is not None else ""
+        QMessageBox.information(
+            self,
+            "트윈 패키지 수락 검사 완료",
+            (
+                f"패키지 검증, 샘플 예측, latency SLO 검사가 완료되었습니다.\n"
+                f"패키지: {package_path}\n"
+                f"추출 위치: {extract_to}{suffix}"
+            ),
+        )
+
+    def _run_accept_twin_package_cli(
+        self,
+        package_path: Path,
+        *,
+        extract_to: Path,
+        warmup: int,
+        repeat: int,
+        max_p95_ms: float | None = None,
+        min_throughput_hz: float | None = None,
+        output: Path | None,
+    ) -> int:
+        """테스트에서 대체 가능한 accept-twin-package 실행 래퍼."""
+        from naviertwin.main import _run_accept_twin_package
+
+        return _run_accept_twin_package(
+            package_path=str(package_path),
+            extract_to=str(extract_to),
+            prediction_output=None,
+            warmup=warmup,
+            repeat=repeat,
+            max_mean_ms=None,
+            max_p50_ms=None,
+            max_p95_ms=max_p95_ms,
+            max_p99_ms=None,
+            min_throughput_hz=min_throughput_hz,
+            skip_benchmark=False,
+            output=str(output) if output is not None else None,
             as_json=False,
         )
 
