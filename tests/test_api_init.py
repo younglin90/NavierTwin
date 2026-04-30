@@ -16,6 +16,7 @@ def test_api_root_exports_fastapi_entrypoints() -> None:
         PODReq,
         TwinBenchmarkReq,
         TwinBuildReq,
+        TwinPackageAcceptReq,
         TwinPredictReq,
         create_app,
     )
@@ -30,6 +31,7 @@ def test_api_root_exports_fastapi_entrypoints() -> None:
         "TwinBuildReq",
         "TwinPredictReq",
         "TwinBenchmarkReq",
+        "TwinPackageAcceptReq",
         "LBMReq",
     }
 
@@ -40,6 +42,7 @@ def test_api_root_exports_fastapi_entrypoints() -> None:
     assert api.TwinBuildReq is TwinBuildReq
     assert api.TwinPredictReq is TwinPredictReq
     assert api.TwinBenchmarkReq is TwinBenchmarkReq
+    assert api.TwinPackageAcceptReq is TwinPackageAcceptReq
     assert api.LBMReq is LBMReq
     assert api.app is not None
 
@@ -58,6 +61,7 @@ def test_api_root_create_app_exposes_advertised_routes() -> None:
         "/twin/build",
         "/twin/predict",
         "/twin/benchmark",
+        "/twin/package/accept",
         "/analytic/couette",
         "/analytic/poiseuille_2d",
         "/simulate/lbm_cavity",

@@ -7,6 +7,7 @@
     - POST /twin/build                     : CFD/CSV dataset → TwinEngine 산출물 생성
     - POST /twin/predict                   : 저장/배포된 TwinEngine 예측
     - POST /twin/benchmark                 : TwinEngine 예측 latency/SLO 측정
+    - POST /twin/package/accept            : 전달 ZIP 검증/예측/latency 수락 검사
     - POST /analytic/couette              : Couette 해석해 샘플
     - POST /analytic/poiseuille_2d        : Poiseuille 2D 해석해 샘플
     - POST /optimize/bayesian             : BO 최소화 (간단 quadratic)
@@ -86,6 +87,19 @@ if _HAS_FASTAPI:
         max_p95_ms: Optional[float] = None
         max_p99_ms: Optional[float] = None
         min_throughput_hz: Optional[float] = None
+
+    class TwinPackageAcceptReq(BaseModel):
+        package: str
+        extract_to: Optional[str] = None
+        prediction_output: Optional[str] = None
+        warmup: int = 2
+        repeat: int = 20
+        max_mean_ms: Optional[float] = None
+        max_p50_ms: Optional[float] = None
+        max_p95_ms: Optional[float] = None
+        max_p99_ms: Optional[float] = None
+        min_throughput_hz: Optional[float] = None
+        skip_benchmark: bool = False
 
     class LBMReq(BaseModel):
         nx: int = 32
@@ -287,6 +301,65 @@ def create_app() -> Any:
 
         return payload
 
+    @app.post("/twin/package/accept")
+    def twin_package_accept(req: TwinPackageAcceptReq = Body(...)) -> dict[str, Any]:
+        import tempfile
+        import zipfile
+        from pathlib import Path
+
+        from naviertwin.main import _accept_twin_package_archive
+
+        try:
+            package = Path(req.package).expanduser()
+            prediction_output = (
+                Path(req.prediction_output).expanduser()
+                if req.prediction_output
+                else None
+            )
+            if req.extract_to:
+                payload = _accept_twin_package_archive(
+                    package,
+                    extract_to=Path(req.extract_to).expanduser(),
+                    temporary_extraction=False,
+                    prediction_output=prediction_output,
+                    warmup=req.warmup,
+                    repeat=req.repeat,
+                    max_mean_ms=req.max_mean_ms,
+                    max_p50_ms=req.max_p50_ms,
+                    max_p95_ms=req.max_p95_ms,
+                    max_p99_ms=req.max_p99_ms,
+                    min_throughput_hz=req.min_throughput_hz,
+                    skip_benchmark=req.skip_benchmark,
+                )
+            else:
+                with tempfile.TemporaryDirectory(prefix="naviertwin-api-accept-") as tmp_raw:
+                    payload = _accept_twin_package_archive(
+                        package,
+                        extract_to=Path(tmp_raw) / "twin",
+                        temporary_extraction=True,
+                        prediction_output=prediction_output,
+                        warmup=req.warmup,
+                        repeat=req.repeat,
+                        max_mean_ms=req.max_mean_ms,
+                        max_p50_ms=req.max_p50_ms,
+                        max_p95_ms=req.max_p95_ms,
+                        max_p99_ms=req.max_p99_ms,
+                        min_throughput_hz=req.min_throughput_hz,
+                        skip_benchmark=req.skip_benchmark,
+                    )
+        except (
+            ImportError,
+            KeyError,
+            OSError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            zipfile.BadZipFile,
+        ) as exc:
+            raise fastapi.HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return payload
+
     @app.post("/simulate/lbm_cavity")
     def lbm_cavity(req: LBMReq = Body(...)) -> dict[str, Any]:
         from naviertwin.core.solver_interfaces.lbm_d2q9 import LBMD2Q9
@@ -339,6 +412,7 @@ __all__ = [
     "PoiseuilleReq",
     "TwinBuildReq",
     "TwinBenchmarkReq",
+    "TwinPackageAcceptReq",
     "TwinPredictReq",
     "app",
     "create_app",

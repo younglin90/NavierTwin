@@ -21,6 +21,7 @@ def test_advertised_rest_endpoints_return_json() -> None:
     assert "/twin/build" in route_map
     assert "/twin/predict" in route_map
     assert "/twin/benchmark" in route_map
+    assert "/twin/package/accept" in route_map
 
     assert route_map["/health"]() == {"status": "ok", "service": "naviertwin"}
 
@@ -56,6 +57,41 @@ def _write_snapshot_series(tmp_path, *, steps: int = 8, width: int = 6) -> list:
         path.write_text("\n".join(rows) + "\n", encoding="utf-8")
         paths.append(path)
     return paths
+
+
+def _build_packaged_twin(tmp_path):
+    from naviertwin.api import TwinBuildReq, create_app
+    from naviertwin.main import _run_package_twin
+
+    paths = _write_snapshot_series(tmp_path)
+    outdir = tmp_path / "twin"
+    package_path = tmp_path / "twin.zip"
+    app = create_app()
+    route_map = {
+        route.path: route.endpoint
+        for route in app.routes
+        if hasattr(route, "path") and hasattr(route, "endpoint")
+    }
+    build_payload = route_map["/twin/build"](
+        TwinBuildReq(
+            csv_snapshots=",".join(str(path) for path in paths),
+            field_column="U",
+            outdir=str(outdir),
+            n_modes=2,
+            surrogate="rbf",
+            validation_count=2,
+        )
+    )
+    assert build_payload["status"] == "ok"
+    package_code = _run_package_twin(
+        artifacts_dir=str(outdir),
+        output=str(package_path),
+        include_validation=None,
+        no_latency_slo=True,
+        as_json=True,
+    )
+    assert package_code == 0
+    return app, route_map, package_path
 
 
 def test_twin_build_endpoint_creates_predictable_artifacts(tmp_path) -> None:
@@ -121,6 +157,77 @@ def test_twin_build_endpoint_reports_invalid_source_contract(tmp_path) -> None:
 
     assert exc.value.status_code == 400
     assert "exactly one of input_path or csv_snapshots" in str(exc.value.detail)
+
+
+def test_twin_package_accept_endpoint_runs_delivery_gate(tmp_path) -> None:
+    from naviertwin.api import TwinPackageAcceptReq
+
+    _app, route_map, package_path = _build_packaged_twin(tmp_path)
+    payload = route_map["/twin/package/accept"](
+        TwinPackageAcceptReq(
+            package=str(package_path),
+            extract_to=str(tmp_path / "accepted"),
+            warmup=0,
+            repeat=2,
+            max_p95_ms=100000.0,
+            min_throughput_hz=0.0001,
+        )
+    )
+
+    assert payload["status"] == "ok"
+    assert payload["temporary_extraction"] is False
+    assert payload["verification"]["status"] == "ok"
+    assert payload["inspection"]["status"] == "ok"
+    assert payload["acceptance"]["package"] is True
+    assert payload["acceptance"]["prediction"] is True
+    assert payload["acceptance"]["benchmark"] is True
+    assert payload["acceptance"]["passed"] is True
+    assert payload["prediction"]["prediction_shape"] == [6, 1]
+    assert payload["benchmark"]["repeat"] == 2
+    assert len(payload["benchmark"]["samples_ms"]) == 2
+    assert (tmp_path / "accepted" / "engine.pkl").exists()
+
+
+def test_twin_package_accept_endpoint_reports_slo_failure(tmp_path) -> None:
+    from naviertwin.api import TwinPackageAcceptReq
+
+    _app, route_map, package_path = _build_packaged_twin(tmp_path)
+    payload = route_map["/twin/package/accept"](
+        TwinPackageAcceptReq(
+            package=str(package_path),
+            extract_to=str(tmp_path / "accepted-fail"),
+            warmup=0,
+            repeat=1,
+            max_mean_ms=0.0,
+        )
+    )
+
+    assert payload["status"] == "failed"
+    assert payload["acceptance"]["package"] is True
+    assert payload["acceptance"]["prediction"] is True
+    assert payload["acceptance"]["benchmark"] is False
+    assert payload["benchmark"]["acceptance"]["checks"][0]["metric"] == "latency_ms.mean"
+
+
+def test_twin_package_accept_endpoint_reports_missing_package(tmp_path) -> None:
+    from fastapi import HTTPException
+
+    from naviertwin.api import TwinPackageAcceptReq, create_app
+
+    app = create_app()
+    route_map = {
+        route.path: route.endpoint
+        for route in app.routes
+        if hasattr(route, "path") and hasattr(route, "endpoint")
+    }
+
+    with pytest.raises(HTTPException) as exc:
+        route_map["/twin/package/accept"](
+            TwinPackageAcceptReq(package=str(tmp_path / "missing.zip"))
+        )
+
+    assert exc.value.status_code == 400
+    assert "package not found" in str(exc.value.detail)
 
 
 def test_twin_predict_endpoint_serves_saved_engine(tmp_path) -> None:
