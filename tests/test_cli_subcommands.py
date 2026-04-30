@@ -295,3 +295,30 @@ class TestCLISubcommands:
         assert deployed_predict_payload["status"] == "ok"
         assert deployed_predict_payload["artifacts_dir"].endswith("deployed-twin")
         assert (tmp_path / "deployed-prediction.csv").exists()
+
+        deployed_validate_result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "naviertwin.main",
+                "validate-twin",
+                "--artifacts-dir",
+                str(tmp_path / "deployed-twin"),
+                "--csv-snapshots",
+                ",".join(str(path) for path in paths),
+                "--field-column",
+                "U",
+                "--output",
+                str(tmp_path / "deployed-validation.json"),
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert deployed_validate_result.returncode == 0, deployed_validate_result.stderr
+
+        deployed_validate_payload = json.loads(deployed_validate_result.stdout)
+        assert deployed_validate_payload["status"] == "ok"
+        assert deployed_validate_payload["artifacts_dir"].endswith("deployed-twin")
+        assert (tmp_path / "deployed-validation.json").exists()

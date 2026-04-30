@@ -147,7 +147,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # validate-twin
     p_validate = sub.add_parser("validate-twin", help="저장된 TwinEngine을 기준 CFD/CSV 데이터로 검증")
-    p_validate.add_argument("--engine", required=True, help="검증할 engine.pkl 경로")
+    validate_engine = p_validate.add_mutually_exclusive_group(required=True)
+    validate_engine.add_argument("--engine", default=None, help="검증할 engine.pkl 경로")
+    validate_engine.add_argument(
+        "--artifacts-dir",
+        default=None,
+        help="engine.pkl을 포함한 build/extract 산출물 디렉토리",
+    )
     validate_source = p_validate.add_mutually_exclusive_group(required=True)
     validate_source.add_argument("--input", default=None, help="ReaderFactory로 읽을 CFD 파일/케이스 경로")
     validate_source.add_argument(
@@ -379,6 +385,7 @@ def main() -> None:
         sys.exit(
             _run_validate_twin(
                 engine_path=args.engine,
+                artifacts_dir=args.artifacts_dir,
                 input_path=args.input,
                 csv_snapshots=args.csv_snapshots,
                 field=args.field,
@@ -1104,7 +1111,8 @@ def _run_predict_twin(
 
 def _run_validate_twin(
     *,
-    engine_path: str,
+    engine_path: str | None,
+    artifacts_dir: str | None = None,
     input_path: str | None,
     csv_snapshots: str | None,
     field: str | None,
@@ -1124,7 +1132,10 @@ def _run_validate_twin(
         from naviertwin.core.digital_twin.twin_engine import TwinEngine
         from naviertwin.core.validation.metrics import compute_all_metrics
 
-        engine_file = Path(engine_path).expanduser()
+        engine_file = _resolve_twin_engine_path(
+            engine_path=engine_path,
+            artifacts_dir=artifacts_dir,
+        )
         snapshots, selected_field, source_meta = _load_build_twin_snapshots(
             input_path=input_path,
             csv_snapshots=csv_snapshots,
@@ -1157,6 +1168,7 @@ def _run_validate_twin(
         payload = {
             "status": "ok" if acceptance["passed"] else "failed",
             "engine": str(engine_file),
+            "artifacts_dir": str(Path(artifacts_dir).expanduser()) if artifacts_dir else None,
             "field": selected_field,
             "source": source_meta,
             "acceptance": acceptance,
@@ -1317,7 +1329,7 @@ def _build_twin_delivery_entries(
         "--output prediction.csv --json"
     )
     validate_command = (
-        "naviertwin validate-twin --engine engine.pkl "
+        "naviertwin validate-twin --artifacts-dir <extracted-dir> "
         '--csv-snapshots "case/validation/*.csv" '
         "--field-column U --max-rmse 0.05 --min-r2 0.98 "
         "--output validation.json --json"

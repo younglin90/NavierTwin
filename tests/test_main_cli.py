@@ -168,6 +168,29 @@ class TestBuildParser:
         assert args.max_rmse == 0.1
         assert args.as_json is True
 
+    def test_parse_validate_twin_artifacts_dir_subcommand(self, tmp_path) -> None:
+        from naviertwin.main import _build_parser
+
+        p = _build_parser()
+        args = p.parse_args(
+            [
+                "validate-twin",
+                "--artifacts-dir",
+                str(tmp_path / "deployed-twin"),
+                "--csv-snapshots",
+                str(tmp_path / "snapshots"),
+                "--field-column",
+                "U",
+                "--json",
+            ]
+        )
+        assert args.command == "validate-twin"
+        assert args.artifacts_dir.endswith("deployed-twin")
+        assert args.engine is None
+        assert args.csv_snapshots.endswith("snapshots")
+        assert args.field_column == "U"
+        assert args.as_json is True
+
     def test_parse_package_twin_subcommand(self, tmp_path) -> None:
         from naviertwin.main import _build_parser
 
@@ -521,6 +544,28 @@ class TestRunBuildTwin:
         assert deployed_predict_payload["artifacts_dir"].endswith("deployed-twin")
         assert deployed_predict_payload["engine"].endswith("engine.pkl")
         assert (tmp_path / "deployed-prediction.csv").exists()
+
+        deployed_validate_code = _run_validate_twin(
+            engine_path=None,
+            artifacts_dir=str(tmp_path / "deployed-twin"),
+            input_path=None,
+            csv_snapshots=",".join(str(path) for path in paths),
+            field=None,
+            field_column="U",
+            params=None,
+            param_columns=None,
+            max_rmse=None,
+            min_r2=None,
+            max_relative_l2=None,
+            output=str(tmp_path / "deployed-validation.json"),
+            as_json=True,
+        )
+        deployed_validate_payload = json.loads(capsys.readouterr().out)
+
+        assert deployed_validate_code == 0
+        assert deployed_validate_payload["artifacts_dir"].endswith("deployed-twin")
+        assert deployed_validate_payload["engine"].endswith("engine.pkl")
+        assert (tmp_path / "deployed-validation.json").exists()
 
         repeat_extract_code = _run_verify_twin_package(
             package_path=str(tmp_path / "twin-delivery.zip"),

@@ -303,6 +303,10 @@ class MainWindow(QMainWindow):
         validate_twin_action.triggered.connect(self._validate_twin_from_engine)
         self._tools_menu.addAction(validate_twin_action)
 
+        validate_deployed_twin_action = QAction("배포 트윈 디렉토리 검증(&W)", self)
+        validate_deployed_twin_action.triggered.connect(self._validate_twin_from_artifacts_dir)
+        self._tools_menu.addAction(validate_deployed_twin_action)
+
         package_twin_action = QAction("트윈 산출물 패키징(&Z)", self)
         package_twin_action.triggered.connect(self._package_twin_artifacts)
         self._tools_menu.addAction(package_twin_action)
@@ -1046,6 +1050,68 @@ class MainWindow(QMainWindow):
             max_relative_l2=max_relative_l2,
         )
 
+    def _validate_twin_from_artifacts_dir(self) -> None:
+        """배포/추출된 트윈 산출물 디렉토리를 CSV 기준 snapshot으로 검증한다."""
+        artifacts_dir = QFileDialog.getExistingDirectory(
+            self,
+            "트윈 산출물 디렉토리 선택",
+            "",
+        )
+        if not artifacts_dir:
+            return
+
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "검증 CSV 스냅샷 선택",
+            "",
+            "CSV snapshots (*.csv)",
+        )
+        if not paths:
+            return
+
+        field_column, ok = QInputDialog.getText(
+            self,
+            "필드 컬럼",
+            "검증할 scalar/vector 성분 컬럼명:",
+            text="U",
+        )
+        field_column = field_column.strip()
+        if not ok or not field_column:
+            return
+
+        thresholds, ok = QInputDialog.getText(
+            self,
+            "검증 기준",
+            "max_rmse,min_r2,max_relative_l2 (빈 값 허용):",
+            text="",
+        )
+        if not ok:
+            return
+        try:
+            max_rmse, min_r2, max_relative_l2 = self._parse_validation_thresholds(
+                thresholds
+            )
+        except ValueError as exc:
+            self._set_status("배포 트윈 검증 실패")
+            QMessageBox.warning(self, "배포 트윈 검증 실패", str(exc))
+            return
+
+        output, _ = QFileDialog.getSaveFileName(
+            self,
+            "검증 JSON 저장",
+            "validation.json",
+            "JSON (*.json)",
+        )
+        self._validate_twin_from_artifacts_dir_paths(
+            Path(artifacts_dir),
+            [Path(path) for path in paths],
+            field_column=field_column,
+            output=Path(output) if output else None,
+            max_rmse=max_rmse,
+            min_r2=min_r2,
+            max_relative_l2=max_relative_l2,
+        )
+
     def _validate_twin_from_paths(
         self,
         engine_path: Path,
@@ -1091,6 +1157,52 @@ class MainWindow(QMainWindow):
             f"저장된 TwinEngine 검증이 완료되었습니다.{suffix}",
         )
 
+    def _validate_twin_from_artifacts_dir_paths(
+        self,
+        artifacts_dir: Path,
+        csv_paths: list[Path],
+        *,
+        field_column: str,
+        output: Path | None,
+        max_rmse: float | None = None,
+        min_r2: float | None = None,
+        max_relative_l2: float | None = None,
+    ) -> None:
+        """GUI에서 validate-twin --artifacts-dir 워크플로우를 실행한다."""
+        try:
+            code = self._run_validate_twin_artifacts_cli(
+                artifacts_dir,
+                csv_paths,
+                field_column=field_column,
+                output=output,
+                max_rmse=max_rmse,
+                min_r2=min_r2,
+                max_relative_l2=max_relative_l2,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._set_status("배포 트윈 검증 실패")
+            QMessageBox.warning(self, "배포 트윈 검증 실패", str(exc))
+            return
+        if code != 0:
+            self._set_status("배포 트윈 검증 실패")
+            QMessageBox.warning(
+                self,
+                "배포 트윈 검증 실패",
+                f"validate-twin 종료 코드: {code}",
+            )
+            return
+
+        engine_path = artifacts_dir / "engine.pkl"
+        if engine_path.exists():
+            self._load_engine_artifact(engine_path)
+        self._set_status("배포 트윈 검증 완료")
+        suffix = f"\n저장 위치: {output}" if output is not None else ""
+        QMessageBox.information(
+            self,
+            "배포 트윈 검증 완료",
+            f"배포된 트윈 디렉토리 검증이 완료되었습니다.{suffix}",
+        )
+
     def _run_validate_twin_cli(
         self,
         engine_path: Path,
@@ -1107,6 +1219,37 @@ class MainWindow(QMainWindow):
 
         return _run_validate_twin(
             engine_path=str(engine_path),
+            artifacts_dir=None,
+            input_path=None,
+            csv_snapshots=",".join(str(path) for path in csv_paths),
+            field=None,
+            field_column=field_column,
+            params=None,
+            param_columns=None,
+            max_rmse=max_rmse,
+            min_r2=min_r2,
+            max_relative_l2=max_relative_l2,
+            output=str(output) if output is not None else None,
+            as_json=False,
+        )
+
+    def _run_validate_twin_artifacts_cli(
+        self,
+        artifacts_dir: Path,
+        csv_paths: list[Path],
+        *,
+        field_column: str,
+        output: Path | None,
+        max_rmse: float | None = None,
+        min_r2: float | None = None,
+        max_relative_l2: float | None = None,
+    ) -> int:
+        """테스트에서 대체 가능한 validate-twin --artifacts-dir 실행 래퍼."""
+        from naviertwin.main import _run_validate_twin
+
+        return _run_validate_twin(
+            engine_path=None,
+            artifacts_dir=str(artifacts_dir),
             input_path=None,
             csv_snapshots=",".join(str(path) for path in csv_paths),
             field=None,
