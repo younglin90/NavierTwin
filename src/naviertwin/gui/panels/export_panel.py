@@ -48,6 +48,8 @@ class ExportPanel(QWidget):
         self._engine: Optional[object] = None
         self._model_artifact: Optional[object] = None
         self._model_sample_input: Optional[object] = None
+        self._last_project_load_error: str | None = None
+        self._last_project_load_warning: str | None = None
         self._setup_ui()
 
     # ──────────────────────────────────────────────────────────────────
@@ -169,35 +171,52 @@ class ExportPanel(QWidget):
 
     def load_project_path(self, path: Path) -> bool:
         """지정한 .ntwin 프로젝트 파일을 로드하고 workflow 복원 신호를 발생시킨다."""
+        self._last_project_load_error = None
+        self._last_project_load_warning = None
         try:
             from naviertwin.core.export.ntwin_format import load_dataset
 
-            self._engine = None
             dataset = load_dataset(path)
-            self._dataset = dataset
-            self._path_edit.setText(str(path))
-            self._log(f"✓ 프로젝트 로드: {path} ({dataset.n_points} pts)")
-
             metadata = self._read_metadata_sidecar(path)
-            if metadata is not None:
-                self._attach_project_metadata(metadata)
-                self._apply_loaded_metadata_to_dataset(metadata)
 
+            engine: object | None = None
             model_path = path.with_suffix(".engine.pkl")
             if model_path.exists():
                 from naviertwin.core.digital_twin.twin_engine import TwinEngine
 
-                self._engine = TwinEngine.load(model_path)
-                self._log(f"✓ TwinEngine 로드: {model_path}")
+                try:
+                    engine = TwinEngine.load(model_path)
+                    self._log(f"✓ TwinEngine 로드: {model_path}")
+                except Exception as exc:  # noqa: BLE001
+                    self._last_project_load_warning = f"TwinEngine 로드 실패: {exc}"
+                    self._log(f"[WARN] {self._last_project_load_warning}")
             else:
                 self._log("ℹ TwinEngine 파일 없음 (.engine.pkl)")
+
+            self._dataset = dataset
+            self._engine = engine
+            self._path_edit.setText(str(path))
+            self._log(f"✓ 프로젝트 로드: {path} ({dataset.n_points} pts)")
+
+            if metadata is not None:
+                self._attach_project_metadata(metadata)
+                self._apply_loaded_metadata_to_dataset(metadata)
             if metadata is not None and self._engine is not None:
                 self._attach_project_metadata(metadata)
             self.project_loaded.emit(self._dataset, self._engine)
             return True
         except Exception as exc:
+            self._last_project_load_error = str(exc)
             self._log(f"[ERROR] 프로젝트 로드 실패: {exc}")
             return False
+
+    def last_project_load_error(self) -> str | None:
+        """마지막 .ntwin 로드 실패 메시지를 반환한다."""
+        return self._last_project_load_error
+
+    def last_project_load_warning(self) -> str | None:
+        """마지막 .ntwin 부분 복구 경고 메시지를 반환한다."""
+        return self._last_project_load_warning
 
     # ──────────────────────────────────────────────────────────────────
     # 슬롯

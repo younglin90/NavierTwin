@@ -574,6 +574,7 @@ class MainWindow(QMainWindow):
     def _on_project_loaded(self, dataset: object, engine: object | None) -> None:
         """Export 패널에서 로드한 프로젝트를 전체 워크플로우 상태로 복원한다."""
         self._on_dataset_loaded(dataset)
+        load_warning = self._export_panel.last_project_load_warning()
         if engine is not None:
             self._latest_engine = engine
             self._latest_reducer = getattr(engine, "reducer", self._latest_reducer)
@@ -585,7 +586,11 @@ class MainWindow(QMainWindow):
             if self._latest_surrogate is not None and self._explain_panel is not None:
                 self._explain_panel.set_model(self._latest_surrogate)
             self._set_status("프로젝트 로드 완료 (dataset + TwinEngine)")
+        elif load_warning:
+            self._latest_engine = None
+            self._set_status(f"프로젝트 부분 로드 완료 (dataset) — {load_warning}")
         else:
+            self._latest_engine = None
             self._set_status("프로젝트 로드 완료 (dataset)")
         loaded_meta = self._extract_project_metadata(dataset, engine)
         self._model_panel.set_loaded_metadata(loaded_meta)
@@ -632,15 +637,24 @@ class MainWindow(QMainWindow):
         if path:
             self._open_selected_path(Path(path))
 
-    def _open_selected_path(self, path: Path) -> None:
+    def _open_selected_path(self, path: Path) -> bool:
         """파일 메뉴 선택 경로를 포맷에 맞는 GUI 경로로 전달한다."""
         if path.suffix.lower() == ".ntwin":
             self._tabs.setCurrentWidget(self._export_panel)
-            self._export_panel.load_project_path(path)
-            return
+            if self._export_panel.load_project_path(path):
+                return True
+            detail = self._export_panel.last_project_load_error() or "알 수 없는 오류"
+            self._set_status("프로젝트 열기 실패")
+            QMessageBox.warning(
+                self,
+                "프로젝트 열기 실패",
+                f"{path.name} 파일을 열 수 없습니다.\n\n{detail}",
+            )
+            return False
 
         self._import_panel._path_edit.setText(str(path))
         self._tabs.setCurrentWidget(self._import_panel)
+        return True
 
     def _save_project(self) -> None:
         self._tabs.setCurrentIndex(5)
@@ -2164,7 +2178,8 @@ class MainWindow(QMainWindow):
                 f"파일을 찾을 수 없습니다:\n{path}",
             )
             return
-        self._open_selected_path(path)
+        if not self._open_selected_path(path):
+            self._remove_recent_project(path)
 
     def _check_for_updates(self) -> None:
         path, _ = QFileDialog.getOpenFileName(

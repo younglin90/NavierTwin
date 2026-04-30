@@ -60,6 +60,28 @@ def test_export_panel_load_project_path_emits_project_loaded(qtbot, tmp_path: Pa
     assert emitted[0][1] is None
 
 
+def test_export_panel_load_project_path_reports_corrupt_project_without_mutating_state(
+    qtbot,
+    tmp_path: Path,
+) -> None:
+    from naviertwin.gui.panels.export_panel import ExportPanel
+
+    valid_path = _write_ntwin(tmp_path)
+    corrupt_path = tmp_path / "corrupt_project.ntwin"
+    corrupt_path.write_bytes(b"not an hdf5 naviertwin project")
+    panel = ExportPanel()
+    qtbot.addWidget(panel)
+
+    assert panel.load_project_path(valid_path) is True
+    previous_dataset = panel._dataset
+
+    assert panel.load_project_path(corrupt_path) is False
+
+    assert panel._dataset is previous_dataset
+    assert panel._path_edit.text() == str(valid_path)
+    assert panel.last_project_load_error()
+
+
 def test_main_window_open_selected_ntwin_routes_to_project_loader(
     qtbot, tmp_path: Path
 ) -> None:
@@ -69,13 +91,64 @@ def test_main_window_open_selected_ntwin_routes_to_project_loader(
     win = MainWindow(confirm_on_close=False)
     qtbot.addWidget(win)
 
-    win._open_selected_path(path)
+    assert win._open_selected_path(path) is True
 
     assert win._latest_dataset is not None
     assert win._export_panel._dataset is not None
     assert win._export_panel._path_edit.text() == str(path)
     assert win._import_panel._path_edit.text() == ""
     assert "프로젝트 로드 완료" in win._status_label.text()
+
+
+def test_main_window_open_selected_corrupt_ntwin_surfaces_error(
+    qtbot,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    from naviertwin.gui.main_window import MainWindow
+    from naviertwin.utils.config import load_config
+
+    corrupt_path = tmp_path / "corrupt_project.ntwin"
+    corrupt_path.write_bytes(b"not an hdf5 naviertwin project")
+    cfg_path = tmp_path / "cfg.json"
+    warnings: list[tuple[str, str]] = []
+
+    def capture_warning(parent: object, title: str, text: str) -> None:
+        warnings.append((title, text))
+
+    monkeypatch.setattr(QMessageBox, "warning", capture_warning)
+    win = MainWindow(confirm_on_close=False, config_path=cfg_path)
+    qtbot.addWidget(win)
+
+    assert win._open_selected_path(corrupt_path) is False
+
+    assert warnings
+    assert warnings[0][0] == "프로젝트 열기 실패"
+    assert corrupt_path.name in warnings[0][1]
+    assert win._latest_dataset is None
+    assert win._status_label.text() == "프로젝트 열기 실패"
+    assert load_config(cfg_path).recent_projects == []
+
+
+def test_main_window_open_selected_ntwin_partial_engine_restore(
+    qtbot,
+    tmp_path: Path,
+) -> None:
+    from naviertwin.gui.main_window import MainWindow
+
+    path = _write_ntwin(tmp_path)
+    path.with_suffix(".engine.pkl").write_bytes(b"not a valid TwinEngine pickle")
+    win = MainWindow(confirm_on_close=False)
+    qtbot.addWidget(win)
+
+    assert win._open_selected_path(path) is True
+
+    assert win._latest_dataset is not None
+    assert win._latest_engine is None
+    assert "프로젝트 부분 로드 완료" in win._status_label.text()
+    assert "TwinEngine 로드 실패" in win._status_label.text()
 
 
 def test_main_window_open_selected_cfd_routes_to_import_panel(qtbot, tmp_path: Path) -> None:
@@ -86,7 +159,7 @@ def test_main_window_open_selected_cfd_routes_to_import_panel(qtbot, tmp_path: P
     win = MainWindow(confirm_on_close=False)
     qtbot.addWidget(win)
 
-    win._open_selected_path(path)
+    assert win._open_selected_path(path) is True
 
     assert win._import_panel._path_edit.text() == str(path)
     assert win._tabs.currentWidget() is win._import_panel

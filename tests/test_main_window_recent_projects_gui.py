@@ -85,3 +85,28 @@ def test_open_selected_ntwin_records_recent_project(qtbot, tmp_path: Path) -> No
     cfg = load_config(cfg_path)
     assert cfg.recent_projects[0] == str(path.resolve())
     assert win._recent_projects_menu.actions()[0].text() == path.name
+
+
+def test_corrupt_recent_project_is_removed_after_failed_open(
+    qtbot,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    from naviertwin.gui.main_window import MainWindow
+    from naviertwin.utils.config import load_config
+
+    path = tmp_path / "corrupt_recent.ntwin"
+    path.write_bytes(b"not an hdf5 naviertwin project")
+    cfg_path = tmp_path / "cfg.json"
+    win = MainWindow(confirm_on_close=False, config_path=cfg_path)
+    qtbot.addWidget(win)
+    win._remember_recent_project(path)
+
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: None)
+    action = win._recent_projects_menu.actions()[0]
+    action.trigger()
+
+    assert load_config(cfg_path).recent_projects == []
+    assert win._recent_projects_menu.actions()[0].text() == "최근 프로젝트 없음"
