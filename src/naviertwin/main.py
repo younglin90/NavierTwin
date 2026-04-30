@@ -1675,13 +1675,13 @@ def _build_twin_delivery_entries(
     parameter_contract = extra_meta.get("parameter_contract")
     if not isinstance(parameter_contract, dict):
         parameter_contract = None
-    example_params = _example_params_from_contract(parameter_contract)
+    parameter_input_args = _parameter_input_args_from_contract(parameter_contract)
     predict_command = (
-        f"naviertwin predict-twin --artifacts-dir <extracted-dir> --params {example_params} "
+        f"naviertwin predict-twin --artifacts-dir <extracted-dir> {parameter_input_args} "
         "--output prediction.csv --json"
     )
     benchmark_command = (
-        f"naviertwin benchmark-twin --artifacts-dir <extracted-dir> --params {example_params} "
+        f"naviertwin benchmark-twin --artifacts-dir <extracted-dir> {parameter_input_args} "
         "--warmup 2 --repeat 20 --max-p95-ms 100 --min-throughput-hz 10 "
         "--output latency.json --json"
     )
@@ -1695,12 +1695,16 @@ def _build_twin_delivery_entries(
         "naviertwin verify-twin-package --package naviertwin-twin.zip "
         "--extract-to ./naviertwin-twin --json"
     )
+    sample_params_csv = _sample_params_csv_from_contract(parameter_contract)
+    generated_entries = ["README.txt", "delivery.json"]
+    if sample_params_csv is not None:
+        generated_entries.append("sample_params.csv")
     delivery = {
         "format": "NavierTwin delivery package",
         "schema": "naviertwin-delivery-v1",
         "artifacts_dir": str(root),
         "files": [path.name for path in files],
-        "generated_entries": ["README.txt", "delivery.json"],
+        "generated_entries": generated_entries,
         "source_integrity": source_integrity,
         "parameter_contract": parameter_contract,
         "build_manifest": {
@@ -1755,6 +1759,7 @@ def _build_twin_delivery_entries(
             "- metrics.json: build/validation metrics from build-twin",
             "- report.html: customer-readable build report",
             "- validation.json: optional independent validation report",
+            "- sample_params.csv: generated example input parameters for this twin",
             "",
             *contract_lines,
             "",
@@ -1773,10 +1778,44 @@ def _build_twin_delivery_entries(
             "",
         ]
     )
-    return {
+    entries = {
         "README.txt": readme,
         "delivery.json": json.dumps(delivery, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
     }
+    if sample_params_csv is not None:
+        entries["sample_params.csv"] = sample_params_csv
+    return entries
+
+
+def _parameter_input_args_from_contract(contract: dict[str, Any] | None) -> str:
+    """delivery command에 넣을 contract-aware 입력 인자 예시를 만든다."""
+    if not isinstance(contract, dict):
+        return "--params 0.25"
+    names = [str(name) for name in contract.get("names", []) if str(name)]
+    try:
+        dim = int(contract.get("dim", 0))
+    except (TypeError, ValueError):
+        dim = 0
+    if dim > 0 and len(names) == dim and _sample_params_csv_from_contract(contract):
+        return (
+            "--params-csv <extracted-dir>/sample_params.csv "
+            f"--param-columns {','.join(names)}"
+        )
+    return f"--params {_example_params_from_contract(contract)}"
+
+
+def _sample_params_csv_from_contract(contract: dict[str, Any] | None) -> str | None:
+    """parameter contract에서 1-row sample_params.csv 내용을 만든다."""
+    if not isinstance(contract, dict):
+        return None
+    names = [str(name) for name in contract.get("names", []) if str(name)]
+    try:
+        dim = int(contract.get("dim", 0))
+    except (TypeError, ValueError):
+        return None
+    if dim <= 0 or len(names) != dim:
+        return None
+    return f"{','.join(names)}\n{_example_params_from_contract(contract)}\n"
 
 
 def _example_params_from_contract(contract: dict[str, Any] | None) -> str:

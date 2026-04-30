@@ -265,7 +265,7 @@ src/naviertwin/
 - 배포 트윈 지연시간/SLO 측정: `naviertwin benchmark-twin --artifacts-dir /tmp/naviertwin-deploy --params 0.25 --warmup 2 --repeat 20 --max-p95-ms 100 --min-throughput-hz 10 --output /tmp/naviertwin-latency.json --json`
 - 저장된 트윈 검증 실행: `naviertwin validate-twin --engine /tmp/naviertwin-twin/engine.pkl --csv-snapshots "case/snapshots/*.csv" --field-column U --max-rmse 0.05 --min-r2 0.98 --output /tmp/naviertwin-validation.json --json`
 - 배포 트윈 디렉토리 검증 실행: `naviertwin validate-twin --artifacts-dir /tmp/naviertwin-deploy --csv-snapshots "case/snapshots/*.csv" --field-column U --max-rmse 0.05 --min-r2 0.98 --output /tmp/naviertwin-validation.json --json`
-- 트윈 산출물 ZIP 패키징(README.txt/delivery.json/parameter_contract 포함): `naviertwin package-twin --artifacts-dir /tmp/naviertwin-twin --include-validation /tmp/naviertwin-validation.json --output /tmp/naviertwin-twin.zip --json`
+- 트윈 산출물 ZIP 패키징(README.txt/delivery.json/parameter_contract/sample_params.csv 포함): `naviertwin package-twin --artifacts-dir /tmp/naviertwin-twin --include-validation /tmp/naviertwin-validation.json --output /tmp/naviertwin-twin.zip --json`
 - 트윈 전달 ZIP 구성/입력 contract 조회: `naviertwin inspect-twin-package --package /tmp/naviertwin-twin.zip --json`
 - 트윈 전달 ZIP 검증/안전 추출: `naviertwin verify-twin-package --package /tmp/naviertwin-twin.zip --extract-to /tmp/naviertwin-deploy --json`
 - 전체 core 회귀: `QT_QPA_PLATFORM=offscreen MPLCONFIGDIR=/tmp/mpl pytest -q`

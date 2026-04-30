@@ -576,22 +576,30 @@ class TestRunBuildTwin:
         assert package_payload["source_integrity"]["passed"] is True
         assert "engine.pkl" in package_payload["files"]
         assert "validation.json" in package_payload["files"]
-        assert package_payload["generated_entries"] == ["README.txt", "delivery.json"]
+        assert package_payload["generated_entries"] == [
+            "README.txt",
+            "delivery.json",
+            "sample_params.csv",
+        ]
         assert "README.txt" not in package_payload["files"]
         assert "delivery.json" not in package_payload["files"]
         manifest_names = {entry["name"] for entry in package_payload["manifest_entries"]}
-        assert {"README.txt", "delivery.json"} <= manifest_names
+        assert {"README.txt", "delivery.json", "sample_params.csv"} <= manifest_names
         assert (tmp_path / "twin-delivery.zip").exists()
 
         with zipfile.ZipFile(tmp_path / "twin-delivery.zip") as archive:
             readme = archive.read("README.txt").decode("utf-8")
             delivery = json.loads(archive.read("delivery.json").decode("utf-8"))
+            sample_params = archive.read("sample_params.csv").decode("utf-8")
         assert "verify-twin-package" in readme
         assert "--max-p95-ms" in readme
         assert "Expected input parameters" in readme
         assert delivery["format"] == "NavierTwin delivery package"
         assert delivery["commands"]["predict"].startswith("naviertwin predict-twin")
+        assert "--params-csv <extracted-dir>/sample_params.csv" in delivery["commands"]["predict"]
+        assert "--param-columns normalized_index" in delivery["commands"]["benchmark"]
         assert "--min-throughput-hz" in delivery["commands"]["benchmark"]
+        assert sample_params == "normalized_index\n0.5\n"
         assert delivery["parameter_contract"] == contract
 
         inspect_code = _run_inspect_twin_package(
@@ -922,9 +930,12 @@ class TestRunBuildTwin:
                 if name != "MANIFEST.json"
             }
 
-        assert "--params 0.55,2.75" in delivery["commands"]["predict"]
-        assert "--params 0.55,2.75" in delivery["commands"]["benchmark"]
-        assert "--params 0.55,2.75" in readme
+        sample_params = original_entries["sample_params.csv"].decode("utf-8")
+
+        assert "--params-csv <extracted-dir>/sample_params.csv" in delivery["commands"]["predict"]
+        assert "--param-columns mach,aoa" in delivery["commands"]["benchmark"]
+        assert "--params-csv <extracted-dir>/sample_params.csv" in readme
+        assert sample_params == "mach,aoa\n0.55,2.75\n"
         assert delivery["parameter_contract"] == contract
 
         inspect_code = _run_inspect_twin_package(

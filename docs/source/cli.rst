@@ -136,7 +136,9 @@ contains bytes and SHA256 hashes for every archived entry. Before packaging,
 ``manifest.json`` integrity records are checked against the current files so
 tampered build artifacts fail fast. The delivery metadata also echoes the
 parameter contract so recipients can inspect expected input names/ranges without
-loading Python code.
+loading Python code. When a contract with names is available, the ZIP includes
+``sample_params.csv`` and README/delivery commands use ``--params-csv`` plus
+``--param-columns`` so multi-parameter twins have copy-pasteable inputs.
 
 inspect-twin-package
 --------------------

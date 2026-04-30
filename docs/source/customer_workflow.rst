@@ -82,6 +82,8 @@ artifact에 ``parameter_contract`` 가 있으면 예측 전에 입력 차원을 
 ``README.txt`` 에 고객 실행 안내를, ``delivery.json`` 에 기계 판독용 메타데이터를,
 ``MANIFEST.json`` 에 각 파일의 bytes와 SHA256을 기록합니다. 전달 metadata에는
 고객이 예상 입력 파라미터를 확인할 수 있도록 ``parameter_contract`` 도 포함됩니다.
+contract에 파라미터 이름이 있으면 ``sample_params.csv`` 도 함께 생성되어
+README/delivery 명령이 다차원 입력에서도 그대로 실행됩니다.
 
 8. 전달 ZIP 구성 조회
 ---------------------

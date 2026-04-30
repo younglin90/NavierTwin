@@ -223,11 +223,15 @@ class TestCLISubcommands:
         assert package_payload["status"] == "ok"
         assert "engine.pkl" in package_payload["files"]
         assert "validation.json" in package_payload["files"]
-        assert package_payload["generated_entries"] == ["README.txt", "delivery.json"]
+        assert package_payload["generated_entries"] == [
+            "README.txt",
+            "delivery.json",
+            "sample_params.csv",
+        ]
         assert "README.txt" not in package_payload["files"]
         assert "delivery.json" not in package_payload["files"]
         manifest_names = {entry["name"] for entry in package_payload["manifest_entries"]}
-        assert {"README.txt", "delivery.json"} <= manifest_names
+        assert {"README.txt", "delivery.json", "sample_params.csv"} <= manifest_names
         assert (tmp_path / "twin-delivery.zip").exists()
 
         inspect_package_result = subprocess.run(
