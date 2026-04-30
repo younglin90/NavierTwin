@@ -794,12 +794,17 @@ def _load_build_twin_params(
     params_path: str | None,
     param_columns: str | None,
     n_snapshots: int,
-) -> Any:
+) -> tuple[Any, dict[str, Any]]:
     """사용자 파라미터 CSV 또는 기본 normalized index를 로드한다."""
     import numpy as np
 
     if params_path is None:
-        return np.linspace(0.0, 1.0, n_snapshots).reshape(-1, 1)
+        values = np.linspace(0.0, 1.0, n_snapshots).reshape(-1, 1)
+        return values, _build_parameter_contract(
+            values,
+            names=["normalized_index"],
+            source="default-normalized-index",
+        )
 
     try:
         import pandas as pd
@@ -822,7 +827,44 @@ def _load_build_twin_params(
         raise ValueError(
             f"params row count mismatch: {values.shape[0]} vs snapshots {n_snapshots}"
         )
-    return values
+    return values, _build_parameter_contract(
+        values,
+        names=[str(column) for column in columns],
+        source=str(Path(params_path).expanduser()),
+    )
+
+
+def _build_parameter_contract(
+    values: Any,
+    *,
+    names: list[str],
+    source: str,
+) -> dict[str, Any]:
+    """학습 파라미터의 고객-facing 입력 contract를 만든다."""
+    import numpy as np
+
+    array = np.asarray(values, dtype=np.float64)
+    if array.ndim != 2:
+        raise ValueError(f"params must be 2D to build contract, got shape {array.shape}")
+    if len(names) != array.shape[1]:
+        raise ValueError("parameter names must match parameter dimension")
+    mins = np.min(array, axis=0)
+    maxs = np.max(array, axis=0)
+    ranges = [
+        {
+            "name": name,
+            "observed_min": float(mins[index]),
+            "observed_max": float(maxs[index]),
+        }
+        for index, name in enumerate(names)
+    ]
+    return {
+        "schema": "naviertwin-parameter-contract-v1",
+        "source": source,
+        "dim": int(array.shape[1]),
+        "names": list(names),
+        "ranges": ranges,
+    }
 
 
 def _load_build_twin_snapshots(
@@ -909,7 +951,7 @@ def _run_build_twin(
         if n_modes < 1:
             raise ValueError("n-modes must be positive")
 
-        params_array = _load_build_twin_params(
+        params_array, parameter_contract = _load_build_twin_params(
             params_path=params,
             param_columns=param_columns,
             n_snapshots=n_snapshots,
@@ -968,6 +1010,7 @@ def _run_build_twin(
                 "train_count": int(train_count),
                 "validation_count": int(val_count),
                 "param_dim": int(params_array.shape[1]),
+                "parameter_contract": parameter_contract,
             },
             "metrics": metrics,
         }
@@ -999,6 +1042,7 @@ def _run_build_twin(
                 "train_count": train_count,
                 "validation_count": val_count,
                 "param_dim": int(params_array.shape[1]),
+                "parameter_contract": parameter_contract,
                 "has_engine": True,
                 "engine_path": str(engine_path),
                 "artifact_integrity": artifact_integrity,
@@ -1102,6 +1146,86 @@ def _resolve_twin_engine_path(
     raise ValueError("--engine or --artifacts-dir is required")
 
 
+def _load_twin_parameter_contract(engine_file: Path) -> dict[str, Any] | None:
+    """engine.pkl 옆 manifest.json에서 optional parameter contract를 읽는다."""
+    manifest_path = engine_file.parent / "manifest.json"
+    if not manifest_path.exists():
+        return None
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    extra = manifest.get("extra", {})
+    if not isinstance(extra, dict):
+        return None
+    contract = extra.get("parameter_contract")
+    return contract if isinstance(contract, dict) else None
+
+
+def _check_twin_parameter_contract(
+    params_array: Any,
+    contract: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """입력 파라미터 배열이 저장된 트윈 contract와 호환되는지 확인한다."""
+    import numpy as np
+
+    array = np.asarray(params_array, dtype=np.float64)
+    if contract is None:
+        return {
+            "available": False,
+            "passed": True,
+            "warnings": ["parameter contract unavailable"],
+        }
+    if array.ndim == 1:
+        input_dim = int(array.shape[0])
+        batch = array.reshape(1, -1)
+    elif array.ndim == 2:
+        input_dim = int(array.shape[1])
+        batch = array
+    else:
+        raise ValueError(f"params must be 1D or 2D, got shape {array.shape}")
+
+    expected_dim = int(contract.get("dim", -1))
+    names = [str(name) for name in contract.get("names", [])]
+    source = str(contract.get("source", "unknown"))
+    if input_dim != expected_dim:
+        display_names = ", ".join(names) if names else "-"
+        raise ValueError(
+            "parameter dimension mismatch: "
+            f"expected {expected_dim} from contract source={source} "
+            f"names=[{display_names}], got {input_dim} for input shape {list(array.shape)}"
+        )
+
+    warnings: list[dict[str, Any]] = []
+    ranges = contract.get("ranges", [])
+    if isinstance(ranges, list):
+        for index, record in enumerate(ranges[:input_dim]):
+            if not isinstance(record, dict):
+                continue
+            name = str(record.get("name", names[index] if index < len(names) else index))
+            observed_min = float(record.get("observed_min", float("-inf")))
+            observed_max = float(record.get("observed_max", float("inf")))
+            actual_min = float(np.min(batch[:, index]))
+            actual_max = float(np.max(batch[:, index]))
+            if actual_min < observed_min or actual_max > observed_max:
+                warnings.append(
+                    {
+                        "name": name,
+                        "observed_min": observed_min,
+                        "observed_max": observed_max,
+                        "input_min": actual_min,
+                        "input_max": actual_max,
+                    }
+                )
+
+    return {
+        "available": True,
+        "passed": True,
+        "expected_dim": expected_dim,
+        "input_dim": input_dim,
+        "source": source,
+        "names": names,
+        "warnings": warnings,
+    }
+
+
 def _run_predict_twin(
     *,
     engine_path: str | None,
@@ -1128,6 +1252,8 @@ def _run_predict_twin(
             params_csv=params_csv,
             param_columns=param_columns,
         )
+        parameter_contract = _load_twin_parameter_contract(engine_file)
+        parameter_check = _check_twin_parameter_contract(params_array, parameter_contract)
         prediction = np.asarray(engine.predict(params_array), dtype=np.float64)
         output_path = Path(output).expanduser() if output else None
         if output_path is not None:
@@ -1144,6 +1270,8 @@ def _run_predict_twin(
             "input_shape": list(params_array.shape),
             "prediction_shape": list(prediction.shape),
             "output": str(output_path) if output_path is not None else None,
+            "parameter_contract": parameter_contract,
+            "parameter_check": parameter_check,
             "preview": [float(value) for value in preview_array],
         }
     except (ImportError, RuntimeError, OSError, ValueError) as exc:
@@ -1203,6 +1331,8 @@ def _run_benchmark_twin(
             params_csv=params_csv,
             param_columns=param_columns,
         )
+        parameter_contract = _load_twin_parameter_contract(engine_file)
+        parameter_check = _check_twin_parameter_contract(params_array, parameter_contract)
 
         for _ in range(warmup):
             engine.predict(params_array)
@@ -1246,6 +1376,8 @@ def _run_benchmark_twin(
             "latency_ms": latency,
             "samples_ms": durations_ms,
             "throughput_hz": throughput_hz,
+            "parameter_contract": parameter_contract,
+            "parameter_check": parameter_check,
             "acceptance": acceptance,
         }
         output_path = Path(output).expanduser() if output else None
@@ -1363,7 +1495,7 @@ def _run_validate_twin(
             raise ValueError(f"validation snapshots must be 2D, got shape {truth.shape}")
 
         n_features, n_snapshots = truth.shape
-        params_array = _load_build_twin_params(
+        params_array, _parameter_contract = _load_build_twin_params(
             params_path=params,
             param_columns=param_columns,
             n_snapshots=n_snapshots,
@@ -1540,12 +1672,16 @@ def _build_twin_delivery_entries(
     extra_meta = manifest.get("extra", {})
     if not isinstance(extra_meta, dict):
         extra_meta = {}
+    parameter_contract = extra_meta.get("parameter_contract")
+    if not isinstance(parameter_contract, dict):
+        parameter_contract = None
+    example_params = _example_params_from_contract(parameter_contract)
     predict_command = (
-        "naviertwin predict-twin --artifacts-dir <extracted-dir> --params 0.25 "
+        f"naviertwin predict-twin --artifacts-dir <extracted-dir> --params {example_params} "
         "--output prediction.csv --json"
     )
     benchmark_command = (
-        "naviertwin benchmark-twin --artifacts-dir <extracted-dir> --params 0.25 "
+        f"naviertwin benchmark-twin --artifacts-dir <extracted-dir> --params {example_params} "
         "--warmup 2 --repeat 20 --max-p95-ms 100 --min-throughput-hz 10 "
         "--output latency.json --json"
     )
@@ -1566,6 +1702,7 @@ def _build_twin_delivery_entries(
         "files": [path.name for path in files],
         "generated_entries": ["README.txt", "delivery.json"],
         "source_integrity": source_integrity,
+        "parameter_contract": parameter_contract,
         "build_manifest": {
             "config": manifest.get("config", {}),
             "metrics": manifest.get("metrics", {}),
@@ -1582,6 +1719,31 @@ def _build_twin_delivery_entries(
             "verify_package": verify_command,
         },
     }
+    if parameter_contract is None:
+        contract_lines = [
+            "Expected input parameters:",
+            "- parameter contract unavailable (legacy artifact)",
+        ]
+    else:
+        ranges = parameter_contract.get("ranges", [])
+        range_lines: list[str] = []
+        if isinstance(ranges, list):
+            for record in ranges:
+                if not isinstance(record, dict):
+                    continue
+                range_lines.append(
+                    "- {name}: observed [{lo}, {hi}]".format(
+                        name=record.get("name", "-"),
+                        lo=record.get("observed_min", "-"),
+                        hi=record.get("observed_max", "-"),
+                    )
+                )
+        contract_lines = [
+            "Expected input parameters:",
+            f"- dimension: {parameter_contract.get('dim', '-')}",
+            f"- names: {', '.join(map(str, parameter_contract.get('names', []))) or '-'}",
+            *range_lines,
+        ]
     readme = "\n".join(
         [
             "NavierTwin Digital Twin Delivery Package",
@@ -1593,6 +1755,8 @@ def _build_twin_delivery_entries(
             "- metrics.json: build/validation metrics from build-twin",
             "- report.html: customer-readable build report",
             "- validation.json: optional independent validation report",
+            "",
+            *contract_lines,
             "",
             "Recommended checks:",
             "1. Verify and extract this ZIP:",
@@ -1613,6 +1777,31 @@ def _build_twin_delivery_entries(
         "README.txt": readme,
         "delivery.json": json.dumps(delivery, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
     }
+
+
+def _example_params_from_contract(contract: dict[str, Any] | None) -> str:
+    """parameter contract에서 copy-paste 가능한 --params 예시를 만든다."""
+    if not isinstance(contract, dict):
+        return "0.25"
+    try:
+        dim = int(contract.get("dim", 1))
+    except (TypeError, ValueError):
+        dim = 1
+    ranges = contract.get("ranges", [])
+    values: list[float] = []
+    if isinstance(ranges, list):
+        for record in ranges[:dim]:
+            if not isinstance(record, dict):
+                break
+            try:
+                observed_min = float(record["observed_min"])
+                observed_max = float(record["observed_max"])
+            except (KeyError, TypeError, ValueError):
+                break
+            values.append((observed_min + observed_max) / 2.0)
+    if len(values) != dim:
+        values = [0.25] * max(1, dim)
+    return ",".join(f"{value:.6g}" for value in values)
 
 
 def _verify_twin_source_integrity(root: Path) -> dict[str, Any]:
@@ -1881,6 +2070,21 @@ def _inspect_twin_package_archive(package_path: Path) -> dict[str, Any]:
             manifest_entries = []
 
         delivery: dict[str, Any] | None = None
+        manifest_contract: dict[str, Any] | None = None
+        if "manifest.json" in names:
+            try:
+                build_manifest_raw = json.loads(archive.read("manifest.json").decode("utf-8"))
+            except json.JSONDecodeError as exc:
+                errors.append(f"invalid manifest.json: {exc.msg}")
+            else:
+                if isinstance(build_manifest_raw, dict):
+                    manifest_extra = build_manifest_raw.get("extra", {})
+                    if isinstance(manifest_extra, dict):
+                        raw_contract = manifest_extra.get("parameter_contract")
+                        if isinstance(raw_contract, dict):
+                            manifest_contract = raw_contract
+                else:
+                    errors.append("manifest.json must contain an object")
         if "delivery.json" in names:
             try:
                 delivery_raw = json.loads(archive.read("delivery.json").decode("utf-8"))
@@ -1897,6 +2101,17 @@ def _inspect_twin_package_archive(package_path: Path) -> dict[str, Any]:
         build_manifest = {}
     metrics = build_manifest.get("metrics", {})
     config = build_manifest.get("config", {})
+    extra = build_manifest.get("extra", {})
+    if not isinstance(extra, dict):
+        extra = {}
+    delivery_contract = delivery.get("parameter_contract") if delivery else None
+    if not isinstance(delivery_contract, dict):
+        delivery_contract = extra.get("parameter_contract")
+    if isinstance(delivery_contract, dict) and manifest_contract and delivery_contract != manifest_contract:
+        errors.append("delivery.json parameter_contract differs from manifest.json")
+    parameter_contract = manifest_contract
+    if parameter_contract is None and isinstance(delivery_contract, dict):
+        parameter_contract = delivery_contract
     commands = delivery.get("commands", {}) if delivery else {}
     files = delivery.get("files", []) if delivery else []
     generated_entries = delivery.get("generated_entries", []) if delivery else []
@@ -1913,6 +2128,7 @@ def _inspect_twin_package_archive(package_path: Path) -> dict[str, Any]:
         "commands": commands if isinstance(commands, dict) else {},
         "metrics": metrics if isinstance(metrics, dict) else {},
         "config": config if isinstance(config, dict) else {},
+        "parameter_contract": parameter_contract,
         "validation_included": "validation.json" in names,
         "readme_present": "README.txt" in names,
         "verification": verification,

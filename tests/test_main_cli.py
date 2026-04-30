@@ -385,6 +385,42 @@ class TestRunModelSweep:
 
 
 class TestRunBuildTwin:
+    def test_load_build_twin_params_emits_named_contract(self, tmp_path) -> None:
+        pytest.importorskip("pandas")
+        from naviertwin.main import _load_build_twin_params
+
+        path = tmp_path / "params.csv"
+        path.write_text(
+            "mach,aoa,note\n"
+            "0.2,1.0,a\n"
+            "0.4,2.0,b\n"
+            "0.6,3.0,c\n",
+            encoding="utf-8",
+        )
+
+        values, contract = _load_build_twin_params(
+            params_path=str(path),
+            param_columns="mach,aoa",
+            n_snapshots=3,
+        )
+
+        assert values.shape == (3, 2)
+        assert contract["dim"] == 2
+        assert contract["names"] == ["mach", "aoa"]
+        assert contract["source"].endswith("params.csv")
+        assert contract["ranges"] == [
+            {"name": "mach", "observed_min": 0.2, "observed_max": 0.6},
+            {"name": "aoa", "observed_min": 1.0, "observed_max": 3.0},
+        ]
+
+    def test_parameter_contract_check_allows_legacy_missing_contract(self) -> None:
+        from naviertwin.main import _check_twin_parameter_contract
+
+        check = _check_twin_parameter_contract(np.array([0.25]), None)
+
+        assert check["available"] is False
+        assert check["passed"] is True
+
     def test_run_build_twin_from_csv_snapshots(self, tmp_path, capsys) -> None:
         pytest.importorskip("h5py")
         pytest.importorskip("pandas")
@@ -431,6 +467,12 @@ class TestRunBuildTwin:
         assert payload["artifacts"]["engine"].endswith("engine.pkl")
         assert payload["training"]["train_count"] == 8
         assert "rmse" in payload["metrics"]
+        contract = payload["training"]["parameter_contract"]
+        assert contract["schema"] == "naviertwin-parameter-contract-v1"
+        assert contract["dim"] == 1
+        assert contract["names"] == ["normalized_index"]
+        assert contract["ranges"][0]["observed_min"] == 0.0
+        assert contract["ranges"][0]["observed_max"] == 1.0
 
         from naviertwin.utils.hashing import hash_file
 
@@ -439,6 +481,7 @@ class TestRunBuildTwin:
         assert set(integrity) == {"metrics", "checkpoint", "engine", "report"}
         assert integrity["engine"]["sha256"] == hash_file(tmp_path / "twin" / "engine.pkl")
         assert integrity["metrics"]["bytes"] > 0
+        assert manifest["extra"]["parameter_contract"] == contract
 
         engine = TwinEngine.load(tmp_path / "twin" / "engine.pkl")
         prediction = engine.predict(np.array([0.25]))
@@ -456,7 +499,24 @@ class TestRunBuildTwin:
 
         assert predict_code == 0
         assert predict_payload["prediction_shape"] == [8]
+        assert predict_payload["parameter_contract"]["dim"] == 1
+        assert predict_payload["parameter_check"]["available"] is True
+        assert predict_payload["parameter_check"]["input_dim"] == 1
         assert (tmp_path / "prediction.csv").exists()
+
+        mismatch_predict_code = _run_predict_twin(
+            engine_path=str(tmp_path / "twin" / "engine.pkl"),
+            params="0.25,0.5",
+            params_csv=None,
+            param_columns=None,
+            output=None,
+            as_json=True,
+        )
+        mismatch_output = capsys.readouterr()
+
+        assert mismatch_predict_code == 2
+        assert mismatch_output.out == ""
+        assert "parameter dimension mismatch" in mismatch_output.err
 
         validate_code = _run_validate_twin(
             engine_path=str(tmp_path / "twin" / "engine.pkl"),
@@ -528,9 +588,11 @@ class TestRunBuildTwin:
             delivery = json.loads(archive.read("delivery.json").decode("utf-8"))
         assert "verify-twin-package" in readme
         assert "--max-p95-ms" in readme
+        assert "Expected input parameters" in readme
         assert delivery["format"] == "NavierTwin delivery package"
         assert delivery["commands"]["predict"].startswith("naviertwin predict-twin")
         assert "--min-throughput-hz" in delivery["commands"]["benchmark"]
+        assert delivery["parameter_contract"] == contract
 
         inspect_code = _run_inspect_twin_package(
             package_path=str(tmp_path / "twin-delivery.zip"),
@@ -546,6 +608,7 @@ class TestRunBuildTwin:
         assert inspect_payload["readme_present"] is True
         assert inspect_payload["verification"]["status"] == "ok"
         assert "rmse" in inspect_payload["metrics"]
+        assert inspect_payload["parameter_contract"] == contract
 
         verify_code = _run_verify_twin_package(
             package_path=str(tmp_path / "twin-delivery.zip"),
@@ -597,9 +660,28 @@ class TestRunBuildTwin:
         assert benchmark_payload["repeat"] == 3
         assert len(benchmark_payload["samples_ms"]) == 3
         assert benchmark_payload["latency_ms"]["p95"] >= benchmark_payload["latency_ms"]["min"]
+        assert benchmark_payload["parameter_check"]["available"] is True
+        assert benchmark_payload["parameter_check"]["expected_dim"] == 1
         assert benchmark_payload["acceptance"]["passed"] is True
         assert benchmark_payload["acceptance"]["configured"] is False
         assert (tmp_path / "latency.json").exists()
+
+        mismatch_benchmark_code = _run_benchmark_twin(
+            engine_path=None,
+            artifacts_dir=str(tmp_path / "deployed-twin"),
+            params="0.25,0.5",
+            params_csv=None,
+            param_columns=None,
+            warmup=0,
+            repeat=1,
+            output=None,
+            as_json=True,
+        )
+        mismatch_benchmark_output = capsys.readouterr()
+
+        assert mismatch_benchmark_code == 2
+        assert mismatch_benchmark_output.out == ""
+        assert "parameter dimension mismatch" in mismatch_benchmark_output.err
 
         gated_benchmark_code = _run_benchmark_twin(
             engine_path=None,
@@ -775,6 +857,118 @@ class TestRunBuildTwin:
         assert tampered_code == 2
         assert "integrity mismatch" in tampered_output.err
         assert not (tmp_path / "tampered-delivery.zip").exists()
+
+    def test_package_twin_uses_multidimensional_contract_commands(
+        self, tmp_path, capsys
+    ) -> None:
+        pytest.importorskip("h5py")
+        pytest.importorskip("pandas")
+        pytest.importorskip("sklearn")
+        from naviertwin.main import (
+            _run_build_twin,
+            _run_inspect_twin_package,
+            _run_package_twin,
+        )
+
+        paths = []
+        param_rows = ["mach,aoa"]
+        for step in range(8):
+            path = tmp_path / f"snapshot_{step:03d}.csv"
+            rows = ["x,U"]
+            for index in range(6):
+                rows.append(f"{index},{step * 0.15 + index * 0.02}")
+            path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+            paths.append(path)
+            param_rows.append(f"{0.2 + step * 0.1},{1.0 + step * 0.5}")
+        params_path = tmp_path / "params.csv"
+        params_path.write_text("\n".join(param_rows) + "\n", encoding="utf-8")
+
+        build_code = _run_build_twin(
+            input_path=None,
+            csv_snapshots=",".join(str(path) for path in paths),
+            field=None,
+            field_column="U",
+            params=str(params_path),
+            param_columns="mach,aoa",
+            outdir=str(tmp_path / "twin2d"),
+            reducer="pod",
+            n_modes=2,
+            surrogate="rbf",
+            validation_count=2,
+            as_json=True,
+        )
+        build_payload = json.loads(capsys.readouterr().out)
+
+        assert build_code == 0
+        contract = build_payload["training"]["parameter_contract"]
+        assert contract["dim"] == 2
+        assert contract["names"] == ["mach", "aoa"]
+
+        package_code = _run_package_twin(
+            artifacts_dir=str(tmp_path / "twin2d"),
+            include_validation=None,
+            output=str(tmp_path / "twin2d-delivery.zip"),
+            as_json=True,
+        )
+        assert package_code == 0
+        capsys.readouterr()
+
+        with zipfile.ZipFile(tmp_path / "twin2d-delivery.zip") as archive:
+            readme = archive.read("README.txt").decode("utf-8")
+            delivery = json.loads(archive.read("delivery.json").decode("utf-8"))
+            original_entries = {
+                name: archive.read(name)
+                for name in archive.namelist()
+                if name != "MANIFEST.json"
+            }
+
+        assert "--params 0.55,2.75" in delivery["commands"]["predict"]
+        assert "--params 0.55,2.75" in delivery["commands"]["benchmark"]
+        assert "--params 0.55,2.75" in readme
+        assert delivery["parameter_contract"] == contract
+
+        inspect_code = _run_inspect_twin_package(
+            package_path=str(tmp_path / "twin2d-delivery.zip"),
+            as_json=True,
+        )
+        inspect_payload = json.loads(capsys.readouterr().out)
+
+        assert inspect_code == 0
+        assert inspect_payload["parameter_contract"] == contract
+
+        tampered_delivery = dict(delivery)
+        tampered_delivery["parameter_contract"] = {
+            **contract,
+            "dim": 1,
+            "names": ["wrong"],
+        }
+        original_entries["delivery.json"] = (
+            json.dumps(tampered_delivery, ensure_ascii=False, sort_keys=True, indent=2)
+            + "\n"
+        ).encode("utf-8")
+        tampered_zip = tmp_path / "contract-mismatch.zip"
+        manifest_entries = [
+            {
+                "name": name,
+                "bytes": len(data),
+                "sha256": sha256(data).hexdigest(),
+            }
+            for name, data in sorted(original_entries.items())
+        ]
+        with zipfile.ZipFile(tampered_zip, "w") as archive:
+            for name, data in original_entries.items():
+                archive.writestr(name, data)
+            archive.writestr("MANIFEST.json", json.dumps(manifest_entries))
+
+        mismatch_code = _run_inspect_twin_package(
+            package_path=str(tampered_zip),
+            as_json=True,
+        )
+        mismatch_payload = json.loads(capsys.readouterr().out)
+
+        assert mismatch_code == 1
+        assert mismatch_payload["status"] == "failed"
+        assert "delivery.json parameter_contract differs from manifest.json" in mismatch_payload["errors"]
 
     def test_run_build_twin_reports_small_dataset(self, tmp_path, capsys) -> None:
         from naviertwin.main import _run_build_twin

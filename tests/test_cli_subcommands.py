@@ -136,6 +136,8 @@ class TestCLISubcommands:
         assert payload["status"] == "ok"
         assert payload["training"]["n_snapshots"] == 10
         assert payload["training"]["validation_count"] == 2
+        assert payload["training"]["parameter_contract"]["dim"] == 1
+        assert payload["training"]["parameter_contract"]["names"] == ["normalized_index"]
         assert (outdir / "pipeline.h5").exists()
         assert (outdir / "engine.pkl").exists()
         assert (outdir / "manifest.json").exists()
@@ -164,6 +166,8 @@ class TestCLISubcommands:
         assert prediction_payload["status"] == "ok"
         assert prediction_payload["input_shape"] == [1]
         assert prediction_payload["prediction_shape"] == [8]
+        assert prediction_payload["parameter_check"]["available"] is True
+        assert prediction_payload["parameter_check"]["expected_dim"] == 1
         assert (tmp_path / "prediction.csv").exists()
 
         validate_result = subprocess.run(
@@ -246,6 +250,7 @@ class TestCLISubcommands:
         assert inspect_payload["status"] == "ok"
         assert inspect_payload["delivery_metadata_present"] is True
         assert inspect_payload["format"] == "NavierTwin delivery package"
+        assert inspect_payload["parameter_contract"]["dim"] == 1
         assert inspect_payload["verification"]["status"] == "ok"
 
         verify_package_result = subprocess.run(
@@ -329,6 +334,7 @@ class TestCLISubcommands:
         assert benchmark_payload["status"] == "ok"
         assert benchmark_payload["repeat"] == 3
         assert len(benchmark_payload["samples_ms"]) == 3
+        assert benchmark_payload["parameter_check"]["available"] is True
         assert benchmark_payload["latency_ms"]["p95"] >= benchmark_payload["latency_ms"]["min"]
         assert benchmark_payload["acceptance"]["configured"] is True
         assert benchmark_payload["acceptance"]["passed"] is True

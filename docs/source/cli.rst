@@ -75,7 +75,8 @@ build-twin
 Expected: loads a CFD reader input or CSV snapshot sequence, trains a
 ``NavierTwinPipeline`` with a validation split, and writes ``metrics.json``,
 ``manifest.json``, ``pipeline.h5``, loadable ``engine.pkl``, and ``report.html``.
-The manifest records artifact bytes and SHA256 hashes for delivery auditing.
+The manifest records artifact bytes/SHA256 hashes and a ``parameter_contract``
+with expected input dimension, parameter names, and observed training ranges.
 
 predict-twin
 ------------
@@ -88,7 +89,9 @@ predict-twin
 Expected: loads a saved ``TwinEngine`` directly or from an extracted artifact
 directory containing ``engine.pkl``, evaluates the input parameters, and prints
 prediction shape/preview metadata while optionally writing the predicted field
-matrix to CSV.
+matrix to CSV. If ``manifest.json`` beside ``engine.pkl`` includes a
+``parameter_contract``, input width is checked before prediction so customer
+integration errors fail with a clear dimension mismatch.
 
 benchmark-twin
 ---------------
@@ -102,6 +105,8 @@ reports min/mean/p50/p95/p99/max milliseconds plus approximate throughput. When
 ``--max-mean-ms``, ``--max-p50-ms``, ``--max-p95-ms``, ``--max-p99-ms``, or
 ``--min-throughput-hz`` is set, the JSON includes an ``acceptance`` block and
 the command exits 1 if the delivered twin misses the configured performance SLO.
+The same optional ``parameter_contract`` preflight used by ``predict-twin`` runs
+before latency measurement.
 
 validate-twin
 -------------
@@ -129,7 +134,9 @@ ZIP. The archive also includes ``README.txt`` for customer handoff instructions
 and ``delivery.json`` for machine-readable package metadata. ``MANIFEST.json``
 contains bytes and SHA256 hashes for every archived entry. Before packaging,
 ``manifest.json`` integrity records are checked against the current files so
-tampered build artifacts fail fast.
+tampered build artifacts fail fast. The delivery metadata also echoes the
+parameter contract so recipients can inspect expected input names/ranges without
+loading Python code.
 
 inspect-twin-package
 --------------------
@@ -141,7 +148,8 @@ inspect-twin-package
 Expected: reads the delivery ZIP without extracting it, verifies archive
 integrity, and reports ``delivery.json`` metadata such as package format,
 build metrics, packaged files, generated entries, available commands, and
-whether validation data/README are present.
+whether validation data/README are present. Newer packages also expose
+``parameter_contract``; older packages without it remain inspectable.
 
 verify-twin-package
 -------------------
