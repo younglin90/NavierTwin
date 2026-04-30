@@ -272,14 +272,14 @@ def test_validate_twin_from_paths_runs_cli_and_surfaces_result(
     win = MainWindow(confirm_on_close=False)
     qtbot.addWidget(win)
     csv_paths = [tmp_path / "snap_0.csv", tmp_path / "snap_1.csv"]
-    calls: list[tuple[Path, list[Path], str, Path | None]] = []
+    calls: list[tuple[Path, list[Path], str, Path | None, float | None, float | None]] = []
     messages: list[tuple[str, str]] = []
 
     monkeypatch.setattr(
         win,
         "_run_validate_twin_cli",
-        lambda engine_path, paths, *, field_column, output: (
-            calls.append((engine_path, paths, field_column, output)) or 0
+        lambda engine_path, paths, *, field_column, output, max_rmse, min_r2, **kwargs: (
+            calls.append((engine_path, paths, field_column, output, max_rmse, min_r2)) or 0
         ),
     )
     monkeypatch.setattr(
@@ -295,9 +295,11 @@ def test_validate_twin_from_paths_runs_cli_and_surfaces_result(
         csv_paths,
         field_column="U",
         output=output,
+        max_rmse=0.05,
+        min_r2=0.98,
     )
 
-    assert calls == [(engine_path, csv_paths, "U", output)]
+    assert calls == [(engine_path, csv_paths, "U", output, 0.05, 0.98)]
     assert messages
     assert messages[0][0] == "트윈 검증 완료"
     assert str(output) in messages[0][1]
@@ -335,6 +337,20 @@ def test_validate_twin_from_paths_surfaces_failure(
     assert win._status_label.text() == "트윈 검증 실패"
 
 
+def test_parse_validation_thresholds() -> None:
+    from naviertwin.gui.main_window import MainWindow
+
+    assert MainWindow._parse_validation_thresholds("") == (None, None, None)
+    assert MainWindow._parse_validation_thresholds("0.05,0.98,0.1") == (
+        0.05,
+        0.98,
+        0.1,
+    )
+    assert MainWindow._parse_validation_thresholds(",0.99") == (None, 0.99, None)
+    with pytest.raises(ValueError):
+        MainWindow._parse_validation_thresholds("bad")
+
+
 def test_package_twin_from_paths_runs_cli_and_surfaces_result(
     qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -344,13 +360,15 @@ def test_package_twin_from_paths_runs_cli_and_surfaces_result(
 
     win = MainWindow(confirm_on_close=False)
     qtbot.addWidget(win)
-    calls: list[tuple[Path, Path]] = []
+    calls: list[tuple[Path, Path, Path | None]] = []
     messages: list[tuple[str, str]] = []
 
     monkeypatch.setattr(
         win,
         "_run_package_twin_cli",
-        lambda artifacts_dir, *, output: calls.append((artifacts_dir, output)) or 0,
+        lambda artifacts_dir, *, output, include_validation: (
+            calls.append((artifacts_dir, output, include_validation)) or 0
+        ),
     )
     monkeypatch.setattr(
         QMessageBox,
@@ -359,9 +377,14 @@ def test_package_twin_from_paths_runs_cli_and_surfaces_result(
     )
 
     output = tmp_path / "delivery.zip"
-    win._package_twin_from_paths(tmp_path / "twin", output=output)
+    validation = tmp_path / "validation.json"
+    win._package_twin_from_paths(
+        tmp_path / "twin",
+        output=output,
+        include_validation=validation,
+    )
 
-    assert calls == [(tmp_path / "twin", output)]
+    assert calls == [(tmp_path / "twin", output, validation)]
     assert messages
     assert messages[0][0] == "트윈 패키징 완료"
     assert str(output) in messages[0][1]

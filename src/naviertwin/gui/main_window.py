@@ -906,6 +906,23 @@ class MainWindow(QMainWindow):
         if not ok or not field_column:
             return
 
+        thresholds, ok = QInputDialog.getText(
+            self,
+            "검증 기준",
+            "max_rmse,min_r2,max_relative_l2 (빈 값 허용):",
+            text="",
+        )
+        if not ok:
+            return
+        try:
+            max_rmse, min_r2, max_relative_l2 = self._parse_validation_thresholds(
+                thresholds
+            )
+        except ValueError as exc:
+            self._set_status("트윈 검증 실패")
+            QMessageBox.warning(self, "트윈 검증 실패", str(exc))
+            return
+
         output, _ = QFileDialog.getSaveFileName(
             self,
             "검증 JSON 저장",
@@ -917,6 +934,9 @@ class MainWindow(QMainWindow):
             [Path(path) for path in paths],
             field_column=field_column,
             output=Path(output) if output else None,
+            max_rmse=max_rmse,
+            min_r2=min_r2,
+            max_relative_l2=max_relative_l2,
         )
 
     def _validate_twin_from_paths(
@@ -926,6 +946,9 @@ class MainWindow(QMainWindow):
         *,
         field_column: str,
         output: Path | None,
+        max_rmse: float | None = None,
+        min_r2: float | None = None,
+        max_relative_l2: float | None = None,
     ) -> None:
         """GUI에서 validate-twin CLI 워크플로우를 실행한다."""
         try:
@@ -934,6 +957,9 @@ class MainWindow(QMainWindow):
                 csv_paths,
                 field_column=field_column,
                 output=output,
+                max_rmse=max_rmse,
+                min_r2=min_r2,
+                max_relative_l2=max_relative_l2,
             )
         except Exception as exc:  # noqa: BLE001
             self._set_status("트윈 검증 실패")
@@ -965,6 +991,9 @@ class MainWindow(QMainWindow):
         *,
         field_column: str,
         output: Path | None,
+        max_rmse: float | None = None,
+        min_r2: float | None = None,
+        max_relative_l2: float | None = None,
     ) -> int:
         """테스트에서 대체 가능한 validate-twin 실행 래퍼."""
         from naviertwin.main import _run_validate_twin
@@ -977,9 +1006,36 @@ class MainWindow(QMainWindow):
             field_column=field_column,
             params=None,
             param_columns=None,
+            max_rmse=max_rmse,
+            min_r2=min_r2,
+            max_relative_l2=max_relative_l2,
             output=str(output) if output is not None else None,
             as_json=False,
         )
+
+    @staticmethod
+    def _parse_validation_thresholds(
+        value: str,
+    ) -> tuple[float | None, float | None, float | None]:
+        """GUI threshold 입력 문자열을 validate-twin 인자로 변환한다."""
+        stripped = value.strip()
+        if not stripped:
+            return None, None, None
+        parts = [part.strip() for part in stripped.split(",")]
+        if len(parts) > 3:
+            raise ValueError("검증 기준은 max_rmse,min_r2,max_relative_l2 순서로 최대 3개입니다.")
+        parsed: list[float | None] = []
+        for part in parts:
+            if not part:
+                parsed.append(None)
+                continue
+            try:
+                parsed.append(float(part))
+            except ValueError as exc:
+                raise ValueError(f"검증 기준은 숫자여야 합니다: {part}") from exc
+        while len(parsed) < 3:
+            parsed.append(None)
+        return parsed[0], parsed[1], parsed[2]
 
     def _package_twin_artifacts(self) -> None:
         """build-twin 산출물 디렉토리를 고객 전달용 ZIP으로 패키징한다."""
@@ -991,6 +1047,24 @@ class MainWindow(QMainWindow):
         if not artifacts_dir:
             return
 
+        include_validation: Path | None = None
+        if (
+            QMessageBox.question(
+                self,
+                "검증 리포트 포함",
+                "별도 validation JSON 리포트를 ZIP에 포함하시겠습니까?",
+            )
+            == QMessageBox.StandardButton.Yes
+        ):
+            validation, _ = QFileDialog.getOpenFileName(
+                self,
+                "검증 JSON 선택",
+                "",
+                "JSON (*.json)",
+            )
+            if validation:
+                include_validation = Path(validation)
+
         output, _ = QFileDialog.getSaveFileName(
             self,
             "트윈 ZIP 저장",
@@ -998,12 +1072,26 @@ class MainWindow(QMainWindow):
             "ZIP (*.zip)",
         )
         if output:
-            self._package_twin_from_paths(Path(artifacts_dir), output=Path(output))
+            self._package_twin_from_paths(
+                Path(artifacts_dir),
+                output=Path(output),
+                include_validation=include_validation,
+            )
 
-    def _package_twin_from_paths(self, artifacts_dir: Path, *, output: Path) -> None:
+    def _package_twin_from_paths(
+        self,
+        artifacts_dir: Path,
+        *,
+        output: Path,
+        include_validation: Path | None = None,
+    ) -> None:
         """GUI에서 package-twin CLI 워크플로우를 실행한다."""
         try:
-            code = self._run_package_twin_cli(artifacts_dir, output=output)
+            code = self._run_package_twin_cli(
+                artifacts_dir,
+                output=output,
+                include_validation=include_validation,
+            )
         except Exception as exc:  # noqa: BLE001
             self._set_status("트윈 패키징 실패")
             QMessageBox.warning(self, "트윈 패키징 실패", str(exc))
@@ -1024,13 +1112,19 @@ class MainWindow(QMainWindow):
             f"고객 전달용 ZIP 생성 위치:\n{output}",
         )
 
-    def _run_package_twin_cli(self, artifacts_dir: Path, *, output: Path) -> int:
+    def _run_package_twin_cli(
+        self,
+        artifacts_dir: Path,
+        *,
+        output: Path,
+        include_validation: Path | None = None,
+    ) -> int:
         """테스트에서 대체 가능한 package-twin 실행 래퍼."""
         from naviertwin.main import _run_package_twin
 
         return _run_package_twin(
             artifacts_dir=str(artifacts_dir),
-            include_validation=None,
+            include_validation=str(include_validation) if include_validation is not None else None,
             output=str(output),
             as_json=False,
         )
