@@ -294,6 +294,14 @@ class TestRunBuildTwin:
         assert payload["training"]["train_count"] == 8
         assert "rmse" in payload["metrics"]
 
+        from naviertwin.utils.hashing import hash_file
+
+        manifest = json.loads((tmp_path / "twin" / "manifest.json").read_text(encoding="utf-8"))
+        integrity = manifest["extra"]["artifact_integrity"]
+        assert set(integrity) == {"metrics", "checkpoint", "engine", "report"}
+        assert integrity["engine"]["sha256"] == hash_file(tmp_path / "twin" / "engine.pkl")
+        assert integrity["metrics"]["bytes"] > 0
+
         engine = TwinEngine.load(tmp_path / "twin" / "engine.pkl")
         prediction = engine.predict(np.array([0.25]))
         assert prediction.shape == (8,)

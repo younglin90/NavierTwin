@@ -829,26 +829,6 @@ def _run_build_twin(
         engine.save(engine_path)
         pipe.export_report(str(report_path), project="NavierTwin Build Twin")
 
-        manifest = build_manifest(
-            reducer=reducer,
-            n_modes=n_modes,
-            surrogate=surrogate,
-            metrics=metrics,
-            extra={
-                "command": "build-twin",
-                "source": source_meta,
-                "field": selected_field,
-                "n_features": n_features,
-                "n_snapshots": n_snapshots,
-                "train_count": train_count,
-                "validation_count": val_count,
-                "param_dim": int(params_array.shape[1]),
-                "has_engine": True,
-                "engine_path": str(engine_path),
-            },
-        )
-        save_manifest(manifest, manifest_path)
-
         payload = {
             "status": "ok",
             "artifacts": {
@@ -876,6 +856,36 @@ def _run_build_twin(
             json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
             encoding="utf-8",
         )
+
+        artifact_integrity = _artifact_integrity_map(
+            {
+                "metrics": metrics_path,
+                "checkpoint": checkpoint_path,
+                "engine": engine_path,
+                "report": report_path,
+            }
+        )
+        manifest = build_manifest(
+            reducer=reducer,
+            n_modes=n_modes,
+            surrogate=surrogate,
+            metrics=metrics,
+            extra={
+                "command": "build-twin",
+                "manifest_schema": "naviertwin-build-twin-v1",
+                "source": source_meta,
+                "field": selected_field,
+                "n_features": n_features,
+                "n_snapshots": n_snapshots,
+                "train_count": train_count,
+                "validation_count": val_count,
+                "param_dim": int(params_array.shape[1]),
+                "has_engine": True,
+                "engine_path": str(engine_path),
+                "artifact_integrity": artifact_integrity,
+            },
+        )
+        save_manifest(manifest, manifest_path)
     except (ImportError, RuntimeError, OSError, ValueError, KeyError) as exc:
         print(f"build-twin error: {exc}", file=sys.stderr)
         return 2
@@ -890,6 +900,21 @@ def _run_build_twin(
         )
         print(f"artifacts: {output_dir}")
     return 0
+
+
+def _artifact_integrity_map(paths: dict[str, Path]) -> dict[str, dict[str, Any]]:
+    """산출물 파일의 크기와 SHA256을 manifest-friendly dict로 반환한다."""
+    from naviertwin.utils.hashing import hash_file
+
+    records: dict[str, dict[str, Any]] = {}
+    for name, path in paths.items():
+        if path.exists():
+            records[name] = {
+                "path": str(path),
+                "bytes": int(path.stat().st_size),
+                "sha256": hash_file(path),
+            }
+    return records
 
 
 def _load_predict_twin_params(
