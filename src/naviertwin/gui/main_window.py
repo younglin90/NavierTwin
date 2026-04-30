@@ -2011,20 +2011,37 @@ class MainWindow(QMainWindow):
             "",
         )
         if outdir:
-            self._create_support_bundle_path(Path(outdir))
+            acceptance_json, acceptance_summary = (
+                self._select_support_bundle_acceptance_artifacts()
+            )
+            self._create_support_bundle_path(
+                Path(outdir),
+                acceptance_json=acceptance_json,
+                acceptance_summary=acceptance_summary,
+            )
 
-    def _create_support_bundle_path(self, outdir: Path) -> None:
+    def _create_support_bundle_path(
+        self,
+        outdir: Path,
+        *,
+        acceptance_json: Path | None = None,
+        acceptance_summary: Path | None = None,
+    ) -> None:
         """고객 지원용 진단 번들을 생성하고 결과를 표시한다."""
         from naviertwin.utils.support_bundle import build_support_bundle
 
+        bundled_acceptance_json = acceptance_json or self._support_bundle_acceptance_json_path()
+        bundled_acceptance_summary = (
+            acceptance_summary or self._support_bundle_acceptance_summary_path()
+        )
         try:
             metadata = build_support_bundle(
                 outdir,
                 preflight=self._support_bundle_preflight_path(),
                 include_optional=True,
                 zip_bundle=True,
-                acceptance_json=self._support_bundle_acceptance_json_path(),
-                acceptance_summary=self._support_bundle_acceptance_summary_path(),
+                acceptance_json=bundled_acceptance_json,
+                acceptance_summary=bundled_acceptance_summary,
             )
         except Exception as exc:  # noqa: BLE001
             self._set_status("지원 번들 생성 실패")
@@ -2039,6 +2056,39 @@ class MainWindow(QMainWindow):
             "지원 번들 생성 완료",
             f"상태: {status}\n저장 위치: {zip_path}",
         )
+
+    def _select_support_bundle_acceptance_artifacts(self) -> tuple[Path | None, Path | None]:
+        """최근 acceptance가 없을 때 지원 번들에 첨부할 리포트를 수동 선택한다."""
+        if (
+            self._support_bundle_acceptance_json_path() is not None
+            or self._support_bundle_acceptance_summary_path() is not None
+        ):
+            return None, None
+        reply = QMessageBox.question(
+            self,
+            "acceptance 리포트 첨부",
+            "기존 acceptance JSON/Markdown 리포트를 지원 번들에 첨부하시겠습니까?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return None, None
+
+        json_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "acceptance JSON 선택",
+            "",
+            "JSON (*.json)",
+        )
+        if not json_path:
+            return None, None
+        summary_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "acceptance Markdown 선택(선택)",
+            "",
+            "Markdown (*.md);;All Files (*)",
+        )
+        return Path(json_path), Path(summary_path) if summary_path else None
 
     def _support_bundle_preflight_path(self) -> Path | None:
         """지원 번들에 포함할 현재 Import 탭 CFD 입력 경로를 반환한다."""

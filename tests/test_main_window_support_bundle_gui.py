@@ -148,6 +148,78 @@ def test_support_bundle_includes_recent_acceptance_artifacts(
     assert captured["acceptance_summary"] == acceptance_summary
 
 
+def test_support_bundle_dialog_can_attach_acceptance_artifacts(
+    qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+    import naviertwin.utils.support_bundle as support_bundle
+    from naviertwin.gui.main_window import MainWindow
+
+    acceptance_json = tmp_path / "external-acceptance.json"
+    acceptance_json.write_text('{"status": "ok"}\n', encoding="utf-8")
+    acceptance_summary = tmp_path / "external-acceptance.md"
+    acceptance_summary.write_text("# Acceptance\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+    open_files = iter([str(acceptance_json), str(acceptance_summary)])
+
+    def fake_build_support_bundle(
+        outdir: str | Path,
+        preflight: str | Path | None = None,
+        include_optional: bool = False,
+        zip_bundle: bool = False,
+        acceptance_json: str | Path | None = None,
+        acceptance_summary: str | Path | None = None,
+    ) -> dict[str, object]:
+        captured["outdir"] = outdir
+        captured["acceptance_json"] = acceptance_json
+        captured["acceptance_summary"] = acceptance_summary
+        return {
+            "status": "ok",
+            "zip_path": str(Path(outdir) / "support-bundle.zip"),
+            "files": ["doctor.json", "acceptance.json", "acceptance.md", "metadata.json"],
+        }
+
+    monkeypatch.setattr(support_bundle, "build_support_bundle", fake_build_support_bundle)
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *args: str(tmp_path))
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args: (next(open_files), ""))
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args: QMessageBox.StandardButton.Yes,
+    )
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: None)
+    win = MainWindow(confirm_on_close=False)
+    qtbot.addWidget(win)
+
+    win._create_support_bundle()
+
+    assert captured["outdir"] == tmp_path
+    assert captured["acceptance_json"] == acceptance_json
+    assert captured["acceptance_summary"] == acceptance_summary
+
+
+def test_support_bundle_acceptance_selector_skips_prompt_when_recent_exists(
+    qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    from naviertwin.gui.main_window import MainWindow
+
+    acceptance_json = tmp_path / "acceptance.json"
+    acceptance_json.write_text('{"status": "ok"}\n', encoding="utf-8")
+    win = MainWindow(confirm_on_close=False)
+    qtbot.addWidget(win)
+    win._last_acceptance_json = acceptance_json
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args: pytest.fail("recent acceptance should not prompt"),
+    )
+
+    assert win._select_support_bundle_acceptance_artifacts() == (None, None)
+
+
 def test_support_bundle_action_surfaces_errors(
     qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

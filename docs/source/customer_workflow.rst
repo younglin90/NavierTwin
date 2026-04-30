@@ -152,4 +152,4 @@ GUI 대응 흐름
 - **트윈 패키지 검증**: 고객 전달 ZIP 선택 → archive manifest 무결성 확인
 - **트윈 패키지 검증 후 추출**: 고객 전달 ZIP 선택 → 배포 디렉토리 선택 → 검증 성공 시 안전 추출
 - **트윈 패키지 원샷 수락 검사**: 고객 전달 ZIP 선택 → 추출 디렉토리/SLO 입력 → 검증, 샘플 예측, latency gate, acceptance JSON/Markdown 저장
-- **지원 번들 생성**: 최근 acceptance JSON/Markdown과 현재 Import 탭 preflight 대상을 포함해 고객 지원 ZIP 생성
+- **지원 번들 생성**: 최근 또는 수동 선택한 acceptance JSON/Markdown과 현재 Import 탭 preflight 대상을 포함해 고객 지원 ZIP 생성
