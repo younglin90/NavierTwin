@@ -58,7 +58,7 @@ GUI 사용법
 - **지원 번들 생성** — 환경 진단, 현재 Import 탭 preflight, 최근 또는 수동 선택한 acceptance JSON/Markdown을 redaction 후 고객 지원 ZIP으로 묶음
 - **지원 번들 점검** — 받은 ``support-bundle.zip`` 을 추출하지 않고 metadata/artifact hash와 ``MANIFEST.json`` 무결성 확인
 - **API 서버 시작/중지** — FastAPI 서버를 GUI 백그라운드 프로세스로 관리
-- **업데이트 확인** — 릴리스 메타데이터 검증 후 새 버전이 있으면 검증된 설치 파일 URL을 열거나 클립보드에 복사
+- **업데이트 확인** — 서명된 릴리스 메타데이터 검증 후 새 버전이 있으면 검증된 설치 파일 URL을 열거나 클립보드에 복사
 
 언어 전환
 ---------

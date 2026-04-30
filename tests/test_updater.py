@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import base64
 import json
 
 import pytest
+
+_TEST_KEY_ID = "test-release-key"
+_TEST_PRIVATE_KEY_BYTES = bytes([17]) * 32
 
 
 def _metadata(
     version: str = "4.2.59",
     channel: str = "stable",
     url: str = "https://github.com/naviertwin/naviertwin/releases/download/v4.2.59/NavierTwinSetup.exe",
-) -> dict[str, str]:
+) -> dict[str, object]:
     return {
         "version": version,
         "channel": channel,
@@ -21,35 +25,105 @@ def _metadata(
     }
 
 
+def _test_public_keys() -> dict[str, str]:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    private_key = Ed25519PrivateKey.from_private_bytes(_TEST_PRIVATE_KEY_BYTES)
+    public_key = private_key.public_key()
+    public_bytes = public_key.public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    return {_TEST_KEY_ID: base64.b64encode(public_bytes).decode("ascii")}
+
+
+def _signed_metadata(**overrides: object) -> dict[str, object]:
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    from naviertwin.utils.updater import (
+        SIGNATURE_ALGORITHM,
+        canonical_release_metadata_payload,
+    )
+
+    payload = _metadata(**overrides)
+    private_key = Ed25519PrivateKey.from_private_bytes(_TEST_PRIVATE_KEY_BYTES)
+    signature = private_key.sign(canonical_release_metadata_payload(payload))
+    payload["signature"] = {
+        "algorithm": SIGNATURE_ALGORITHM,
+        "key_id": _TEST_KEY_ID,
+        "value": base64.b64encode(signature).decode("ascii"),
+    }
+    return payload
+
+
 def test_update_metadata_detects_newer_version(tmp_path) -> None:
     from naviertwin.utils.updater import check_for_update
 
     path = tmp_path / "release.json"
-    path.write_text(json.dumps(_metadata()), encoding="utf-8")
+    path.write_text(json.dumps(_signed_metadata()), encoding="utf-8")
 
-    result = check_for_update(path, current_version="4.2.58", channel="stable")
+    result = check_for_update(
+        path,
+        current_version="4.2.58",
+        channel="stable",
+        trusted_public_keys=_test_public_keys(),
+    )
 
     assert result.update_available is True
     assert result.latest_version == "4.2.59"
     assert result.sha256 == "a" * 64
 
 
+def test_update_metadata_rejects_unsigned_metadata(tmp_path) -> None:
+    from naviertwin.utils.updater import load_release_metadata
+
+    path = tmp_path / "release.json"
+    path.write_text(json.dumps(_metadata()), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="requires signature"):
+        load_release_metadata(path, trusted_public_keys=_test_public_keys())
+
+
+def test_update_metadata_rejects_tampered_signed_metadata(tmp_path) -> None:
+    from naviertwin.utils.updater import load_release_metadata
+
+    payload = _signed_metadata()
+    payload["version"] = "4.2.60"
+    payload["url"] = "https://github.com/naviertwin/naviertwin/releases/download/v4.2.60/NavierTwinSetup.exe"
+    path = tmp_path / "release.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="signature verification failed"):
+        load_release_metadata(path, trusted_public_keys=_test_public_keys())
+
+
+def test_update_metadata_rejects_untrusted_signature_key(tmp_path) -> None:
+    from naviertwin.utils.updater import load_release_metadata
+
+    path = tmp_path / "release.json"
+    path.write_text(json.dumps(_signed_metadata()), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="untrusted"):
+        load_release_metadata(path)
+
+
 def test_update_metadata_rejects_invalid_integrity_hash(tmp_path) -> None:
     from naviertwin.utils.updater import load_release_metadata
 
-    payload = _metadata()
+    payload = _signed_metadata()
     payload["sha256"] = "not-a-hash"
     path = tmp_path / "release.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(ValueError, match="sha256"):
-        load_release_metadata(path)
+        load_release_metadata(path, trusted_public_keys=_test_public_keys())
 
 
 def test_update_metadata_rejects_url_version_mismatch(tmp_path) -> None:
     from naviertwin.utils.updater import load_release_metadata
 
-    payload = _metadata(
+    payload = _signed_metadata(
         version="4.2.60",
         url="https://github.com/naviertwin/naviertwin/releases/download/v4.2.59/NavierTwinSetup.exe",
     )
@@ -57,29 +131,34 @@ def test_update_metadata_rejects_url_version_mismatch(tmp_path) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(ValueError, match="url tag"):
-        load_release_metadata(path)
+        load_release_metadata(path, trusted_public_keys=_test_public_keys())
 
 
 def test_update_metadata_rejects_unexpected_installer_name(tmp_path) -> None:
     from naviertwin.utils.updater import load_release_metadata
 
-    payload = _metadata(
+    payload = _signed_metadata(
         url="https://github.com/naviertwin/naviertwin/releases/download/v4.2.59/OtherSetup.exe",
     )
     path = tmp_path / "release.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(ValueError, match="NavierTwinSetup.exe"):
-        load_release_metadata(path)
+        load_release_metadata(path, trusted_public_keys=_test_public_keys())
 
 
 def test_update_check_channel_mismatch_is_not_update(tmp_path) -> None:
     from naviertwin.utils.updater import check_for_update
 
     path = tmp_path / "release.json"
-    path.write_text(json.dumps(_metadata(channel="beta")), encoding="utf-8")
+    path.write_text(json.dumps(_signed_metadata(channel="beta")), encoding="utf-8")
 
-    result = check_for_update(path, current_version="4.2.58", channel="stable")
+    result = check_for_update(
+        path,
+        current_version="4.2.58",
+        channel="stable",
+        trusted_public_keys=_test_public_keys(),
+    )
 
     assert result.update_available is False
     assert result.latest_version == "4.2.58"
@@ -93,7 +172,7 @@ def test_update_check_equal_or_older_version_is_not_update(tmp_path, latest) -> 
     path = tmp_path / "release.json"
     path.write_text(
         json.dumps(
-            _metadata(
+            _signed_metadata(
                 version=latest,
                 url=(
                     "https://github.com/naviertwin/naviertwin/releases/"
@@ -104,18 +183,25 @@ def test_update_check_equal_or_older_version_is_not_update(tmp_path, latest) -> 
         encoding="utf-8",
     )
 
-    result = check_for_update(path, current_version="4.2.58", channel="stable")
+    result = check_for_update(
+        path,
+        current_version="4.2.58",
+        channel="stable",
+        trusted_public_keys=_test_public_keys(),
+    )
 
     assert result.update_available is False
     assert result.latest_version == latest
     assert result.url.endswith("/NavierTwinSetup.exe")
 
 
-def test_update_check_cli_outputs_json(tmp_path, capsys) -> None:
+def test_update_check_cli_outputs_json(capsys) -> None:
+    from pathlib import Path
+
     from naviertwin.main import _build_parser, _run_update_check
 
-    path = tmp_path / "release.json"
-    path.write_text(json.dumps(_metadata()), encoding="utf-8")
+    root = Path(__file__).resolve().parents[1]
+    path = root / "examples" / "release-metadata.example.json"
     args = _build_parser().parse_args(["update-check", "--metadata", str(path)])
 
     code = _run_update_check(
@@ -147,7 +233,7 @@ def test_update_check_cli_reports_invalid_metadata_without_traceback(tmp_path, c
     assert "Traceback" not in missing_output.err
 
     invalid = tmp_path / "invalid-release.json"
-    payload = _metadata()
+    payload = _signed_metadata()
     payload["sha256"] = "invalid"
     invalid.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -176,4 +262,5 @@ def test_release_metadata_example_is_valid() -> None:
     result = check_for_update(example, current_version="4.2.58")
 
     assert metadata.channel == "stable"
+    assert metadata.signature_key_id == "naviertwin-release-2026q2"
     assert result.update_available is True

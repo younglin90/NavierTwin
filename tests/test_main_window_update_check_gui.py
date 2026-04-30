@@ -14,13 +14,20 @@ def _metadata(
     version: str = "4.2.59",
     channel: str = "stable",
     url: str = "https://github.com/naviertwin/naviertwin/releases/download/v4.2.59/NavierTwinSetup.exe",
-) -> dict[str, str]:
+) -> dict[str, object]:
     return {
         "version": version,
         "channel": channel,
         "url": url,
-        "sha256": "b" * 64,
-        "notes": "gui smoke",
+        "sha256": "a" * 64,
+        "notes": "Example metadata for offline update-check smoke validation.",
+        "signature": {
+            "algorithm": "ed25519",
+            "key_id": "naviertwin-release-2026q2",
+            "value": (
+                "r96mhyh2zIQDcaSd/9b1ExTOngQRiNM7ugU5wFZmckVda8suThYw7TJ8Xtp4kGcWNAaY6n8JhRG2yoHdMsW8BQ=="
+            ),
+        },
     }
 
 

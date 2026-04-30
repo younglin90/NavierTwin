@@ -247,9 +247,9 @@ update-check
 
    naviertwin update-check --metadata examples/release-metadata.example.json
 
-Expected: reads local release metadata and reports whether an update is
-available for the selected channel. The JSON includes the validated installer
-``url`` and ``sha256`` so support or the GUI can hand off the exact
+Expected: verifies signed local release metadata and reports whether an update
+is available for the selected channel. The JSON includes the validated
+installer ``url`` and ``sha256`` so support or the GUI can hand off the exact
 ``NavierTwinSetup.exe`` download without implementing an in-app self-updater.
 
 doctor
