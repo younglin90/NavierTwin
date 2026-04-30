@@ -20,8 +20,12 @@ class TestMainWindowAssembly:
 
         t = Translator(lang="en")
         assert t("panel.import") == "Import"
+        assert t("panel.post_tools") == "Post-Tools"
+        assert t("view.tab_action") == "{title} Tab"
         t.set_language("ko")
         assert "불러오기" in t("panel.import")
+        assert "후처리 도구" in t("panel.post_tools")
+        assert t("view.tab_action").endswith("탭")
 
     def test_startup_applies_language_and_theme_config(
         self, qtbot, tmp_path, monkeypatch: pytest.MonkeyPatch
@@ -119,6 +123,55 @@ class TestMainWindowAssembly:
             assert loaded.language == "en"
             assert loaded.theme == "light"
             assert win._tabs.tabText(0) == "① Import"
+            assert win._view_menu.title() == "View(&V)"
+            en_actions = [
+                action.text()
+                for action in win._view_menu.actions()
+                if not action.isSeparator()
+            ]
+            assert "Light Theme" in en_actions
+            assert "Korean" in en_actions
             assert win._status_label.text() == "언어 변경: en"
         finally:
             app.setStyleSheet(original_stylesheet)  # type: ignore[union-attr]
+
+    def test_language_switch_updates_optional_workflow_tabs_and_view_menu(self, qtbot) -> None:
+        pytest.importorskip("PySide6")
+        from naviertwin.gui.main_window import MainWindow
+
+        win = MainWindow(confirm_on_close=False)
+        qtbot.addWidget(win)
+
+        optional_expectations = []
+        if win._compare_panel is not None:
+            optional_expectations.append(("⑦ Compare (비교)", "⑦ Compare"))
+        if win._simulation_panel is not None:
+            optional_expectations.append(("⑧ Simulation (시뮬레이션)", "⑧ Simulation"))
+        if win._explain_panel is not None:
+            optional_expectations.append(("⑨ Explain (설명가능성)", "⑨ Explain"))
+        if win._postproc_panel is not None:
+            optional_expectations.append(("⑩ Post-Tools (후처리 도구)", "⑩ Post-Tools"))
+
+        win.set_language("ko")
+        ko_titles = [win._tabs.tabText(i) for i in range(win._tabs.count())]
+        ko_actions = [
+            action.text()
+            for action in win._view_menu.actions()
+            if not action.isSeparator()
+        ]
+
+        for ko_title, _ in optional_expectations:
+            assert ko_title in ko_titles
+            assert f"{ko_title} 탭" in ko_actions
+
+        win.set_language("en")
+        en_titles = [win._tabs.tabText(i) for i in range(win._tabs.count())]
+        en_actions = [
+            action.text()
+            for action in win._view_menu.actions()
+            if not action.isSeparator()
+        ]
+
+        for _, en_title in optional_expectations:
+            assert en_title in en_titles
+            assert f"{en_title} Tab" in en_actions

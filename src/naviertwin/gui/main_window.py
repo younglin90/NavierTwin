@@ -198,38 +198,49 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001
             self._postproc_panel = None
 
-        self._tabs.addTab(self._import_panel,  f"① {self._t('panel.import')}")
-        self._tabs.addTab(self._analyze_panel, f"② {self._t('panel.analyze')}")
-        self._tabs.addTab(self._reduce_panel,  f"③ {self._t('panel.reduce')}")
-        self._tabs.addTab(self._model_panel,   f"④ {self._t('panel.model')}")
-        self._tabs.addTab(self._twin_panel,    f"⑤ {self._t('panel.twin')}")
-        self._tabs.addTab(self._export_panel,  f"⑥ {self._t('panel.export')}")
+        self._tab_title_specs: list[tuple[QWidget, str, str, str]] = [
+            (self._import_panel, "panel.import", "①", "Import"),
+            (self._analyze_panel, "panel.analyze", "②", "Analyze"),
+            (self._reduce_panel, "panel.reduce", "③", "Reduce"),
+            (self._model_panel, "panel.model", "④", "Model"),
+            (self._twin_panel, "panel.twin", "⑤", "Twin"),
+            (self._export_panel, "panel.export", "⑥", "Export"),
+        ]
         if self._compare_panel is not None:
-            self._tabs.addTab(self._compare_panel, "⑦ Compare")
+            self._tab_title_specs.append(
+                (self._compare_panel, "panel.compare", "⑦", "Compare")
+            )
         if self._simulation_panel is not None:
-            self._tabs.addTab(self._simulation_panel, "⑧ Simulation")
+            self._tab_title_specs.append(
+                (self._simulation_panel, "panel.simulation", "⑧", "Simulation")
+            )
         if self._explain_panel is not None:
-            self._tabs.addTab(self._explain_panel, "⑨ Explain")
+            self._tab_title_specs.append(
+                (self._explain_panel, "panel.explain", "⑨", "Explain")
+            )
         if self._postproc_panel is not None:
-            self._tabs.addTab(self._postproc_panel, "⑩ Post-Tools")
+            self._tab_title_specs.append(
+                (self._postproc_panel, "panel.post_tools", "⑩", "Post-Tools")
+            )
+
+        for widget, key, num, default in self._tab_title_specs:
+            self._tabs.addTab(widget, self._localized_tab_title(key, num, default))
 
         vbox.addWidget(self._tabs)
 
+    def _localized_tab_title(self, key: str, num: str, default: str) -> str:
+        """번호 prefix가 붙은 탭 제목을 현재 언어로 구성한다."""
+        return f"{num} {self._t(key, default)}"
+
     def set_language(self, lang: str) -> None:
-        """런타임 언어 전환 (탭 제목만 갱신)."""
+        """런타임 언어 전환 (탭 제목과 보기 메뉴 갱신)."""
         self._t.set_language(lang)
         self._config.language = lang  # type: ignore[assignment]
         self.setWindowTitle(self._t("app.title", "NavierTwin — CFD Digital Twin"))
-        titles = [
-            ("panel.import", "①"),
-            ("panel.analyze", "②"),
-            ("panel.reduce", "③"),
-            ("panel.model", "④"),
-            ("panel.twin", "⑤"),
-            ("panel.export", "⑥"),
-        ]
-        for i, (key, num) in enumerate(titles):
-            self._tabs.setTabText(i, f"{num} {self._t(key)}")
+        for widget, key, num, default in self._tab_title_specs:
+            index = self._tabs.indexOf(widget)
+            if index >= 0:
+                self._tabs.setTabText(index, self._localized_tab_title(key, num, default))
         self._refresh_view_menu()
 
     def set_theme(self, theme: str) -> None:
@@ -277,7 +288,7 @@ class MainWindow(QMainWindow):
         file_menu.addAction(quit_action)
 
         # 보기 메뉴
-        self._view_menu = mb.addMenu("보기(&V)")
+        self._view_menu = mb.addMenu(self._t("menu.view", "View(&V)"))
         self._refresh_view_menu()
 
         # 도구 메뉴
@@ -377,10 +388,14 @@ class MainWindow(QMainWindow):
         if view_menu is None or tabs is None:
             return
 
+        view_menu.setTitle(self._t("menu.view", "View(&V)"))
         view_menu.clear()
         for i in range(tabs.count()):
             title = tabs.tabText(i)
-            action = QAction(f"{title} 탭", self)
+            action = QAction(
+                self._t("view.tab_action", "{title} Tab").format(title=title),
+                self,
+            )
             if i < 9:
                 action.setShortcut(f"Ctrl+{i + 1}")
             action.setData(i)
@@ -388,7 +403,11 @@ class MainWindow(QMainWindow):
             view_menu.addAction(action)
 
         view_menu.addSeparator()
-        for theme, label in (("dark", "다크 테마"), ("light", "라이트 테마")):
+        for theme, key, default in (
+            ("dark", "view.theme.dark", "Dark Theme"),
+            ("light", "view.theme.light", "Light Theme"),
+        ):
+            label = self._t(key, default)
             action = QAction(label, self)
             action.setCheckable(True)
             action.setChecked(self._config.theme == theme)
@@ -397,7 +416,11 @@ class MainWindow(QMainWindow):
             view_menu.addAction(action)
 
         view_menu.addSeparator()
-        for lang, label in (("ko", "한국어"), ("en", "English")):
+        for lang, key, default in (
+            ("ko", "view.language.ko", "Korean"),
+            ("en", "view.language.en", "English"),
+        ):
+            label = self._t(key, default)
             action = QAction(label, self)
             action.setCheckable(True)
             action.setChecked(self._config.language == lang)
