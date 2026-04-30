@@ -398,9 +398,24 @@ class TestRunBuildTwin:
 
         assert package_code == 0
         assert package_payload["status"] == "ok"
+        assert package_payload["source_integrity"]["configured"] is True
+        assert package_payload["source_integrity"]["passed"] is True
         assert "engine.pkl" in package_payload["files"]
         assert "validation.json" in package_payload["files"]
         assert (tmp_path / "twin-delivery.zip").exists()
+
+        (tmp_path / "twin" / "engine.pkl").write_bytes(b"tampered")
+        tampered_code = _run_package_twin(
+            artifacts_dir=str(tmp_path / "twin"),
+            include_validation=str(tmp_path / "validation.json"),
+            output=str(tmp_path / "tampered-delivery.zip"),
+            as_json=True,
+        )
+        tampered_output = capsys.readouterr()
+
+        assert tampered_code == 2
+        assert "integrity mismatch" in tampered_output.err
+        assert not (tmp_path / "tampered-delivery.zip").exists()
 
     def test_run_build_twin_reports_small_dataset(self, tmp_path, capsys) -> None:
         from naviertwin.main import _run_build_twin

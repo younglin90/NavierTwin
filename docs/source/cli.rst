@@ -110,6 +110,8 @@ package-twin
 Expected: packages ``engine.pkl``, ``manifest.json``, ``metrics.json``,
 ``pipeline.h5``, ``report.html``, and optional validation JSON into a delivery
 ZIP with an archive ``MANIFEST.json`` containing bytes and SHA256 hashes.
+Before packaging, ``manifest.json`` integrity records are checked against the
+current files so tampered build artifacts fail fast.
 
 preflight
 ---------

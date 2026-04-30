@@ -1206,6 +1206,7 @@ def _run_package_twin(
         if not root.exists() or not root.is_dir():
             raise FileNotFoundError(f"artifacts-dir not found: {root}")
 
+        source_integrity = _verify_twin_source_integrity(root)
         files = _collect_twin_package_artifacts(root, include_validation=include_validation)
         output_path = Path(output).expanduser()
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1216,6 +1217,7 @@ def _run_package_twin(
             "output": str(output_path),
             "artifacts_dir": str(root),
             "files": [path.name for path in files],
+            "source_integrity": source_integrity,
             "manifest_entries": zip_manifest,
         }
     except (ImportError, RuntimeError, OSError, ValueError, KeyError) as exc:
@@ -1230,6 +1232,47 @@ def _run_package_twin(
             f"files={len(payload['files'])}, output={output_path}"
         )
     return 0
+
+
+def _verify_twin_source_integrity(root: Path) -> dict[str, Any]:
+    """build-twin manifest에 기록된 artifact hash와 현재 파일을 대조한다."""
+    from naviertwin.utils.hashing import hash_file
+
+    manifest_path = root / "manifest.json"
+    if not manifest_path.exists():
+        raise FileNotFoundError("missing required twin artifact: manifest.json")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    records = manifest.get("extra", {}).get("artifact_integrity", {})
+    if not isinstance(records, dict) or not records:
+        return {"configured": False, "passed": True, "checks": []}
+
+    checks: list[dict[str, Any]] = []
+    for name, record in records.items():
+        if not isinstance(record, dict):
+            continue
+        recorded_path = Path(str(record.get("path", name)))
+        candidate = root / recorded_path.name
+        if not candidate.exists():
+            raise FileNotFoundError(f"missing manifest artifact: {candidate.name}")
+        actual_bytes = int(candidate.stat().st_size)
+        actual_sha256 = hash_file(candidate)
+        expected_bytes = int(record.get("bytes", -1))
+        expected_sha256 = str(record.get("sha256", ""))
+        passed = actual_bytes == expected_bytes and actual_sha256 == expected_sha256
+        checks.append(
+            {
+                "artifact": str(name),
+                "path": str(candidate),
+                "bytes": actual_bytes,
+                "expected_bytes": expected_bytes,
+                "sha256": actual_sha256,
+                "expected_sha256": expected_sha256,
+                "passed": passed,
+            }
+        )
+        if not passed:
+            raise ValueError(f"integrity mismatch for {candidate.name}")
+    return {"configured": True, "passed": True, "checks": checks}
 
 
 def _collect_twin_package_artifacts(
