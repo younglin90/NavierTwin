@@ -92,6 +92,7 @@ class ExportPanel(QWidget):
             ".html/.pdf (고객 보고서)",
             ".onnx (ONNX PyTorch 모델)",
             ".pt (TorchScript 모델)",
+            ".fmu (FMI/FMU 2.0 Co-Simulation)",
         ])
         self._format_combo.currentIndexChanged.connect(self._on_format_changed)
         options_form.addRow("포맷:", self._format_combo)
@@ -212,6 +213,7 @@ class ExportPanel(QWidget):
             "Report (*.html *.pdf)",
             "ONNX Model (*.onnx)",
             "TorchScript Model (*.pt)",
+            "FMU (*.fmu)",
         ]
         path, _ = QFileDialog.getSaveFileName(self, "저장 경로 선택", "", filters[fmt_idx])
         if path:
@@ -242,8 +244,10 @@ class ExportPanel(QWidget):
                 self._export_report(path)
             elif fmt_idx == 5:
                 self._export_onnx(path)
-            else:
+            elif fmt_idx == 6:
                 self._export_torchscript(path)
+            else:
+                self._export_fmu(path)
         except Exception as exc:
             self._log(f"[ERROR] 내보내기 실패: {exc}")
 
@@ -351,6 +355,16 @@ class ExportPanel(QWidget):
         self._log(f"✓ TorchScript 모델 저장: {out}")
         self.export_done.emit(str(out))
 
+    def _export_fmu(self, path: Path) -> None:
+        if path.suffix.lower() != ".fmu":
+            path = path.with_suffix(".fmu")
+        if self._engine is None:
+            self._log("[WARN] 내보낼 TwinEngine이 없습니다.")
+            return
+        out = self._export_to_fmu(self._engine, path)
+        self._log(f"✓ FMI/FMU 모델 저장: {out}")
+        self.export_done.emit(str(out))
+
     def _prepare_torch_export(self) -> tuple[object, object]:
         """현재 모델 산출물에서 torch.nn.Module과 trace sample을 추출한다."""
         module, source = self._resolve_torch_module()
@@ -451,6 +465,11 @@ class ExportPanel(QWidget):
 
         trace_input = sample_input if isinstance(sample_input, tuple) else (sample_input,)
         return export_to_torchscript(model, path, sample_input=trace_input, mode="trace")
+
+    def _export_to_fmu(self, engine: object, path: Path) -> Path:
+        from naviertwin.core.export.fmu_export import export_to_fmu
+
+        return export_to_fmu(engine, path).path
 
     def _save_project(self) -> None:
         path, _ = QFileDialog.getSaveFileName(

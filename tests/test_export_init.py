@@ -23,6 +23,8 @@ def test_export_root_exports_customer_artifact_helpers() -> None:
         "export_to_onnx": "naviertwin.core.export.onnx_export",
         "verify_onnx": "naviertwin.core.export.onnx_export",
         "export_to_torchscript": "naviertwin.core.export.torchscript_export",
+        "export_to_fmu": "naviertwin.core.export.fmu_export",
+        "inspect_fmu": "naviertwin.core.export.fmu_export",
         "trace_and_save": "naviertwin.core.export.torchscript_verify",
         "verify_script_matches": "naviertwin.core.export.torchscript_verify",
         "dynamic_quantize": "naviertwin.core.export.quantize",

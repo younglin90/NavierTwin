@@ -50,6 +50,14 @@ TorchScript Export
    :undoc-members:
    :show-inheritance:
 
+FMI/FMU Export
+------------------------------------------------------------
+
+.. automodule:: naviertwin.core.export.fmu_export
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 Quantization And Deployment Stubs
 ------------------------------------------------------------
 

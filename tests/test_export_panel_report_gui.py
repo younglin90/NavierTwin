@@ -53,6 +53,7 @@ def test_export_panel_report_format_visible(qtbot) -> None:
     assert any("보고서" in item for item in formats)
     assert any("ONNX" in item for item in formats)
     assert any("TorchScript" in item for item in formats)
+    assert any("FMI" in item or "FMU" in item for item in formats)
 
 
 def test_export_panel_exports_onnx_model(qtbot, tmp_path: Path, monkeypatch) -> None:
@@ -122,6 +123,36 @@ def test_export_panel_exports_torchscript_model(
     assert out.exists()
     assert emitted == [str(out)]
     assert "TorchScript 모델 저장" in panel._log_text.toPlainText()
+
+
+def test_export_panel_exports_fmu_engine(qtbot, tmp_path: Path, monkeypatch) -> None:
+    from naviertwin.gui.panels.export_panel import ExportPanel
+
+    panel = ExportPanel()
+    qtbot.addWidget(panel)
+    emitted: list[str] = []
+    calls: list[tuple[object, Path]] = []
+    engine = object()
+    panel.export_done.connect(emitted.append)
+    panel.set_engine(engine)
+    panel._format_combo.setCurrentIndex(_format_index(panel, "FMU"))
+    out = tmp_path / "digital_twin"
+    panel._path_edit.setText(str(out))
+
+    def fake_export(export_engine: object, path: Path) -> Path:
+        calls.append((export_engine, path))
+        path.write_bytes(b"fmu")
+        return path
+
+    monkeypatch.setattr(panel, "_export_to_fmu", fake_export)
+
+    panel._export()
+
+    expected = tmp_path / "digital_twin.fmu"
+    assert calls == [(engine, expected)]
+    assert expected.exists()
+    assert emitted == [str(expected)]
+    assert "FMI/FMU 모델 저장" in panel._log_text.toPlainText()
 
 
 def test_export_panel_model_export_requires_torch_module(qtbot, tmp_path: Path) -> None:
