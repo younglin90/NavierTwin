@@ -145,6 +145,31 @@ def _build_parser() -> argparse.ArgumentParser:
     p_predict.add_argument("--output", default=None, help="예측 필드 CSV 저장 경로")
     p_predict.add_argument("--json", dest="as_json", action="store_true", help="JSON으로 출력")
 
+    # benchmark-twin
+    p_benchmark_twin = sub.add_parser(
+        "benchmark-twin",
+        help="저장/배포된 TwinEngine 예측 지연시간 측정",
+    )
+    benchmark_engine = p_benchmark_twin.add_mutually_exclusive_group(required=True)
+    benchmark_engine.add_argument("--engine", default=None, help="측정할 engine.pkl 경로")
+    benchmark_engine.add_argument(
+        "--artifacts-dir",
+        default=None,
+        help="engine.pkl을 포함한 build/extract 산출물 디렉토리",
+    )
+    benchmark_source = p_benchmark_twin.add_mutually_exclusive_group(required=True)
+    benchmark_source.add_argument("--params", default=None, help="쉼표 구분 단일 입력 파라미터")
+    benchmark_source.add_argument("--params-csv", default=None, help="배치 입력 파라미터 CSV 경로")
+    p_benchmark_twin.add_argument(
+        "--param-columns",
+        default=None,
+        help="쉼표 구분 파라미터 컬럼명. 생략하면 numeric 컬럼 전체 사용",
+    )
+    p_benchmark_twin.add_argument("--warmup", type=int, default=2, help="측정 전 warmup 예측 횟수")
+    p_benchmark_twin.add_argument("--repeat", type=int, default=20, help="latency 측정 반복 횟수")
+    p_benchmark_twin.add_argument("--output", default=None, help="latency JSON 리포트 저장 경로")
+    p_benchmark_twin.add_argument("--json", dest="as_json", action="store_true", help="JSON으로 출력")
+
     # validate-twin
     p_validate = sub.add_parser("validate-twin", help="저장된 TwinEngine을 기준 CFD/CSV 데이터로 검증")
     validate_engine = p_validate.add_mutually_exclusive_group(required=True)
@@ -377,6 +402,20 @@ def main() -> None:
                 params=args.params,
                 params_csv=args.params_csv,
                 param_columns=args.param_columns,
+                output=args.output,
+                as_json=args.as_json,
+            )
+        )
+    elif args.command == "benchmark-twin":
+        sys.exit(
+            _run_benchmark_twin(
+                engine_path=args.engine,
+                artifacts_dir=args.artifacts_dir,
+                params=args.params,
+                params_csv=args.params_csv,
+                param_columns=args.param_columns,
+                warmup=args.warmup,
+                repeat=args.repeat,
                 output=args.output,
                 as_json=args.as_json,
             )
@@ -1109,6 +1148,99 @@ def _run_predict_twin(
     return 0
 
 
+def _run_benchmark_twin(
+    *,
+    engine_path: str | None,
+    artifacts_dir: str | None = None,
+    params: str | None,
+    params_csv: str | None,
+    param_columns: str | None,
+    warmup: int,
+    repeat: int,
+    output: str | None,
+    as_json: bool,
+) -> int:
+    """저장된 TwinEngine의 반복 예측 latency를 측정한다."""
+    try:
+        from time import perf_counter
+
+        import numpy as np
+
+        from naviertwin.core.digital_twin.twin_engine import TwinEngine
+
+        if warmup < 0:
+            raise ValueError("--warmup must be >= 0")
+        if repeat < 1:
+            raise ValueError("--repeat must be >= 1")
+
+        engine_file = _resolve_twin_engine_path(
+            engine_path=engine_path,
+            artifacts_dir=artifacts_dir,
+        )
+        engine = TwinEngine.load(engine_file)
+        params_array = _load_predict_twin_params(
+            params=params,
+            params_csv=params_csv,
+            param_columns=param_columns,
+        )
+
+        for _ in range(warmup):
+            engine.predict(params_array)
+
+        durations_ms: list[float] = []
+        prediction_shape: list[int] = []
+        for _ in range(repeat):
+            started = perf_counter()
+            prediction = np.asarray(engine.predict(params_array), dtype=np.float64)
+            durations_ms.append(float((perf_counter() - started) * 1000.0))
+            prediction_shape = list(prediction.shape)
+
+        durations = np.asarray(durations_ms, dtype=np.float64)
+        mean_ms = float(np.mean(durations))
+        latency = {
+            "min": float(np.min(durations)),
+            "mean": mean_ms,
+            "p50": float(np.percentile(durations, 50)),
+            "p95": float(np.percentile(durations, 95)),
+            "p99": float(np.percentile(durations, 99)),
+            "max": float(np.max(durations)),
+        }
+        payload = {
+            "status": "ok",
+            "engine": str(engine_file),
+            "artifacts_dir": str(Path(artifacts_dir).expanduser()) if artifacts_dir else None,
+            "input_shape": list(params_array.shape),
+            "prediction_shape": prediction_shape,
+            "warmup": int(warmup),
+            "repeat": int(repeat),
+            "latency_ms": latency,
+            "samples_ms": durations_ms,
+            "throughput_hz": float(1000.0 / mean_ms) if mean_ms > 0 else None,
+        }
+        output_path = Path(output).expanduser() if output else None
+        if output_path is not None:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(
+                json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+                encoding="utf-8",
+            )
+    except (ImportError, RuntimeError, OSError, ValueError) as exc:
+        print(f"benchmark-twin error: {exc}", file=sys.stderr)
+        return 2
+
+    if as_json:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    else:
+        print(
+            "benchmark-twin 완료: "
+            f"repeat={repeat}, p50={latency['p50']:.6g} ms, "
+            f"p95={latency['p95']:.6g} ms"
+        )
+        if output_path is not None:
+            print(f"output: {output_path}")
+    return 0
+
+
 def _run_validate_twin(
     *,
     engine_path: str | None,
@@ -1328,6 +1460,10 @@ def _build_twin_delivery_entries(
         "naviertwin predict-twin --artifacts-dir <extracted-dir> --params 0.25 "
         "--output prediction.csv --json"
     )
+    benchmark_command = (
+        "naviertwin benchmark-twin --artifacts-dir <extracted-dir> --params 0.25 "
+        "--warmup 2 --repeat 20 --output latency.json --json"
+    )
     validate_command = (
         "naviertwin validate-twin --artifacts-dir <extracted-dir> "
         '--csv-snapshots "case/validation/*.csv" '
@@ -1355,6 +1491,7 @@ def _build_twin_delivery_entries(
             },
         },
         "commands": {
+            "benchmark": benchmark_command,
             "predict": predict_command,
             "validate": validate_command,
             "verify_package": verify_command,
@@ -1377,7 +1514,9 @@ def _build_twin_delivery_entries(
             f"   {verify_command}",
             "2. Run a prediction:",
             f"   {predict_command}",
-            "3. Validate against held-out snapshots:",
+            "3. Benchmark prediction latency:",
+            f"   {benchmark_command}",
+            "4. Validate against held-out snapshots:",
             f"   {validate_command}",
             "",
             "See delivery.json for machine-readable package metadata.",

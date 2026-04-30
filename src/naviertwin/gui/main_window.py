@@ -299,6 +299,10 @@ class MainWindow(QMainWindow):
         predict_deployed_twin_action.triggered.connect(self._predict_twin_from_artifacts_dir)
         self._tools_menu.addAction(predict_deployed_twin_action)
 
+        benchmark_deployed_twin_action = QAction("배포 트윈 지연시간 측정(&L)", self)
+        benchmark_deployed_twin_action.triggered.connect(self._benchmark_twin_from_artifacts_dir)
+        self._tools_menu.addAction(benchmark_deployed_twin_action)
+
         validate_twin_action = QAction("저장된 트윈 검증(&V)", self)
         validate_twin_action.triggered.connect(self._validate_twin_from_engine)
         self._tools_menu.addAction(validate_twin_action)
@@ -987,6 +991,143 @@ class MainWindow(QMainWindow):
             as_json=False,
         )
 
+    def _benchmark_twin_from_artifacts_dir(self) -> None:
+        """배포/추출된 트윈 산출물 디렉토리의 예측 latency를 측정한다."""
+        artifacts_dir = QFileDialog.getExistingDirectory(
+            self,
+            "트윈 산출물 디렉토리 선택",
+            "",
+        )
+        if not artifacts_dir:
+            return
+
+        params: str | None = None
+        params_csv: Path | None = None
+        use_csv = (
+            QMessageBox.question(
+                self,
+                "배치 파라미터",
+                "CSV 파일의 numeric 컬럼 전체로 배치 latency를 측정하시겠습니까?",
+            )
+            == QMessageBox.StandardButton.Yes
+        )
+        if use_csv:
+            selected_csv, _ = QFileDialog.getOpenFileName(
+                self,
+                "파라미터 CSV 선택",
+                "",
+                "CSV (*.csv)",
+            )
+            if not selected_csv:
+                return
+            params_csv = Path(selected_csv)
+        else:
+            raw_params, ok = QInputDialog.getText(
+                self,
+                "벤치마크 파라미터",
+                "쉼표 구분 파라미터 값:",
+                text="0.5",
+            )
+            params = raw_params.strip()
+            if not ok or not params:
+                return
+
+        counts, ok = QInputDialog.getText(
+            self,
+            "벤치마크 반복",
+            "warmup,repeat:",
+            text="2,20",
+        )
+        if not ok:
+            return
+        try:
+            warmup, repeat = self._parse_benchmark_counts(counts)
+        except ValueError as exc:
+            self._set_status("배포 트윈 지연시간 측정 실패")
+            QMessageBox.warning(self, "배포 트윈 지연시간 측정 실패", str(exc))
+            return
+
+        output, _ = QFileDialog.getSaveFileName(
+            self,
+            "지연시간 JSON 저장",
+            "latency.json",
+            "JSON (*.json)",
+        )
+        self._benchmark_twin_from_artifacts_dir_path(
+            Path(artifacts_dir),
+            params=params,
+            params_csv=params_csv,
+            warmup=warmup,
+            repeat=repeat,
+            output=Path(output) if output else None,
+        )
+
+    def _benchmark_twin_from_artifacts_dir_path(
+        self,
+        artifacts_dir: Path,
+        *,
+        params: str | None = None,
+        params_csv: Path | None = None,
+        warmup: int,
+        repeat: int,
+        output: Path | None,
+    ) -> None:
+        """GUI에서 benchmark-twin --artifacts-dir 워크플로우를 실행한다."""
+        try:
+            code = self._run_benchmark_twin_artifacts_cli(
+                artifacts_dir,
+                params=params,
+                params_csv=params_csv,
+                warmup=warmup,
+                repeat=repeat,
+                output=output,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._set_status("배포 트윈 지연시간 측정 실패")
+            QMessageBox.warning(self, "배포 트윈 지연시간 측정 실패", str(exc))
+            return
+        if code != 0:
+            self._set_status("배포 트윈 지연시간 측정 실패")
+            QMessageBox.warning(
+                self,
+                "배포 트윈 지연시간 측정 실패",
+                f"benchmark-twin 종료 코드: {code}",
+            )
+            return
+
+        self._set_status("배포 트윈 지연시간 측정 완료")
+        suffix = f"\n저장 위치: {output}" if output is not None else ""
+        QMessageBox.information(
+            self,
+            "배포 트윈 지연시간 측정 완료",
+            f"배포된 트윈 디렉토리 지연시간 측정이 완료되었습니다.{suffix}",
+        )
+
+    def _run_benchmark_twin_artifacts_cli(
+        self,
+        artifacts_dir: Path,
+        *,
+        params: str | None = None,
+        params_csv: Path | None = None,
+        warmup: int,
+        repeat: int,
+        output: Path | None,
+    ) -> int:
+        """테스트에서 대체 가능한 benchmark-twin --artifacts-dir 실행 래퍼."""
+        from naviertwin.main import _run_benchmark_twin
+
+        return _run_benchmark_twin(
+            engine_path=None,
+            artifacts_dir=str(artifacts_dir),
+            params=params,
+            params_csv=str(params_csv) if params_csv is not None else None,
+            param_columns=None,
+            warmup=warmup,
+            repeat=repeat,
+            output=str(output) if output is not None else None,
+            as_json=False,
+        )
+
     def _validate_twin_from_engine(self) -> None:
         """저장된 TwinEngine을 선택한 CSV 기준 snapshot과 비교 검증한다."""
         engine_path, _ = QFileDialog.getOpenFileName(
@@ -1286,6 +1427,23 @@ class MainWindow(QMainWindow):
         while len(parsed) < 3:
             parsed.append(None)
         return parsed[0], parsed[1], parsed[2]
+
+    @staticmethod
+    def _parse_benchmark_counts(value: str) -> tuple[int, int]:
+        """GUI benchmark 입력 문자열을 warmup/repeat 정수로 변환한다."""
+        stripped = value.strip()
+        if not stripped:
+            return 2, 20
+        parts = [part.strip() for part in stripped.split(",")]
+        if len(parts) > 2:
+            raise ValueError("벤치마크 반복은 warmup,repeat 순서로 최대 2개입니다.")
+        warmup = int(parts[0]) if parts and parts[0] else 2
+        repeat = int(parts[1]) if len(parts) > 1 and parts[1] else 20
+        if warmup < 0:
+            raise ValueError("warmup은 0 이상이어야 합니다.")
+        if repeat < 1:
+            raise ValueError("repeat는 1 이상이어야 합니다.")
+        return warmup, repeat
 
     def _package_twin_artifacts(self) -> None:
         """build-twin 산출물 디렉토리를 고객 전달용 ZIP으로 패키징한다."""

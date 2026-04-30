@@ -25,6 +25,7 @@ def test_tools_menu_exposes_pipeline_demo_and_server_actions(qtbot) -> None:
     assert any("CSV 스냅샷으로 트윈 생성" in text for text in actions)
     assert any("저장된 트윈 예측" in text for text in actions)
     assert any("배포 트윈 디렉토리 예측" in text for text in actions)
+    assert any("배포 트윈 지연시간 측정" in text for text in actions)
     assert any("저장된 트윈 검증" in text for text in actions)
     assert any("배포 트윈 디렉토리 검증" in text for text in actions)
     assert any("트윈 산출물 패키징" in text for text in actions)
@@ -333,6 +334,115 @@ def test_predict_twin_from_artifacts_dir_path_surfaces_failure(
     assert win._status_label.text() == "배포 트윈 예측 실패"
 
 
+def test_benchmark_twin_from_artifacts_dir_path_runs_cli_and_surfaces_result(
+    qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    from naviertwin.gui.main_window import MainWindow
+
+    win = MainWindow(confirm_on_close=False)
+    qtbot.addWidget(win)
+    calls: list[tuple[Path, str, int, int, Path | None]] = []
+    messages: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        win,
+        "_run_benchmark_twin_artifacts_cli",
+        lambda artifacts_dir, *, params, params_csv, warmup, repeat, output: (
+            calls.append((artifacts_dir, params, warmup, repeat, output)) or 0
+        ),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda parent, title, text: messages.append((title, text)),
+    )
+
+    artifacts_dir = tmp_path / "deployed-twin"
+    output = tmp_path / "latency.json"
+    win._benchmark_twin_from_artifacts_dir_path(
+        artifacts_dir,
+        params="0.25",
+        params_csv=None,
+        warmup=1,
+        repeat=3,
+        output=output,
+    )
+
+    assert calls == [(artifacts_dir, "0.25", 1, 3, output)]
+    assert messages
+    assert messages[0][0] == "배포 트윈 지연시간 측정 완료"
+    assert str(output) in messages[0][1]
+    assert win._status_label.text() == "배포 트윈 지연시간 측정 완료"
+
+
+def test_benchmark_twin_from_artifacts_dir_path_surfaces_failure(
+    qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    from naviertwin.gui.main_window import MainWindow
+
+    win = MainWindow(confirm_on_close=False)
+    qtbot.addWidget(win)
+    warnings: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(win, "_run_benchmark_twin_artifacts_cli", lambda *args, **kwargs: 2)
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda parent, title, text: warnings.append((title, text)),
+    )
+
+    win._benchmark_twin_from_artifacts_dir_path(
+        tmp_path / "deployed-twin",
+        params="0.25",
+        params_csv=None,
+        warmup=1,
+        repeat=3,
+        output=None,
+    )
+
+    assert warnings
+    assert warnings[0][0] == "배포 트윈 지연시간 측정 실패"
+    assert "2" in warnings[0][1]
+    assert win._status_label.text() == "배포 트윈 지연시간 측정 실패"
+
+
+def test_benchmark_twin_from_artifacts_dir_path_accepts_params_csv(
+    qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    from naviertwin.gui.main_window import MainWindow
+
+    win = MainWindow(confirm_on_close=False)
+    qtbot.addWidget(win)
+    calls: list[tuple[Path, str | None, Path | None, int, int, Path | None]] = []
+
+    monkeypatch.setattr(
+        win,
+        "_run_benchmark_twin_artifacts_cli",
+        lambda artifacts_dir, *, params, params_csv, warmup, repeat, output: (
+            calls.append((artifacts_dir, params, params_csv, warmup, repeat, output)) or 0
+        ),
+    )
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: None)
+
+    params_csv = tmp_path / "params.csv"
+    win._benchmark_twin_from_artifacts_dir_path(
+        tmp_path / "deployed-twin",
+        params=None,
+        params_csv=params_csv,
+        warmup=1,
+        repeat=3,
+        output=None,
+    )
+
+    assert calls == [(tmp_path / "deployed-twin", None, params_csv, 1, 3, None)]
+
+
 def test_validate_twin_from_paths_runs_cli_and_surfaces_result(
     qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -420,6 +530,16 @@ def test_parse_validation_thresholds() -> None:
     assert MainWindow._parse_validation_thresholds(",0.99") == (None, 0.99, None)
     with pytest.raises(ValueError):
         MainWindow._parse_validation_thresholds("bad")
+
+
+def test_parse_benchmark_counts() -> None:
+    from naviertwin.gui.main_window import MainWindow
+
+    assert MainWindow._parse_benchmark_counts("") == (2, 20)
+    assert MainWindow._parse_benchmark_counts("1,3") == (1, 3)
+    assert MainWindow._parse_benchmark_counts(",5") == (2, 5)
+    with pytest.raises(ValueError):
+        MainWindow._parse_benchmark_counts("1,0")
 
 
 def test_validate_twin_from_artifacts_dir_paths_runs_cli_and_surfaces_result(

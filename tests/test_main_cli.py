@@ -143,6 +143,31 @@ class TestBuildParser:
         assert args.params == "0.25"
         assert args.as_json is True
 
+    def test_parse_benchmark_twin_subcommand(self, tmp_path) -> None:
+        from naviertwin.main import _build_parser
+
+        p = _build_parser()
+        args = p.parse_args(
+            [
+                "benchmark-twin",
+                "--artifacts-dir",
+                str(tmp_path / "deployed-twin"),
+                "--params",
+                "0.25",
+                "--warmup",
+                "1",
+                "--repeat",
+                "3",
+                "--json",
+            ]
+        )
+        assert args.command == "benchmark-twin"
+        assert args.artifacts_dir.endswith("deployed-twin")
+        assert args.params == "0.25"
+        assert args.warmup == 1
+        assert args.repeat == 3
+        assert args.as_json is True
+
     def test_parse_validate_twin_subcommand(self, tmp_path) -> None:
         from naviertwin.main import _build_parser
 
@@ -359,6 +384,7 @@ class TestRunBuildTwin:
         pytest.importorskip("pandas")
         pytest.importorskip("sklearn")
         from naviertwin.main import (
+            _run_benchmark_twin,
             _run_build_twin,
             _run_inspect_twin_package,
             _run_package_twin,
@@ -544,6 +570,26 @@ class TestRunBuildTwin:
         assert deployed_predict_payload["artifacts_dir"].endswith("deployed-twin")
         assert deployed_predict_payload["engine"].endswith("engine.pkl")
         assert (tmp_path / "deployed-prediction.csv").exists()
+
+        benchmark_code = _run_benchmark_twin(
+            engine_path=None,
+            artifacts_dir=str(tmp_path / "deployed-twin"),
+            params="0.25",
+            params_csv=None,
+            param_columns=None,
+            warmup=1,
+            repeat=3,
+            output=str(tmp_path / "latency.json"),
+            as_json=True,
+        )
+        benchmark_payload = json.loads(capsys.readouterr().out)
+
+        assert benchmark_code == 0
+        assert benchmark_payload["artifacts_dir"].endswith("deployed-twin")
+        assert benchmark_payload["repeat"] == 3
+        assert len(benchmark_payload["samples_ms"]) == 3
+        assert benchmark_payload["latency_ms"]["p95"] >= benchmark_payload["latency_ms"]["min"]
+        assert (tmp_path / "latency.json").exists()
 
         deployed_validate_code = _run_validate_twin(
             engine_path=None,

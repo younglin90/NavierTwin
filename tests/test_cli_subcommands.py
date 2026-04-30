@@ -15,6 +15,7 @@ EXPECTED_SUBCOMMANDS = [
     "model-sweep",
     "build-twin",
     "predict-twin",
+    "benchmark-twin",
     "validate-twin",
     "package-twin",
     "verify-twin-package",
@@ -295,6 +296,37 @@ class TestCLISubcommands:
         assert deployed_predict_payload["status"] == "ok"
         assert deployed_predict_payload["artifacts_dir"].endswith("deployed-twin")
         assert (tmp_path / "deployed-prediction.csv").exists()
+
+        benchmark_result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "naviertwin.main",
+                "benchmark-twin",
+                "--artifacts-dir",
+                str(tmp_path / "deployed-twin"),
+                "--params",
+                "0.25",
+                "--warmup",
+                "1",
+                "--repeat",
+                "3",
+                "--output",
+                str(tmp_path / "latency.json"),
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert benchmark_result.returncode == 0, benchmark_result.stderr
+
+        benchmark_payload = json.loads(benchmark_result.stdout)
+        assert benchmark_payload["status"] == "ok"
+        assert benchmark_payload["repeat"] == 3
+        assert len(benchmark_payload["samples_ms"]) == 3
+        assert benchmark_payload["latency_ms"]["p95"] >= benchmark_payload["latency_ms"]["min"]
+        assert (tmp_path / "latency.json").exists()
 
         deployed_validate_result = subprocess.run(
             [

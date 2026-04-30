@@ -90,6 +90,18 @@ directory containing ``engine.pkl``, evaluates the input parameters, and prints
 prediction shape/preview metadata while optionally writing the predicted field
 matrix to CSV.
 
+benchmark-twin
+---------------
+
+.. code-block:: bash
+
+   naviertwin benchmark-twin --artifacts-dir /tmp/naviertwin-deploy --params 0.25 --warmup 2 --repeat 20 --output /tmp/naviertwin-latency.json --json
+
+Expected: runs warmup predictions, measures repeated prediction latency, and
+reports min/mean/p50/p95/p99/max milliseconds plus approximate throughput.
+Use this to verify the near-real-time behavior of a delivered twin on the
+customer machine.
+
 validate-twin
 -------------
 
