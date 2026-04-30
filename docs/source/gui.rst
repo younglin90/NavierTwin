@@ -55,6 +55,7 @@ GUI 사용법
 - **트윈 패키지 검증** — 고객 전달 ZIP 내부 ``MANIFEST.json`` 의 bytes/SHA256을 다시 대조
 - **트윈 패키지 검증 후 추출** — 검증 성공 시 새 디렉토리 또는 빈 디렉토리로 안전 추출
 - **트윈 패키지 원샷 수락 검사** — ZIP 검증, 안전 추출, ``sample_params.csv`` 예측, ``delivery.json`` latency SLO gate, acceptance JSON/Markdown 저장을 한 번에 실행
+- **지원 번들 생성** — 환경 진단, 현재 Import 탭 preflight, 최근 acceptance JSON/Markdown을 redaction 후 고객 지원 ZIP으로 묶음
 - **API 서버 시작/중지** — FastAPI 서버를 GUI 백그라운드 프로세스로 관리
 
 언어 전환

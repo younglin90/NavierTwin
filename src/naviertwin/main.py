@@ -315,6 +315,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p_support = sub.add_parser("support-bundle", help="고객 지원용 진단 번들 생성")
     p_support.add_argument("--outdir", required=True, help="지원 번들 출력 디렉토리")
     p_support.add_argument("--preflight", default=None, help="선택적으로 readiness 점검할 CFD 입력 경로")
+    p_support.add_argument("--acceptance-json", default=None, help="포함할 acceptance JSON 리포트 경로")
+    p_support.add_argument(
+        "--acceptance-summary",
+        default=None,
+        help="포함할 acceptance Markdown 요약 리포트 경로",
+    )
     p_support.add_argument(
         "--zip",
         dest="zip_bundle",
@@ -564,6 +570,8 @@ def main() -> None:
                 preflight=args.preflight,
                 include_optional=args.include_optional,
                 zip_bundle=args.zip_bundle,
+                acceptance_json=args.acceptance_json,
+                acceptance_summary=args.acceptance_summary,
             )
         )
     elif args.command == "autorefine":
@@ -2875,6 +2883,8 @@ def _run_support_bundle(
     preflight: str | None,
     include_optional: bool,
     zip_bundle: bool,
+    acceptance_json: str | None = None,
+    acceptance_summary: str | None = None,
 ) -> int:
     """고객 지원용 진단 번들을 생성한다."""
     from naviertwin.utils.support_bundle import build_support_bundle, report_to_json
@@ -2885,8 +2895,10 @@ def _run_support_bundle(
             preflight=preflight,
             include_optional=include_optional,
             zip_bundle=zip_bundle,
+            acceptance_json=acceptance_json,
+            acceptance_summary=acceptance_summary,
         )
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         print(f"support-bundle error: {exc}", file=sys.stderr)
         return 2
     print(report_to_json(report))

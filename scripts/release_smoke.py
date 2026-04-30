@@ -168,7 +168,13 @@ def _run_file_json(
 
 
 def _validate_support_bundle_artifacts(payload: dict[str, object], outdir: Path) -> int:
-    expected_files = ["doctor.json", "preflight.json", "metadata.json"]
+    expected_files = [
+        "doctor.json",
+        "preflight.json",
+        "acceptance.json",
+        "acceptance.md",
+        "metadata.json",
+    ]
     if payload.get("files") != expected_files:
         print(f"support-bundle files mismatch: {payload.get('files')!r}", file=sys.stderr)
         return 1
@@ -190,7 +196,7 @@ def _validate_support_bundle_artifacts(payload: dict[str, object], outdir: Path)
     if not isinstance(artifacts, dict):
         print("support-bundle payload missing artifacts integrity manifest", file=sys.stderr)
         return 1
-    for name in ["doctor.json", "preflight.json"]:
+    for name in ["doctor.json", "preflight.json", "acceptance.json", "acceptance.md"]:
         entry = artifacts.get(name)
         if not isinstance(entry, dict):
             print(f"support-bundle artifact manifest missing {name}", file=sys.stderr)
@@ -234,6 +240,13 @@ def _validate_support_bundle_artifacts(payload: dict[str, object], outdir: Path)
 
 def _run_support_bundle_smoke(*, env: dict[str, str]) -> int:
     outdir = Path("/tmp/naviertwin-support-bundle-smoke")
+    acceptance_json = Path("/tmp/naviertwin-support-bundle-acceptance.json")
+    acceptance_summary = Path("/tmp/naviertwin-support-bundle-acceptance.md")
+    acceptance_json.write_text(
+        json.dumps({"status": "ok", "acceptance": {"passed": True}}, sort_keys=True),
+        encoding="utf-8",
+    )
+    acceptance_summary.write_text("# NavierTwin Package Acceptance Summary\n\nPASS\n", encoding="utf-8")
     command = [
         sys.executable,
         "-m",
@@ -243,6 +256,10 @@ def _run_support_bundle_smoke(*, env: dict[str, str]) -> int:
         str(outdir),
         "--preflight",
         "tests/fixtures/tiny_square.su2",
+        "--acceptance-json",
+        str(acceptance_json),
+        "--acceptance-summary",
+        str(acceptance_summary),
         "--zip",
     ]
     print("+", " ".join(command), flush=True)

@@ -1008,6 +1008,55 @@ def test_accept_twin_package_path_runs_cli_and_surfaces_result(
     assert win._status_label.text() == "트윈 패키지 수락 검사 완료"
 
 
+def test_accept_twin_package_path_stores_recent_acceptance_outputs(
+    qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    from naviertwin.gui.main_window import MainWindow
+
+    win = MainWindow(confirm_on_close=False)
+    qtbot.addWidget(win)
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: None)
+
+    def fake_run_accept_twin_package_cli(
+        package_path: Path,
+        *,
+        extract_to: Path,
+        warmup: int,
+        repeat: int,
+        max_p95_ms: float | None = None,
+        min_throughput_hz: float | None = None,
+        output: Path | None,
+        summary_output: Path | None = None,
+    ) -> int:
+        if output is not None:
+            output.write_text('{"status": "ok"}\n', encoding="utf-8")
+        if summary_output is not None:
+            summary_output.write_text("# Acceptance\n", encoding="utf-8")
+        return 0
+
+    monkeypatch.setattr(
+        win,
+        "_run_accept_twin_package_cli",
+        fake_run_accept_twin_package_cli,
+    )
+    output = tmp_path / "acceptance.json"
+    summary_output = tmp_path / "acceptance.md"
+
+    win._accept_twin_package_path(
+        tmp_path / "delivery.zip",
+        extract_to=tmp_path / "accepted",
+        warmup=1,
+        repeat=3,
+        output=output,
+        summary_output=summary_output,
+    )
+
+    assert win._support_bundle_acceptance_json_path() == output
+    assert win._support_bundle_acceptance_summary_path() == summary_output
+
+
 def test_accept_twin_package_path_surfaces_failure(
     qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

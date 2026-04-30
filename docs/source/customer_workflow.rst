@@ -124,6 +124,18 @@ validation 포함 여부, README/delivery metadata 존재 여부와 ``parameter_
 통과/실패, 예측 shape, latency 통계, SLO check를 확인할 수 있는 Markdown
 수락 요약 리포트도 생성됩니다.
 
+11. 고객 지원 번들에 acceptance evidence 첨부
+------------------------------------------
+
+.. code-block:: bash
+
+   naviertwin support-bundle --outdir /tmp/naviertwin-support --acceptance-json /tmp/naviertwin-acceptance.json --acceptance-summary /tmp/naviertwin-acceptance.md --zip
+
+기대 결과: 환경 진단, optional preflight, acceptance JSON/Markdown 요약을
+redaction 후 하나의 ``support-bundle.zip`` 으로 묶습니다. 고객이 실패한
+acceptance 결과를 그대로 첨부해 보내면 개발/지원팀은 재현 정보, SLO 실패 항목,
+패키지 metadata를 한 번에 확인할 수 있습니다.
+
 GUI 대응 흐름
 -------------
 
@@ -140,3 +152,4 @@ GUI 대응 흐름
 - **트윈 패키지 검증**: 고객 전달 ZIP 선택 → archive manifest 무결성 확인
 - **트윈 패키지 검증 후 추출**: 고객 전달 ZIP 선택 → 배포 디렉토리 선택 → 검증 성공 시 안전 추출
 - **트윈 패키지 원샷 수락 검사**: 고객 전달 ZIP 선택 → 추출 디렉토리/SLO 입력 → 검증, 샘플 예측, latency gate, acceptance JSON/Markdown 저장
+- **지원 번들 생성**: 최근 acceptance JSON/Markdown과 현재 Import 탭 preflight 대상을 포함해 고객 지원 ZIP 생성

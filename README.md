@@ -138,6 +138,7 @@ naviertwin preflight tests/fixtures/tiny_square.su2 --json --output /tmp/naviert
 # 고객 지원용 진단 번들 생성
 naviertwin support-bundle --outdir /tmp/naviertwin-support --preflight tests/fixtures/tiny_square.su2
 naviertwin support-bundle --outdir /tmp/naviertwin-support --preflight tests/fixtures/tiny_square.su2 --zip
+naviertwin support-bundle --outdir /tmp/naviertwin-support --acceptance-json /tmp/naviertwin-acceptance.json --acceptance-summary /tmp/naviertwin-acceptance.md --zip
 
 # 라이선스/의존성 실사 리포트
 python scripts/license_report.py --json --output /tmp/naviertwin-license-report.json
@@ -257,6 +258,7 @@ src/naviertwin/
 - CFD 입력 데이터 readiness 점검: `naviertwin preflight tests/fixtures/tiny_square.su2 --json --output /tmp/naviertwin-preflight.json`
 - 고객 지원 번들 생성: `naviertwin support-bundle --outdir /tmp/naviertwin-support --preflight tests/fixtures/tiny_square.su2`
 - 고객 지원 번들 생성(ZIP 포함): `naviertwin support-bundle --outdir /tmp/naviertwin-support --preflight tests/fixtures/tiny_square.su2 --zip`
+- 고객 지원 번들에 acceptance 산출물 첨부: `naviertwin support-bundle --outdir /tmp/naviertwin-support --acceptance-json /tmp/naviertwin-acceptance.json --acceptance-summary /tmp/naviertwin-acceptance.md --zip`
 - 라이선스/의존성 실사 리포트: `python scripts/license_report.py --json --output /tmp/naviertwin-license-report.json`
 - 합성 파이프라인 데모: `naviertwin pipeline-demo --outdir /tmp/naviertwin-pipeline-demo`
 - ROM/surrogate 후보 자동 비교: `naviertwin model-sweep --reducers pod --n-modes 2,3,5 --surrogates rbf,kriging --json`

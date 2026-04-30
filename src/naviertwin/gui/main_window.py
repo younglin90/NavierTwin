@@ -130,6 +130,8 @@ class MainWindow(QMainWindow):
         self._latest_surrogate: object | None = None
         self._latest_operator: object | None = None
         self._latest_engine: object | None = None
+        self._last_acceptance_json: Path | None = None
+        self._last_acceptance_summary: Path | None = None
         self._server_process: QProcess | None = None
         self._model_compare_results: dict[str, dict[str, float]] = {}
 
@@ -1828,6 +1830,10 @@ class MainWindow(QMainWindow):
             )
             return
 
+        self._last_acceptance_json = output if output is not None and output.exists() else None
+        self._last_acceptance_summary = (
+            summary_output if summary_output is not None and summary_output.exists() else None
+        )
         self._set_status("트윈 패키지 수락 검사 완료")
         suffix = ""
         if output is not None:
@@ -2017,6 +2023,8 @@ class MainWindow(QMainWindow):
                 preflight=self._support_bundle_preflight_path(),
                 include_optional=True,
                 zip_bundle=True,
+                acceptance_json=self._support_bundle_acceptance_json_path(),
+                acceptance_summary=self._support_bundle_acceptance_summary_path(),
             )
         except Exception as exc:  # noqa: BLE001
             self._set_status("지원 번들 생성 실패")
@@ -2039,6 +2047,16 @@ class MainWindow(QMainWindow):
             return None
         path = Path(path_text)
         return path if path.exists() else None
+
+    def _support_bundle_acceptance_json_path(self) -> Path | None:
+        """지원 번들에 포함할 최근 acceptance JSON 경로를 반환한다."""
+        path = self._last_acceptance_json
+        return path if path is not None and path.exists() else None
+
+    def _support_bundle_acceptance_summary_path(self) -> Path | None:
+        """지원 번들에 포함할 최근 acceptance Markdown 요약 경로를 반환한다."""
+        path = self._last_acceptance_summary
+        return path if path is not None and path.exists() else None
 
     def _open_recent_project(self) -> None:
         action: QAction = self.sender()  # type: ignore[assignment]

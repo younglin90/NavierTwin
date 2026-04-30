@@ -355,6 +355,23 @@ def _install_and_run_cli(artifact: Path, venv_dir: Path) -> None:
 
     support_privacy_dir = venv_dir / "support-bundle-privacy"
     secret_preflight = venv_dir / "input_SECRET_TOKEN=secret123.su2"
+    secret_acceptance_json = venv_dir / "acceptance_SECRET_TOKEN=secret123.json"
+    secret_acceptance_json.write_text(
+        json.dumps(
+            {
+                "status": "ok",
+                "package": str(venv_dir / "delivery_SECRET_TOKEN=secret123.zip"),
+                "authorization": "Bearer tok.abc.123",
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    secret_acceptance_summary = venv_dir / "acceptance_SECRET_TOKEN=secret123.md"
+    secret_acceptance_summary.write_text(
+        "# Acceptance\n\nTOKEN=secret123\nAuthorization: Bearer tok.abc.123\n",
+        encoding="utf-8",
+    )
     support_privacy_cmd = [
         str(naviertwin),
         "support-bundle",
@@ -362,6 +379,10 @@ def _install_and_run_cli(artifact: Path, venv_dir: Path) -> None:
         str(support_privacy_dir),
         "--preflight",
         str(secret_preflight),
+        "--acceptance-json",
+        str(secret_acceptance_json),
+        "--acceptance-summary",
+        str(secret_acceptance_summary),
         "--zip",
     ]
     print("+", " ".join(support_privacy_cmd), flush=True)
@@ -372,7 +393,13 @@ def _install_and_run_cli(artifact: Path, venv_dir: Path) -> None:
         text=True,
     )
     support_privacy_payload = json.loads(support_privacy_result.stdout)
-    support_privacy_files = ["doctor.json", "preflight.json", "metadata.json"]
+    support_privacy_files = [
+        "doctor.json",
+        "preflight.json",
+        "acceptance.json",
+        "acceptance.md",
+        "metadata.json",
+    ]
     _assert_support_bundle_outputs(
         payload=support_privacy_payload,
         support_dir=support_privacy_dir,
