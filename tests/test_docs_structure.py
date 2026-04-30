@@ -29,6 +29,7 @@ class TestDocsStructure:
         assert idx.exists()
         content = idx.read_text(encoding="utf-8")
         assert "toctree" in content
+        assert "customer_workflow" in content
 
     def test_api_stubs(self) -> None:
         api = DOCS / "source" / "api"
@@ -254,6 +255,26 @@ class TestDocsStructure:
             assert f"naviertwin {command}" in content
         assert "Expected:" in content
 
+    def test_customer_workflow_docs_cover_twin_delivery_path(self) -> None:
+        """Customer workflow docs should cover the commercial twin delivery path."""
+        page = DOCS / "source" / "customer_workflow.rst"
+        content = page.read_text(encoding="utf-8")
+
+        for token in [
+            "preflight",
+            "model-sweep",
+            "build-twin",
+            "predict-twin",
+            "validate-twin",
+            "package-twin",
+            "acceptance gate",
+            "MANIFEST.json",
+            "SHA256",
+            "CSV 스냅샷으로 트윈 생성",
+            "트윈 산출물 패키징",
+        ]:
+            assert token in content
+
     def test_customer_docs_do_not_hardcode_current_package_version(self) -> None:
         """Customer-facing docs should not stale when the package version changes."""
         from naviertwin import __version__
@@ -261,6 +282,7 @@ class TestDocsStructure:
         customer_docs = [
             ROOT / "README.md",
             DOCS / "source" / "cli.rst",
+            DOCS / "source" / "customer_workflow.rst",
         ]
 
         for path in customer_docs:
