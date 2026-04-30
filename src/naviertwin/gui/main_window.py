@@ -24,8 +24,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QProcess
-from PySide6.QtGui import QAction, QCloseEvent
+from PySide6.QtCore import QProcess, QUrl
+from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -76,7 +76,8 @@ def format_update_check_message(result: UpdateCheckResult) -> tuple[str, str]:
                 f"최신 버전: {result.latest_version}\n"
                 f"채널: {result.channel}\n"
                 f"다운로드: {result.url}\n"
-                f"SHA256: {result.sha256}"
+                f"SHA256: {result.sha256}\n\n"
+                "다운로드 열기 또는 URL 복사 버튼으로 설치 파일을 받을 수 있습니다."
             ),
         )
     return (
@@ -2185,7 +2186,60 @@ class MainWindow(QMainWindow):
 
         title, message = format_update_check_message(result)
         self._set_status(f"{title}: {result.latest_version}")
-        QMessageBox.information(self, title, message)
+        if result.update_available:
+            self._show_update_available_dialog(title, message, result)
+        else:
+            QMessageBox.information(self, title, message)
+
+    def _show_update_available_dialog(
+        self,
+        title: str,
+        message: str,
+        result: UpdateCheckResult,
+    ) -> None:
+        """업데이트가 있을 때 다운로드/복사 handoff 버튼을 제공한다."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle(title)
+        box.setText(message)
+        open_button = box.addButton("다운로드 열기", QMessageBox.ButtonRole.AcceptRole)
+        copy_button = box.addButton("URL 복사", QMessageBox.ButtonRole.ActionRole)
+        box.addButton(QMessageBox.StandardButton.Close)
+        box.exec()
+
+        clicked = box.clickedButton()
+        if clicked is open_button:
+            self._open_update_download(result.url)
+        elif clicked is copy_button:
+            self._copy_update_url(result.url)
+
+    def _open_update_download(self, url: str) -> bool:
+        """검증된 릴리스 다운로드 URL을 기본 브라우저로 연다."""
+        if not url:
+            self._set_status("업데이트 다운로드 URL 없음")
+            QMessageBox.warning(self, "업데이트 열기 실패", "다운로드 URL이 없습니다.")
+            return False
+        opened = QDesktopServices.openUrl(QUrl(url))
+        if opened:
+            self._set_status("업데이트 다운로드 URL을 열었습니다")
+            return True
+        self._copy_update_url(url)
+        QMessageBox.warning(
+            self,
+            "업데이트 열기 실패",
+            "브라우저를 열 수 없어 다운로드 URL을 클립보드에 복사했습니다.",
+        )
+        return False
+
+    def _copy_update_url(self, url: str) -> bool:
+        """검증된 릴리스 다운로드 URL을 클립보드에 복사한다."""
+        if not url:
+            self._set_status("업데이트 다운로드 URL 없음")
+            QMessageBox.warning(self, "업데이트 복사 실패", "다운로드 URL이 없습니다.")
+            return False
+        QApplication.clipboard().setText(url)
+        self._set_status("업데이트 다운로드 URL을 클립보드에 복사했습니다")
+        return True
 
     # ──────────────────────────────────────────────────────────────────
     # 헬퍼

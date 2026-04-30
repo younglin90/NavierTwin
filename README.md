@@ -117,6 +117,7 @@ python scripts/sdist_smoke.py --install-smoke
 # 로컬 릴리스 메타데이터 기반 업데이트 확인
 naviertwin --version
 naviertwin update-check --metadata examples/release-metadata.example.json
+# GUI Help → 업데이트 확인은 검증된 다운로드 URL 열기/복사를 제공
 
 # 최소 quickstart smoke (복붙 가능한 설치 확인)
 naviertwin --version
@@ -251,7 +252,7 @@ src/naviertwin/
 - 권장 smoke 명령: `python scripts/release_smoke.py`
 - wheel artifact 검증: `python scripts/wheel_smoke.py --install-smoke`
 - sdist artifact 검증: `python scripts/sdist_smoke.py --install-smoke`
-- 업데이트 메타데이터 검증: `naviertwin update-check --metadata examples/release-metadata.example.json`
+- 업데이트 메타데이터 검증 및 설치 파일 handoff: `naviertwin update-check --metadata examples/release-metadata.example.json` (`url`/`sha256` 출력, GUI는 다운로드 열기/복사 버튼 제공)
 - benchmark smoke: `naviertwin benchmark --kind burgers`
 - REST 서버 실행: `naviertwin server --host 0.0.0.0 --port 8000`
 - 자동 고도화 dry-run: `naviertwin autorefine --iterations 1 --dry-run`

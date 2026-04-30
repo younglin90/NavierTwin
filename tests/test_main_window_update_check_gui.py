@@ -56,23 +56,31 @@ def test_format_update_check_message_for_available_update() -> None:
     assert title == "업데이트 사용 가능"
     assert "4.2.59" in message
     assert "SHA256" in message
+    assert "다운로드 열기" in message
 
 
 def test_main_window_update_check_path_surfaces_result(
     qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from PySide6.QtWidgets import QMessageBox
-
     from naviertwin.gui.main_window import MainWindow
 
     path = tmp_path / "release.json"
     path.write_text(json.dumps(_metadata()), encoding="utf-8")
-    messages: list[tuple[str, str]] = []
+    messages: list[tuple[str, str, object]] = []
 
-    def capture_information(parent: object, title: str, text: str) -> None:
-        messages.append((title, text))
+    def capture_update_dialog(
+        self: object,
+        title: str,
+        text: str,
+        result: object,
+    ) -> None:
+        messages.append((title, text, result))
 
-    monkeypatch.setattr(QMessageBox, "information", capture_information)
+    monkeypatch.setattr(
+        MainWindow,
+        "_show_update_available_dialog",
+        capture_update_dialog,
+    )
     win = MainWindow(confirm_on_close=False)
     qtbot.addWidget(win)
 
@@ -81,7 +89,47 @@ def test_main_window_update_check_path_surfaces_result(
     assert messages
     assert messages[0][0] == "업데이트 사용 가능"
     assert "4.2.59" in messages[0][1]
+    assert getattr(messages[0][2], "url").endswith("/NavierTwinSetup.exe")
     assert "업데이트 사용 가능" in win._status_label.text()
+
+
+def test_main_window_update_handoff_opens_download_url(
+    qtbot,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from PySide6.QtGui import QDesktopServices
+
+    from naviertwin.gui.main_window import MainWindow
+
+    url = "https://github.com/naviertwin/naviertwin/releases/download/v4.2.59/NavierTwinSetup.exe"
+    opened: list[str] = []
+
+    def capture_open(qurl: object) -> bool:
+        opened.append(qurl.toString())
+        return True
+
+    monkeypatch.setattr(QDesktopServices, "openUrl", staticmethod(capture_open))
+    win = MainWindow(confirm_on_close=False)
+    qtbot.addWidget(win)
+
+    assert win._open_update_download(url) is True
+    assert opened == [url]
+    assert "열었습니다" in win._status_label.text()
+
+
+def test_main_window_update_handoff_copies_download_url(qtbot) -> None:
+    from PySide6.QtWidgets import QApplication
+
+    from naviertwin.gui.main_window import MainWindow
+
+    url = "https://github.com/naviertwin/naviertwin/releases/download/v4.2.59/NavierTwinSetup.exe"
+    win = MainWindow(confirm_on_close=False)
+    qtbot.addWidget(win)
+    QApplication.clipboard().clear()
+
+    assert win._copy_update_url(url) is True
+    assert QApplication.clipboard().text() == url
+    assert "복사했습니다" in win._status_label.text()
 
 
 def test_main_window_update_check_path_surfaces_metadata_errors(
