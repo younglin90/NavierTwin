@@ -22,6 +22,8 @@ def test_advertised_rest_endpoints_return_json() -> None:
     assert "/twin/predict" in route_map
     assert "/twin/benchmark" in route_map
     assert "/twin/package" in route_map
+    assert "/twin/package/inspect" in route_map
+    assert "/twin/package/verify" in route_map
     assert "/twin/package/accept" in route_map
 
     assert route_map["/health"]() == {"status": "ok", "service": "naviertwin"}
@@ -168,6 +170,43 @@ def test_twin_package_endpoint_reports_invalid_artifacts_dir(tmp_path) -> None:
 
     assert exc.value.status_code == 400
     assert "artifacts-dir not found" in str(exc.value.detail)
+
+
+def test_twin_package_inspect_endpoint_reports_delivery_metadata(tmp_path) -> None:
+    from naviertwin.api import TwinPackageInspectReq
+
+    _app, route_map, package_path = _build_packaged_twin(tmp_path)
+    payload = route_map["/twin/package/inspect"](
+        TwinPackageInspectReq(package=str(package_path))
+    )
+
+    assert payload["status"] == "ok"
+    assert payload["delivery_metadata_present"] is True
+    assert payload["format"] == "NavierTwin delivery package"
+    assert payload["schema"] == "naviertwin-delivery-v1"
+    assert payload["verification"]["status"] == "ok"
+    assert payload["manifest_entry_count"] >= 7
+    assert payload["parameter_contract"]["names"] == ["normalized_index"]
+    assert {"README.txt", "delivery.json", "sample_params.csv"} <= set(
+        payload["generated_entries"]
+    )
+
+
+def test_twin_package_verify_endpoint_checks_and_extracts_zip(tmp_path) -> None:
+    from naviertwin.api import TwinPackageVerifyReq
+
+    _app, route_map, package_path = _build_packaged_twin(tmp_path)
+    extract_to = tmp_path / "verified"
+    payload = route_map["/twin/package/verify"](
+        TwinPackageVerifyReq(package=str(package_path), extract_to=str(extract_to))
+    )
+
+    assert payload["status"] == "ok"
+    assert payload["extracted_to"] == str(extract_to)
+    assert payload["manifest_entry_count"] >= 7
+    assert all(check["passed"] for check in payload["checks"])
+    assert (extract_to / "engine.pkl").exists()
+    assert (extract_to / "manifest.json").exists()
 
 
 def test_twin_package_cli_text_mode_uses_payload_output(tmp_path, capsys) -> None:

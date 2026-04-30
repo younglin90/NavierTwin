@@ -8,6 +8,8 @@
     - POST /twin/predict                   : 저장/배포된 TwinEngine 예측
     - POST /twin/benchmark                 : TwinEngine 예측 latency/SLO 측정
     - POST /twin/package                   : TwinEngine 산출물 → 전달 ZIP 패키징
+    - POST /twin/package/inspect           : 전달 ZIP 구성/메타데이터 조회
+    - POST /twin/package/verify            : 전달 ZIP 무결성 검증/선택 추출
     - POST /twin/package/accept            : 전달 ZIP 검증/예측/latency 수락 검사
     - POST /analytic/couette              : Couette 해석해 샘플
     - POST /analytic/poiseuille_2d        : Poiseuille 2D 해석해 샘플
@@ -112,6 +114,13 @@ if _HAS_FASTAPI:
         max_p99_ms: Optional[float] = None
         min_throughput_hz: Optional[float] = 10.0
         no_latency_slo: bool = False
+
+    class TwinPackageInspectReq(BaseModel):
+        package: str
+
+    class TwinPackageVerifyReq(BaseModel):
+        package: str
+        extract_to: Optional[str] = None
 
     class LBMReq(BaseModel):
         nx: int = 32
@@ -338,6 +347,53 @@ def create_app() -> Any:
 
         return payload
 
+    @app.post("/twin/package/inspect")
+    def twin_package_inspect(req: TwinPackageInspectReq = Body(...)) -> dict[str, Any]:
+        import zipfile
+        from pathlib import Path
+
+        from naviertwin.main import _inspect_twin_package_archive
+
+        try:
+            payload = _inspect_twin_package_archive(Path(req.package).expanduser())
+        except (
+            ImportError,
+            KeyError,
+            OSError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            zipfile.BadZipFile,
+        ) as exc:
+            raise fastapi.HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return payload
+
+    @app.post("/twin/package/verify")
+    def twin_package_verify(req: TwinPackageVerifyReq = Body(...)) -> dict[str, Any]:
+        import zipfile
+        from pathlib import Path
+
+        from naviertwin.main import _verify_twin_package_archive
+
+        try:
+            payload = _verify_twin_package_archive(
+                Path(req.package).expanduser(),
+                extract_to=Path(req.extract_to).expanduser() if req.extract_to else None,
+            )
+        except (
+            ImportError,
+            KeyError,
+            OSError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            zipfile.BadZipFile,
+        ) as exc:
+            raise fastapi.HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return payload
+
     @app.post("/twin/package/accept")
     def twin_package_accept(req: TwinPackageAcceptReq = Body(...)) -> dict[str, Any]:
         import tempfile
@@ -451,6 +507,8 @@ __all__ = [
     "TwinBenchmarkReq",
     "TwinPackageAcceptReq",
     "TwinPackageCreateReq",
+    "TwinPackageInspectReq",
+    "TwinPackageVerifyReq",
     "TwinPredictReq",
     "app",
     "create_app",

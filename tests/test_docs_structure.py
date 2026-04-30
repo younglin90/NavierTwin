@@ -364,6 +364,8 @@ class TestDocsStructure:
                 "TwinBenchmarkReq",
                 "TwinPackageAcceptReq",
                 "TwinPackageCreateReq",
+                "TwinPackageInspectReq",
+                "TwinPackageVerifyReq",
                 "LBMReq",
             ],
             "naviertwin.gui": ["MainWindow"],
