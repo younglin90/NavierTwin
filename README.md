@@ -158,6 +158,7 @@ naviertwin validate-twin --artifacts-dir /tmp/naviertwin-deploy --csv-snapshots 
 naviertwin package-twin --artifacts-dir /tmp/naviertwin-twin --include-validation /tmp/naviertwin-validation.json --output /tmp/naviertwin-twin.zip --json
 naviertwin inspect-twin-package --package /tmp/naviertwin-twin.zip --json
 naviertwin verify-twin-package --package /tmp/naviertwin-twin.zip --extract-to /tmp/naviertwin-deploy --json
+naviertwin accept-twin-package --package /tmp/naviertwin-twin.zip --extract-to /tmp/naviertwin-accepted --max-p95-ms 100 --min-throughput-hz 10 --output /tmp/naviertwin-acceptance.json --json
 
 # 전체 core 회귀 수집
 QT_QPA_PLATFORM=offscreen MPLCONFIGDIR=/tmp/mpl pytest --collect-only -q
@@ -268,6 +269,7 @@ src/naviertwin/
 - 트윈 산출물 ZIP 패키징(README.txt/delivery.json/parameter_contract/sample_params.csv 포함): `naviertwin package-twin --artifacts-dir /tmp/naviertwin-twin --include-validation /tmp/naviertwin-validation.json --output /tmp/naviertwin-twin.zip --json`
 - 트윈 전달 ZIP 구성/입력 contract 조회: `naviertwin inspect-twin-package --package /tmp/naviertwin-twin.zip --json`
 - 트윈 전달 ZIP 검증/안전 추출: `naviertwin verify-twin-package --package /tmp/naviertwin-twin.zip --extract-to /tmp/naviertwin-deploy --json`
+- 트윈 전달 ZIP 원샷 acceptance smoke: `naviertwin accept-twin-package --package /tmp/naviertwin-twin.zip --extract-to /tmp/naviertwin-accepted --max-p95-ms 100 --min-throughput-hz 10 --output /tmp/naviertwin-acceptance.json --json`
 - 전체 core 회귀: `QT_QPA_PLATFORM=offscreen MPLCONFIGDIR=/tmp/mpl pytest -q`
 - 전체 collection 안전성: `QT_QPA_PLATFORM=offscreen MPLCONFIGDIR=/tmp/mpl pytest --collect-only -q`
 - optional 의존성이 필요한 모듈은 `pytest.mark.optional`로 기본 core 실행에서 제외한다.

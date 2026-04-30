@@ -106,6 +106,18 @@ validation 포함 여부, README/delivery metadata 존재 여부와 ``parameter_
 실제 archive entry bytes/SHA256을 다시 대조합니다. ``--extract-to`` 를 지정하면
 검증을 통과한 경우에만 새 디렉토리 또는 빈 디렉토리로 안전하게 추출합니다.
 
+10. 전달 ZIP 원샷 acceptance smoke
+---------------------------------
+
+.. code-block:: bash
+
+   naviertwin accept-twin-package --package /tmp/naviertwin-twin.zip --extract-to /tmp/naviertwin-accepted --max-p95-ms 100 --min-throughput-hz 10 --output /tmp/naviertwin-acceptance.json --json
+
+기대 결과: 고객이 받은 ZIP 하나로 무결성 검증, 안전 추출, delivery metadata
+조회, ``sample_params.csv`` 기반 샘플 예측, latency SLO 측정을 한 번에 수행합니다.
+``--max-p95-ms`` 또는 ``--min-throughput-hz`` 같은 threshold가 실패하면 종료 코드
+1로 실패하므로 납품 승인 acceptance gate에 바로 연결할 수 있습니다.
+
 GUI 대응 흐름
 -------------
 

@@ -20,6 +20,7 @@ EXPECTED_SUBCOMMANDS = [
     "package-twin",
     "verify-twin-package",
     "inspect-twin-package",
+    "accept-twin-package",
     "preflight",
     "support-bundle",
     "autorefine",
@@ -256,6 +257,49 @@ class TestCLISubcommands:
         assert inspect_payload["format"] == "NavierTwin delivery package"
         assert inspect_payload["parameter_contract"]["dim"] == 1
         assert inspect_payload["verification"]["status"] == "ok"
+
+        accept_package_result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "naviertwin.main",
+                "accept-twin-package",
+                "--package",
+                str(tmp_path / "twin-delivery.zip"),
+                "--extract-to",
+                str(tmp_path / "accepted-twin"),
+                "--prediction-output",
+                str(tmp_path / "accept-prediction.csv"),
+                "--warmup",
+                "0",
+                "--repeat",
+                "2",
+                "--max-p95-ms",
+                "100000",
+                "--min-throughput-hz",
+                "0.0001",
+                "--output",
+                str(tmp_path / "acceptance.json"),
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert accept_package_result.returncode == 0, accept_package_result.stderr
+
+        accept_payload = json.loads(accept_package_result.stdout)
+        assert accept_payload["status"] == "ok"
+        assert accept_payload["acceptance"]["passed"] is True
+        assert accept_payload["verification"]["status"] == "ok"
+        assert accept_payload["inspection"]["parameter_contract"]["dim"] == 1
+        assert accept_payload["parameter_input"]["source"] == "sample_params.csv"
+        assert accept_payload["prediction"]["parameter_check"]["available"] is True
+        assert accept_payload["benchmark"]["repeat"] == 2
+        assert len(accept_payload["benchmark"]["samples_ms"]) == 2
+        assert (tmp_path / "accepted-twin" / "engine.pkl").exists()
+        assert (tmp_path / "accept-prediction.csv").exists()
+        assert (tmp_path / "acceptance.json").exists()
 
         verify_package_result = subprocess.run(
             [

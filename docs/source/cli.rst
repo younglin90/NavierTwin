@@ -167,6 +167,22 @@ unmanifested files, and integrity mismatches exit non-zero. When ``--extract-to`
 is provided, extraction happens only after verification succeeds and the target
 directory is new or empty.
 
+accept-twin-package
+-------------------
+
+.. code-block:: bash
+
+   naviertwin accept-twin-package --package /tmp/naviertwin-twin.zip --extract-to /tmp/naviertwin-accepted --max-p95-ms 100 --min-throughput-hz 10 --output /tmp/naviertwin-acceptance.json --json
+
+Expected: runs the customer handoff acceptance smoke in one command. It verifies
+``MANIFEST.json`` integrity, safely extracts the ZIP, inspects delivery
+metadata, loads ``sample_params.csv`` or a contract-derived example input, runs
+a sample prediction, then benchmarks prediction latency with the configured SLO
+thresholds. Package or prediction failures exit 1, SLO misses also exit 1, and
+runtime/setup errors exit 2. The JSON report contains ``verification``,
+``inspection``, ``prediction``, ``benchmark``, and top-level ``acceptance``
+blocks that can be attached to customer delivery records.
+
 preflight
 ---------
 

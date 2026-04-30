@@ -276,6 +276,43 @@ class TestBuildParser:
         assert args.package.endswith("twin.zip")
         assert args.as_json is True
 
+    def test_parse_accept_twin_package_subcommand(self, tmp_path) -> None:
+        from naviertwin.main import _build_parser
+
+        p = _build_parser()
+        args = p.parse_args(
+            [
+                "accept-twin-package",
+                "--package",
+                str(tmp_path / "twin.zip"),
+                "--extract-to",
+                str(tmp_path / "deploy"),
+                "--prediction-output",
+                str(tmp_path / "prediction.csv"),
+                "--warmup",
+                "1",
+                "--repeat",
+                "3",
+                "--max-p95-ms",
+                "100",
+                "--min-throughput-hz",
+                "10",
+                "--output",
+                str(tmp_path / "acceptance.json"),
+                "--json",
+            ]
+        )
+        assert args.command == "accept-twin-package"
+        assert args.package.endswith("twin.zip")
+        assert args.extract_to.endswith("deploy")
+        assert args.prediction_output.endswith("prediction.csv")
+        assert args.warmup == 1
+        assert args.repeat == 3
+        assert args.max_p95_ms == 100
+        assert args.min_throughput_hz == 10
+        assert args.output.endswith("acceptance.json")
+        assert args.as_json is True
+
     def test_parse_autorefine_subcommand(self) -> None:
         from naviertwin.main import _build_parser
 
@@ -426,6 +463,7 @@ class TestRunBuildTwin:
         pytest.importorskip("pandas")
         pytest.importorskip("sklearn")
         from naviertwin.main import (
+            _run_accept_twin_package,
             _run_benchmark_twin,
             _run_build_twin,
             _run_inspect_twin_package,
@@ -633,6 +671,64 @@ class TestRunBuildTwin:
         assert not verify_payload["errors"]
         assert (tmp_path / "deployed-twin" / "engine.pkl").exists()
         assert (tmp_path / "deployed-twin" / "README.txt").exists()
+
+        accept_code = _run_accept_twin_package(
+            package_path=str(tmp_path / "twin-delivery.zip"),
+            extract_to=str(tmp_path / "accepted-twin"),
+            prediction_output=str(tmp_path / "accept-prediction.csv"),
+            warmup=0,
+            repeat=2,
+            max_mean_ms=None,
+            max_p50_ms=None,
+            max_p95_ms=100000,
+            max_p99_ms=None,
+            min_throughput_hz=0.0001,
+            skip_benchmark=False,
+            output=str(tmp_path / "acceptance.json"),
+            as_json=True,
+        )
+        accept_payload = json.loads(capsys.readouterr().out)
+
+        assert accept_code == 0
+        assert accept_payload["status"] == "ok"
+        assert accept_payload["acceptance"]["package"] is True
+        assert accept_payload["acceptance"]["prediction"] is True
+        assert accept_payload["acceptance"]["benchmark"] is True
+        assert accept_payload["verification"]["status"] == "ok"
+        assert accept_payload["inspection"]["delivery_metadata_present"] is True
+        assert accept_payload["parameter_input"]["source"] == "sample_params.csv"
+        assert accept_payload["prediction"]["prediction_shape"] == [8, 1]
+        assert accept_payload["prediction"]["parameter_check"]["expected_dim"] == 1
+        assert accept_payload["benchmark"]["repeat"] == 2
+        assert len(accept_payload["benchmark"]["samples_ms"]) == 2
+        assert accept_payload["benchmark"]["acceptance"]["configured"] is True
+        assert (tmp_path / "accepted-twin" / "engine.pkl").exists()
+        assert (tmp_path / "accept-prediction.csv").exists()
+        assert (tmp_path / "acceptance.json").exists()
+
+        gated_accept_code = _run_accept_twin_package(
+            package_path=str(tmp_path / "twin-delivery.zip"),
+            extract_to=str(tmp_path / "accepted-twin-gated"),
+            prediction_output=None,
+            warmup=0,
+            repeat=1,
+            max_mean_ms=0.0,
+            max_p50_ms=None,
+            max_p95_ms=None,
+            max_p99_ms=None,
+            min_throughput_hz=None,
+            skip_benchmark=False,
+            output=None,
+            as_json=True,
+        )
+        gated_accept_payload = json.loads(capsys.readouterr().out)
+
+        assert gated_accept_code == 1
+        assert gated_accept_payload["status"] == "failed"
+        assert gated_accept_payload["acceptance"]["package"] is True
+        assert gated_accept_payload["acceptance"]["prediction"] is True
+        assert gated_accept_payload["acceptance"]["benchmark"] is False
+        assert gated_accept_payload["benchmark"]["acceptance"]["checks"][0]["metric"] == "latency_ms.mean"
 
         deployed_predict_code = _run_predict_twin(
             engine_path=None,

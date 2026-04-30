@@ -247,6 +247,43 @@ def _build_parser() -> argparse.ArgumentParser:
     p_inspect_package.add_argument("--package", required=True, help="조회할 package-twin ZIP 경로")
     p_inspect_package.add_argument("--json", dest="as_json", action="store_true", help="JSON으로 출력")
 
+    # accept-twin-package
+    p_accept_package = sub.add_parser(
+        "accept-twin-package",
+        help="전달용 트윈 ZIP을 검증, 예측, latency gate까지 원샷 수락 검사",
+    )
+    p_accept_package.add_argument("--package", required=True, help="검사할 package-twin ZIP 경로")
+    p_accept_package.add_argument(
+        "--extract-to",
+        default=None,
+        help="검증 성공 시 ZIP 내용을 안전하게 추출할 디렉토리. 생략하면 임시 디렉토리 사용",
+    )
+    p_accept_package.add_argument(
+        "--prediction-output",
+        default=None,
+        help="샘플 입력 예측 필드 CSV 저장 경로",
+    )
+    p_accept_package.add_argument("--warmup", type=int, default=2, help="latency 측정 전 warmup 횟수")
+    p_accept_package.add_argument("--repeat", type=int, default=20, help="latency 측정 반복 횟수")
+    p_accept_package.add_argument("--max-mean-ms", type=float, default=None, help="허용 최대 mean latency(ms)")
+    p_accept_package.add_argument("--max-p50-ms", type=float, default=None, help="허용 최대 p50 latency(ms)")
+    p_accept_package.add_argument("--max-p95-ms", type=float, default=None, help="허용 최대 p95 latency(ms)")
+    p_accept_package.add_argument("--max-p99-ms", type=float, default=None, help="허용 최대 p99 latency(ms)")
+    p_accept_package.add_argument(
+        "--min-throughput-hz",
+        type=float,
+        default=None,
+        help="허용 최소 예측 처리량(Hz)",
+    )
+    p_accept_package.add_argument(
+        "--skip-benchmark",
+        action="store_true",
+        default=False,
+        help="무결성/샘플 예측만 수행하고 latency 측정은 생략",
+    )
+    p_accept_package.add_argument("--output", default=None, help="acceptance JSON 리포트 저장 경로")
+    p_accept_package.add_argument("--json", dest="as_json", action="store_true", help="JSON으로 출력")
+
     # preflight
     p_preflight = sub.add_parser("preflight", help="CFD 입력 데이터 readiness 점검")
     p_preflight.add_argument("path", help="점검할 CFD 파일 또는 케이스 디렉토리")
@@ -472,6 +509,24 @@ def main() -> None:
         )
     elif args.command == "inspect-twin-package":
         sys.exit(_run_inspect_twin_package(package_path=args.package, as_json=args.as_json))
+    elif args.command == "accept-twin-package":
+        sys.exit(
+            _run_accept_twin_package(
+                package_path=args.package,
+                extract_to=args.extract_to,
+                prediction_output=args.prediction_output,
+                warmup=args.warmup,
+                repeat=args.repeat,
+                max_mean_ms=args.max_mean_ms,
+                max_p50_ms=args.max_p50_ms,
+                max_p95_ms=args.max_p95_ms,
+                max_p99_ms=args.max_p99_ms,
+                min_throughput_hz=args.min_throughput_hz,
+                skip_benchmark=args.skip_benchmark,
+                output=args.output,
+                as_json=args.as_json,
+            )
+        )
     elif args.command == "preflight":
         sys.exit(_run_preflight(path=args.path, as_json=args.as_json, output=args.output))
     elif args.command == "support-bundle":
@@ -1695,6 +1750,11 @@ def _build_twin_delivery_entries(
         "naviertwin verify-twin-package --package naviertwin-twin.zip "
         "--extract-to ./naviertwin-twin --json"
     )
+    accept_command = (
+        "naviertwin accept-twin-package --package naviertwin-twin.zip "
+        "--extract-to ./naviertwin-twin --max-p95-ms 100 --min-throughput-hz 10 "
+        "--output acceptance.json --json"
+    )
     sample_params_csv = _sample_params_csv_from_contract(parameter_contract)
     generated_entries = ["README.txt", "delivery.json"]
     if sample_params_csv is not None:
@@ -1717,6 +1777,7 @@ def _build_twin_delivery_entries(
             },
         },
         "commands": {
+            "accept_package": accept_command,
             "benchmark": benchmark_command,
             "predict": predict_command,
             "validate": validate_command,
@@ -1764,14 +1825,16 @@ def _build_twin_delivery_entries(
             *contract_lines,
             "",
             "Recommended checks:",
-            "1. Verify and extract this ZIP:",
+            "1. Run the one-command delivery acceptance smoke:",
+            f"   {accept_command}",
+            "2. Or verify and extract this ZIP manually:",
             f"   {verify_command}",
-            "2. Run a prediction:",
+            "3. Run a prediction:",
             f"   {predict_command}",
-            "3. Benchmark prediction latency:",
+            "4. Benchmark prediction latency:",
             f"   {benchmark_command}",
             "   Adjust --max-p95-ms/--min-throughput-hz to your deployment SLO.",
-            "4. Validate against held-out snapshots:",
+            "5. Validate against held-out snapshots:",
             f"   {validate_command}",
             "",
             "See delivery.json for machine-readable package metadata.",
@@ -1957,6 +2020,289 @@ def _run_inspect_twin_package(*, package_path: str, as_json: bool) -> int:
         if payload["errors"]:
             print("errors: " + "; ".join(payload["errors"]))
     return 0 if payload["status"] == "ok" else 1
+
+
+def _run_accept_twin_package(
+    *,
+    package_path: str,
+    extract_to: str | None,
+    prediction_output: str | None,
+    warmup: int,
+    repeat: int,
+    max_mean_ms: float | None = None,
+    max_p50_ms: float | None = None,
+    max_p95_ms: float | None = None,
+    max_p99_ms: float | None = None,
+    min_throughput_hz: float | None = None,
+    skip_benchmark: bool,
+    output: str | None,
+    as_json: bool,
+) -> int:
+    """고객 전달 ZIP을 수락 가능한 디지털 트윈 패키지인지 원샷 점검한다."""
+    try:
+        import tempfile
+
+        package = Path(package_path).expanduser()
+        if extract_to:
+            payload = _accept_twin_package_archive(
+                package,
+                extract_to=Path(extract_to).expanduser(),
+                temporary_extraction=False,
+                prediction_output=Path(prediction_output).expanduser()
+                if prediction_output
+                else None,
+                warmup=warmup,
+                repeat=repeat,
+                max_mean_ms=max_mean_ms,
+                max_p50_ms=max_p50_ms,
+                max_p95_ms=max_p95_ms,
+                max_p99_ms=max_p99_ms,
+                min_throughput_hz=min_throughput_hz,
+                skip_benchmark=skip_benchmark,
+            )
+        else:
+            with tempfile.TemporaryDirectory(prefix="naviertwin-accept-") as tmp_raw:
+                payload = _accept_twin_package_archive(
+                    package,
+                    extract_to=Path(tmp_raw) / "twin",
+                    temporary_extraction=True,
+                    prediction_output=Path(prediction_output).expanduser()
+                    if prediction_output
+                    else None,
+                    warmup=warmup,
+                    repeat=repeat,
+                    max_mean_ms=max_mean_ms,
+                    max_p50_ms=max_p50_ms,
+                    max_p95_ms=max_p95_ms,
+                    max_p99_ms=max_p99_ms,
+                    min_throughput_hz=min_throughput_hz,
+                    skip_benchmark=skip_benchmark,
+                )
+
+        output_path = Path(output).expanduser() if output else None
+        if output_path is not None:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(
+                json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+                encoding="utf-8",
+            )
+    except (ImportError, RuntimeError, OSError, ValueError, KeyError) as exc:
+        print(f"accept-twin-package error: {exc}", file=sys.stderr)
+        return 2
+
+    if as_json:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    else:
+        print(
+            "accept-twin-package 완료: "
+            f"status={payload['status']}, extracted_to={payload['extracted_to']}"
+        )
+        benchmark = payload.get("benchmark", {})
+        if isinstance(benchmark, dict) and benchmark.get("latency_ms"):
+            latency = benchmark["latency_ms"]
+            print(
+                "latency: "
+                f"p50={latency['p50']:.6g} ms, p95={latency['p95']:.6g} ms"
+            )
+        if output_path is not None:
+            print(f"output: {output_path}")
+    return 0 if payload["status"] == "ok" else 1
+
+
+def _accept_twin_package_archive(
+    package_path: Path,
+    *,
+    extract_to: Path,
+    temporary_extraction: bool,
+    prediction_output: Path | None,
+    warmup: int,
+    repeat: int,
+    max_mean_ms: float | None,
+    max_p50_ms: float | None,
+    max_p95_ms: float | None,
+    max_p99_ms: float | None,
+    min_throughput_hz: float | None,
+    skip_benchmark: bool,
+) -> dict[str, Any]:
+    """전달 ZIP의 검증, 샘플 예측, latency SLO를 단일 payload로 묶는다."""
+    if warmup < 0:
+        raise ValueError("--warmup must be >= 0")
+    if repeat < 1:
+        raise ValueError("--repeat must be >= 1")
+
+    verification = _verify_twin_package_archive(package_path)
+    inspection = _inspect_twin_package_archive(package_path)
+    package_passed = verification["status"] == "ok" and inspection["status"] == "ok"
+    payload: dict[str, Any] = {
+        "status": "failed",
+        "package": str(package_path),
+        "extracted_to": str(extract_to),
+        "temporary_extraction": temporary_extraction,
+        "verification": verification,
+        "inspection": inspection,
+        "parameter_input": None,
+        "prediction": None,
+        "benchmark": None,
+        "acceptance": {
+            "package": package_passed,
+            "prediction": False,
+            "benchmark": False,
+            "passed": False,
+        },
+    }
+    if not package_passed:
+        return payload
+
+    verification = _verify_twin_package_archive(package_path, extract_to=extract_to)
+    payload["verification"] = verification
+
+    from time import perf_counter
+
+    import numpy as np
+
+    from naviertwin.core.digital_twin.twin_engine import TwinEngine
+
+    engine_file = _resolve_twin_engine_path(engine_path=None, artifacts_dir=str(extract_to))
+    engine = TwinEngine.load(engine_file)
+    parameter_contract = _load_twin_parameter_contract(engine_file)
+    if parameter_contract is None:
+        raw_contract = inspection.get("parameter_contract")
+        parameter_contract = raw_contract if isinstance(raw_contract, dict) else None
+    params_array, parameter_input = _accept_twin_package_params(
+        extract_to,
+        contract=parameter_contract,
+    )
+    parameter_check = _check_twin_parameter_contract(params_array, parameter_contract)
+    prediction = np.asarray(engine.predict(params_array), dtype=np.float64)
+    prediction_path = prediction_output
+    if prediction_path is not None:
+        prediction_path.parent.mkdir(parents=True, exist_ok=True)
+        matrix = prediction.reshape(-1, 1) if prediction.ndim == 1 else prediction
+        header = ",".join(f"sample_{idx}" for idx in range(matrix.shape[1]))
+        np.savetxt(prediction_path, matrix, delimiter=",", header=header, comments="")
+
+    preview_array = prediction.reshape(-1)[: min(8, prediction.size)]
+    payload["parameter_input"] = parameter_input
+    payload["prediction"] = {
+        "engine": str(engine_file),
+        "input_shape": list(params_array.shape),
+        "prediction_shape": list(prediction.shape),
+        "output": str(prediction_path) if prediction_path is not None else None,
+        "parameter_contract": parameter_contract,
+        "parameter_check": parameter_check,
+        "preview": [float(value) for value in preview_array],
+    }
+    payload["acceptance"]["prediction"] = True
+
+    if skip_benchmark:
+        benchmark_acceptance = {
+            "configured": False,
+            "passed": True,
+            "checks": [],
+            "skipped": True,
+        }
+        payload["benchmark"] = {
+            "skipped": True,
+            "warmup": int(warmup),
+            "repeat": int(repeat),
+            "acceptance": benchmark_acceptance,
+        }
+    else:
+        for _ in range(warmup):
+            engine.predict(params_array)
+
+        durations_ms: list[float] = []
+        benchmark_prediction_shape: list[int] = []
+        for _ in range(repeat):
+            started = perf_counter()
+            benchmark_prediction = np.asarray(engine.predict(params_array), dtype=np.float64)
+            durations_ms.append(float((perf_counter() - started) * 1000.0))
+            benchmark_prediction_shape = list(benchmark_prediction.shape)
+
+        durations = np.asarray(durations_ms, dtype=np.float64)
+        mean_ms = float(np.mean(durations))
+        latency = {
+            "min": float(np.min(durations)),
+            "mean": mean_ms,
+            "p50": float(np.percentile(durations, 50)),
+            "p95": float(np.percentile(durations, 95)),
+            "p99": float(np.percentile(durations, 99)),
+            "max": float(np.max(durations)),
+        }
+        throughput_hz = float(1000.0 / mean_ms) if mean_ms > 0 else None
+        benchmark_acceptance = _benchmark_twin_acceptance(
+            latency,
+            throughput_hz=throughput_hz,
+            max_mean_ms=max_mean_ms,
+            max_p50_ms=max_p50_ms,
+            max_p95_ms=max_p95_ms,
+            max_p99_ms=max_p99_ms,
+            min_throughput_hz=min_throughput_hz,
+        )
+        payload["benchmark"] = {
+            "skipped": False,
+            "input_shape": list(params_array.shape),
+            "prediction_shape": benchmark_prediction_shape,
+            "warmup": int(warmup),
+            "repeat": int(repeat),
+            "latency_ms": latency,
+            "samples_ms": durations_ms,
+            "throughput_hz": throughput_hz,
+            "parameter_check": parameter_check,
+            "acceptance": benchmark_acceptance,
+        }
+    payload["acceptance"]["benchmark"] = bool(benchmark_acceptance["passed"])
+    payload["acceptance"]["passed"] = all(
+        bool(payload["acceptance"][name])
+        for name in ("package", "prediction", "benchmark")
+    )
+    payload["status"] = "ok" if payload["acceptance"]["passed"] else "failed"
+    return payload
+
+
+def _accept_twin_package_params(
+    artifacts_dir: Path,
+    *,
+    contract: dict[str, Any] | None,
+) -> tuple[Any, dict[str, Any]]:
+    """전달 패키지 내부의 sample_params.csv 또는 contract 예시값을 입력으로 선택한다."""
+    sample_params = artifacts_dir / "sample_params.csv"
+    param_columns = _param_columns_from_contract(contract)
+    if sample_params.exists():
+        params_array = _load_predict_twin_params(
+            params=None,
+            params_csv=str(sample_params),
+            param_columns=param_columns,
+        )
+        return params_array, {
+            "source": "sample_params.csv",
+            "path": str(sample_params),
+            "param_columns": param_columns,
+        }
+
+    params = _example_params_from_contract(contract)
+    params_array = _load_predict_twin_params(
+        params=params,
+        params_csv=None,
+        param_columns=None,
+    )
+    return params_array, {
+        "source": "parameter_contract_example",
+        "params": params,
+        "param_columns": None,
+    }
+
+
+def _param_columns_from_contract(contract: dict[str, Any] | None) -> str | None:
+    """계약에 명확한 파라미터 이름이 있으면 CSV 컬럼 인자로 변환한다."""
+    if not isinstance(contract, dict):
+        return None
+    names = [str(name) for name in contract.get("names", []) if str(name)]
+    try:
+        dim = int(contract.get("dim", 0))
+    except (TypeError, ValueError):
+        return None
+    return ",".join(names) if dim > 0 and len(names) == dim else None
 
 
 def _is_safe_zip_member_name(name: str) -> bool:

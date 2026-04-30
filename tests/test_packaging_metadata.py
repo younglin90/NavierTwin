@@ -151,6 +151,7 @@ def test_readme_documents_shipped_cli_surface() -> None:
         "naviertwin validate-twin --engine",
         "naviertwin package-twin --artifacts-dir",
         "naviertwin verify-twin-package --package",
+        "naviertwin accept-twin-package --package",
     ]
 
     for command in expected_commands:
