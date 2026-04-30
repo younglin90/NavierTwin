@@ -356,6 +356,10 @@ class MainWindow(QMainWindow):
         support_action.triggered.connect(self._create_support_bundle)
         self._help_menu.addAction(support_action)
 
+        inspect_support_action = QAction("지원 번들 점검(&I)", self)
+        inspect_support_action.triggered.connect(self._inspect_support_bundle)
+        self._help_menu.addAction(inspect_support_action)
+
         update_action = QAction("업데이트 확인(&U)", self)
         update_action.triggered.connect(self._check_for_updates)
         self._help_menu.addAction(update_action)
@@ -2107,6 +2111,40 @@ class MainWindow(QMainWindow):
         """지원 번들에 포함할 최근 acceptance Markdown 요약 경로를 반환한다."""
         path = self._last_acceptance_summary
         return path if path is not None and path.exists() else None
+
+    def _inspect_support_bundle(self) -> None:
+        """받은 고객 지원 번들 ZIP을 GUI에서 read-only로 점검한다."""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "지원 번들 ZIP 선택",
+            "",
+            "ZIP (*.zip);;All Files (*)",
+        )
+        if not path:
+            return
+        self._inspect_support_bundle_path(Path(path))
+
+    def _inspect_support_bundle_path(self, path: Path) -> None:
+        """고객 지원 번들 점검 결과를 GUI에 표시한다."""
+        from naviertwin.utils.support_bundle import (
+            format_support_bundle_inspection,
+            inspect_support_bundle,
+        )
+
+        try:
+            report = inspect_support_bundle(path)
+        except Exception as exc:  # noqa: BLE001
+            self._set_status("지원 번들 점검 실패")
+            QMessageBox.warning(self, "지원 번들 점검 실패", str(exc))
+            return
+
+        status = str(report.get("status", "unknown"))
+        message = format_support_bundle_inspection(report)
+        self._set_status(f"지원 번들 점검: {status}")
+        if status == "ok":
+            QMessageBox.information(self, "지원 번들 점검 완료", message)
+        else:
+            QMessageBox.warning(self, "지원 번들 점검 실패", message)
 
     def _open_recent_project(self) -> None:
         action: QAction = self.sender()  # type: ignore[assignment]

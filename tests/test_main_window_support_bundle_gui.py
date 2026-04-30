@@ -21,6 +21,7 @@ def test_help_menu_exposes_support_bundle_action(qtbot) -> None:
         if not action.isSeparator()
     ]
     assert any("지원 번들" in text for text in actions)
+    assert any("지원 번들 점검" in text for text in actions)
 
 
 def test_support_bundle_action_surfaces_success(
@@ -247,3 +248,113 @@ def test_support_bundle_action_surfaces_errors(
     assert warnings[0][0] == "지원 번들 생성 실패"
     assert "disk full" in warnings[0][1]
     assert win._status_label.text() == "지원 번들 생성 실패"
+
+
+def test_inspect_support_bundle_action_surfaces_success(
+    qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    import naviertwin.utils.support_bundle as support_bundle
+    from naviertwin.gui.main_window import MainWindow
+
+    bundle = tmp_path / "support-bundle.zip"
+    bundle.write_bytes(b"placeholder")
+    monkeypatch.setattr(
+        support_bundle,
+        "inspect_support_bundle",
+        lambda path: {
+            "status": "ok",
+            "kind": "zip",
+            "metadata": {"status": "warn", "schema_version": 2},
+            "manifest": {"verified": True},
+            "artifacts": {"verified": True},
+            "warnings": [],
+            "errors": [],
+        },
+    )
+    monkeypatch.setattr(
+        support_bundle,
+        "format_support_bundle_inspection",
+        lambda report: "NavierTwin support bundle: ok",
+    )
+    messages: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda parent, title, text: messages.append((title, text)),
+    )
+    win = MainWindow(confirm_on_close=False)
+    qtbot.addWidget(win)
+
+    win._inspect_support_bundle_path(bundle)
+
+    assert messages == [("지원 번들 점검 완료", "NavierTwin support bundle: ok")]
+    assert win._status_label.text() == "지원 번들 점검: ok"
+
+
+def test_inspect_support_bundle_dialog_selects_zip(
+    qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtWidgets import QFileDialog
+
+    from naviertwin.gui.main_window import MainWindow
+
+    bundle = tmp_path / "support-bundle.zip"
+    bundle.write_bytes(b"placeholder")
+    selected: list[Path] = []
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileName",
+        lambda *args, **kwargs: (str(bundle), ""),
+    )
+    win = MainWindow(confirm_on_close=False)
+    qtbot.addWidget(win)
+    monkeypatch.setattr(win, "_inspect_support_bundle_path", lambda path: selected.append(path))
+
+    win._inspect_support_bundle()
+
+    assert selected == [bundle]
+
+
+def test_inspect_support_bundle_action_surfaces_failure(
+    qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    import naviertwin.utils.support_bundle as support_bundle
+    from naviertwin.gui.main_window import MainWindow
+
+    bundle = tmp_path / "support-bundle.zip"
+    bundle.write_bytes(b"placeholder")
+    monkeypatch.setattr(
+        support_bundle,
+        "inspect_support_bundle",
+        lambda path: {
+            "status": "error",
+            "kind": "zip",
+            "metadata": {"present": False},
+            "manifest": {"verified": False},
+            "artifacts": {"verified": False},
+            "warnings": [],
+            "errors": ["missing metadata.json"],
+        },
+    )
+    monkeypatch.setattr(
+        support_bundle,
+        "format_support_bundle_inspection",
+        lambda report: "missing metadata.json",
+    )
+    warnings: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda parent, title, text: warnings.append((title, text)),
+    )
+    win = MainWindow(confirm_on_close=False)
+    qtbot.addWidget(win)
+
+    win._inspect_support_bundle_path(bundle)
+
+    assert warnings == [("지원 번들 점검 실패", "missing metadata.json")]
+    assert win._status_label.text() == "지원 번들 점검: error"
