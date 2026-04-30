@@ -118,6 +118,8 @@ python scripts/sdist_smoke.py --install-smoke
 naviertwin --version
 naviertwin update-check --metadata examples/release-metadata.example.json
 # GUI Help → 업데이트 확인은 검증된 다운로드 URL 열기/복사를 제공
+# 릴리스 담당자용: unsigned metadata 서명 생성(개인키는 env/file로만 주입)
+python scripts/sign_release_metadata.py --input release-unsigned.json --output release.json --key-id naviertwin-release-2026q2
 
 # 최소 quickstart smoke (복붙 가능한 설치 확인)
 naviertwin --version
@@ -253,6 +255,7 @@ src/naviertwin/
 - wheel artifact 검증: `python scripts/wheel_smoke.py --install-smoke`
 - sdist artifact 검증: `python scripts/sdist_smoke.py --install-smoke`
 - 서명된 업데이트 메타데이터 검증 및 설치 파일 handoff: `naviertwin update-check --metadata examples/release-metadata.example.json` (`url`/`sha256` 출력, GUI는 다운로드 열기/복사 버튼 제공)
+- 업데이트 메타데이터 서명 생성: `python scripts/sign_release_metadata.py --input release-unsigned.json --output release.json --key-id naviertwin-release-2026q2` (`NAVIER_TWIN_RELEASE_PRIVATE_KEY_B64` 또는 `--private-key-file` 필요)
 - benchmark smoke: `naviertwin benchmark --kind burgers`
 - REST 서버 실행: `naviertwin server --host 0.0.0.0 --port 8000`
 - 자동 고도화 dry-run: `naviertwin autorefine --iterations 1 --dry-run`

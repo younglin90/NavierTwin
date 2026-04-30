@@ -177,7 +177,7 @@ def test_gui_runtime_assets_are_included_in_package_data() -> None:
     assert "recursive-include src/naviertwin/gui/styles *.qss *.json" in manifest_text
     assert (
         "include scripts/release_smoke.py scripts/wheel_smoke.py scripts/sdist_smoke.py "
-        "scripts/license_report.py scripts/release_versions.py"
+        "scripts/license_report.py scripts/release_versions.py scripts/sign_release_metadata.py"
     ) in manifest_text
 
 

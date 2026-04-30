@@ -36,6 +36,7 @@ REQUIRED_SDIST_FILES = [
     "scripts/wheel_smoke.py",
     "scripts/sdist_smoke.py",
     "scripts/license_report.py",
+    "scripts/sign_release_metadata.py",
     "src/naviertwin/gui/styles/dark_theme.qss",
     "src/naviertwin/gui/styles/i18n/ko.json",
     "src/naviertwin/gui/styles/i18n/en.json",

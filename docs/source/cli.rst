@@ -251,6 +251,10 @@ Expected: verifies signed local release metadata and reports whether an update
 is available for the selected channel. The JSON includes the validated
 installer ``url`` and ``sha256`` so support or the GUI can hand off the exact
 ``NavierTwinSetup.exe`` download without implementing an in-app self-updater.
+Release maintainers can generate the signed metadata with
+``python scripts/sign_release_metadata.py --input release-unsigned.json --output release.json --key-id naviertwin-release-2026q2``.
+The Ed25519 private key is read from ``NAVIER_TWIN_RELEASE_PRIVATE_KEY_B64`` or
+``--private-key-file`` and is never stored in the repository.
 
 doctor
 ------
