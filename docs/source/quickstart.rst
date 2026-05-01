@@ -57,6 +57,10 @@ Streaming Digital Twin 실시간 동화
        twin.assimilate(np.zeros(3))
    est = twin.estimate()
 
+REST 운영 API에서도 같은 루프를 세션으로 실행할 수 있습니다. ``POST /twin/stream/init`` 로
+세션을 만들고, ``POST /twin/stream/observe`` 로 관측을 동화한 뒤,
+``GET /twin/stream/state?session_id=<id>`` 로 현재 estimate와 uncertainty를 조회합니다.
+
 GUI 실행
 ---------
 

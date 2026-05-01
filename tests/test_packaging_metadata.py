@@ -133,6 +133,10 @@ def test_release_docs_do_not_conflict_with_packaging_policy() -> None:
     assert "`POST /twin/package/inspect`" in readme
     assert "`POST /twin/package/verify`" in readme
     assert "`POST /twin/package/accept`" in readme
+    assert "`POST /twin/stream/init`" in readme
+    assert "`POST /twin/stream/step`" in readme
+    assert "`POST /twin/stream/observe`" in readme
+    assert "`GET /twin/stream/state`" in readme
     assert "`POST /simulate/lbm_cavity`" in readme
     assert "비상업용" not in agents
     assert "v4.2.0 + 17 rounds" not in agents

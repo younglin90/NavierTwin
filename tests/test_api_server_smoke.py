@@ -26,6 +26,10 @@ def test_advertised_rest_endpoints_return_json() -> None:
     assert "/twin/package/inspect" in route_map
     assert "/twin/package/verify" in route_map
     assert "/twin/package/accept" in route_map
+    assert "/twin/stream/init" in route_map
+    assert "/twin/stream/step" in route_map
+    assert "/twin/stream/observe" in route_map
+    assert "/twin/stream/state" in route_map
 
     assert route_map["/health"]() == {"status": "ok", "service": "naviertwin"}
     doctor_payload = route_map["/doctor"]()
@@ -417,6 +421,109 @@ def test_twin_package_accept_endpoint_reports_missing_package(tmp_path) -> None:
 
     assert exc.value.status_code == 400
     assert "package not found" in str(exc.value.detail)
+
+
+def test_twin_stream_endpoints_run_state_assimilation() -> None:
+    import numpy as np
+
+    from naviertwin.api import (
+        TwinStreamInitReq,
+        TwinStreamObserveReq,
+        TwinStreamStepReq,
+        create_app,
+    )
+
+    app = create_app()
+    route_map = {
+        route.path: route.endpoint
+        for route in app.routes
+        if hasattr(route, "path") and hasattr(route, "endpoint")
+    }
+    assert "/twin/stream/init" in route_map
+    assert "/twin/stream/step" in route_map
+    assert "/twin/stream/observe" in route_map
+    assert "/twin/stream/state" in route_map
+
+    init_payload = route_map["/twin/stream/init"](
+        TwinStreamInitReq(
+            session_id="case-001",
+            state_dim=2,
+            n_ensemble=30,
+            transition=[[0.95, 0.0], [0.0, 0.9]],
+            observation_matrix=[[1.0, 0.0], [0.0, 1.0]],
+            observation_covariance=(0.01 * np.eye(2)).tolist(),
+            initial_mean=[1.0, -0.5],
+            initial_std=0.02,
+            history_size=6,
+            seed=7,
+        )
+    )
+
+    assert init_payload["status"] == "ok"
+    assert init_payload["event"] == "init"
+    assert init_payload["session_id"] == "case-001"
+    assert init_payload["state_dim"] == 2
+    assert init_payload["n_ensemble"] == 30
+    assert init_payload["history_length"] == 1
+    assert len(init_payload["estimate"]) == 2
+    assert len(init_payload["uncertainty"]) == 2
+
+    step_payload = route_map["/twin/stream/step"](
+        TwinStreamStepReq(session_id="case-001", steps=2)
+    )
+    assert step_payload["event"] == "step"
+    assert step_payload["step_count"] == 2
+    assert step_payload["history_length"] == 3
+
+    observe_payload = route_map["/twin/stream/observe"](
+        TwinStreamObserveReq(
+            session_id="case-001",
+            observation=[0.25, -0.1],
+            advance=True,
+        )
+    )
+    assert observe_payload["event"] == "observe"
+    assert observe_payload["step_count"] == 3
+    assert observe_payload["observation_count"] == 1
+    assert observe_payload["history_length"] <= 6
+    assert len(observe_payload["history_tail"]) <= 5
+    assert max(observe_payload["uncertainty"]) < 0.2
+
+    state_payload = route_map["/twin/stream/state"](session_id="case-001")
+    assert state_payload["event"] == "state"
+    assert state_payload["estimate"] == observe_payload["estimate"]
+    assert state_payload["uncertainty"] == observe_payload["uncertainty"]
+
+
+def test_twin_stream_endpoints_report_invalid_requests() -> None:
+    from fastapi import HTTPException
+
+    from naviertwin.api import TwinStreamInitReq, TwinStreamStepReq, create_app
+
+    app = create_app()
+    route_map = {
+        route.path: route.endpoint
+        for route in app.routes
+        if hasattr(route, "path") and hasattr(route, "endpoint")
+    }
+
+    with pytest.raises(HTTPException) as exc:
+        route_map["/twin/stream/init"](
+            TwinStreamInitReq(
+                state_dim=2,
+                n_ensemble=10,
+                transition=[[1.0, 0.0, 0.0]],
+            )
+        )
+    assert exc.value.status_code == 400
+    assert "transition shape" in str(exc.value.detail)
+
+    with pytest.raises(HTTPException) as exc:
+        route_map["/twin/stream/step"](
+            TwinStreamStepReq(session_id="missing", steps=1)
+        )
+    assert exc.value.status_code == 404
+    assert "stream session not found" in str(exc.value.detail)
 
 
 def test_twin_predict_endpoint_serves_saved_engine(tmp_path) -> None:

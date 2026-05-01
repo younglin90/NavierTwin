@@ -22,6 +22,9 @@ def test_api_root_exports_fastapi_entrypoints() -> None:
         TwinPackageInspectReq,
         TwinPackageVerifyReq,
         TwinPredictReq,
+        TwinStreamInitReq,
+        TwinStreamObserveReq,
+        TwinStreamStepReq,
         create_app,
     )
 
@@ -41,6 +44,9 @@ def test_api_root_exports_fastapi_entrypoints() -> None:
         "TwinPackageInspectReq",
         "TwinPackageVerifyReq",
         "LBMReq",
+        "TwinStreamInitReq",
+        "TwinStreamObserveReq",
+        "TwinStreamStepReq",
     }
 
     assert expected.issubset(set(api.__all__))
@@ -55,6 +61,9 @@ def test_api_root_exports_fastapi_entrypoints() -> None:
     assert api.TwinPackageCreateReq is TwinPackageCreateReq
     assert api.TwinPackageInspectReq is TwinPackageInspectReq
     assert api.TwinPackageVerifyReq is TwinPackageVerifyReq
+    assert api.TwinStreamInitReq is TwinStreamInitReq
+    assert api.TwinStreamObserveReq is TwinStreamObserveReq
+    assert api.TwinStreamStepReq is TwinStreamStepReq
     assert api.LBMReq is LBMReq
     assert api.app is not None
 
@@ -79,6 +88,10 @@ def test_api_root_create_app_exposes_advertised_routes() -> None:
         "/twin/package/inspect",
         "/twin/package/verify",
         "/twin/package/accept",
+        "/twin/stream/init",
+        "/twin/stream/step",
+        "/twin/stream/observe",
+        "/twin/stream/state",
         "/analytic/couette",
         "/analytic/poiseuille_2d",
         "/simulate/lbm_cavity",

@@ -13,6 +13,10 @@
     - POST /twin/package/inspect           : 전달 ZIP 구성/메타데이터 조회
     - POST /twin/package/verify            : 전달 ZIP 무결성 검증/선택 추출
     - POST /twin/package/accept            : 전달 ZIP 검증/예측/latency 수락 검사
+    - POST /twin/stream/init               : StreamingDigitalTwin 세션 초기화
+    - POST /twin/stream/step               : StreamingDigitalTwin forecast 전파
+    - POST /twin/stream/observe            : StreamingDigitalTwin 관측 동화
+    - GET  /twin/stream/state              : StreamingDigitalTwin 현재 상태 조회
     - POST /analytic/couette              : Couette 해석해 샘플
     - POST /analytic/poiseuille_2d        : Poiseuille 2D 해석해 샘플
     - POST /optimize/bayesian             : BO 최소화 (간단 quadratic)
@@ -87,6 +91,29 @@ if _HAS_FASTAPI:
         output_path: Optional[str] = None
         output_format: str = "csv"
 
+    class TwinStreamInitReq(BaseModel):
+        session_id: Optional[str] = None
+        state_dim: int
+        n_ensemble: int = 40
+        transition: Optional[List[List[float]]] = None  # noqa: UP006
+        observation_matrix: Optional[List[List[float]]] = None  # noqa: UP006
+        observation_covariance: Optional[List[List[float]]] = None  # noqa: UP006
+        process_noise: float = 0.01
+        history_size: int = 100
+        seed: Optional[int] = 0
+        initial_mean: Optional[List[float]] = None  # noqa: UP006
+        initial_std: float = 1.0
+        initial_ensemble: Optional[List[List[float]]] = None  # noqa: UP006
+
+    class TwinStreamStepReq(BaseModel):
+        session_id: str
+        steps: int = 1
+
+    class TwinStreamObserveReq(BaseModel):
+        session_id: str
+        observation: List[float]  # noqa: UP006
+        advance: bool = True
+
     class TwinBenchmarkReq(BaseModel):
         engine_path: Optional[str] = None
         artifacts_dir: Optional[str] = None
@@ -148,6 +175,7 @@ def create_app() -> Any:
     import numpy as np
 
     app = FastAPI(title="NavierTwin API", version=__version__)
+    stream_sessions: dict[str, dict[str, Any]] = {}
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -361,6 +389,179 @@ def create_app() -> Any:
         if req.return_prediction:
             payload["prediction"] = prediction.tolist()
         return payload
+
+    def _stream_matrix(
+        raw: Any,
+        default: np.ndarray,
+        *,
+        name: str,
+    ) -> np.ndarray:
+        matrix = np.asarray(default if raw is None else raw, dtype=np.float64)
+        if matrix.ndim != 2:
+            raise ValueError(f"{name} must be 2D, got shape {matrix.shape}")
+        return matrix
+
+    def _stream_state_payload(
+        session_id: str,
+        record: dict[str, Any],
+        *,
+        event: str,
+    ) -> dict[str, Any]:
+        twin = record["twin"]
+        estimate = np.asarray(twin.estimate(), dtype=np.float64)
+        uncertainty = np.asarray(twin.uncertainty(), dtype=np.float64)
+        history_tail = [
+            np.asarray(item, dtype=np.float64).tolist()
+            for item in list(twin.history)[-5:]
+        ]
+        return {
+            "status": "ok",
+            "event": event,
+            "session_id": session_id,
+            "state_dim": int(twin.state_dim),
+            "n_ensemble": int(twin.n_ensemble),
+            "step_count": int(record["step_count"]),
+            "observation_count": int(record["observation_count"]),
+            "history_length": int(len(twin.history)),
+            "history_limit": int(twin.history.maxlen or 0),
+            "estimate": estimate.tolist(),
+            "uncertainty": uncertainty.tolist(),
+            "history_tail": history_tail,
+        }
+
+    def _get_stream_record(session_id: str) -> dict[str, Any]:
+        try:
+            return stream_sessions[session_id]
+        except KeyError as exc:
+            raise fastapi.HTTPException(
+                status_code=404,
+                detail=f"stream session not found: {session_id}",
+            ) from exc
+
+    @app.post("/twin/stream/init")
+    def twin_stream_init(req: TwinStreamInitReq = Body(...)) -> dict[str, Any]:
+        from uuid import uuid4
+
+        from naviertwin.core.digital_twin.streaming_twin import StreamingDigitalTwin
+
+        try:
+            if req.state_dim < 1:
+                raise ValueError("state_dim must be >= 1")
+            if req.n_ensemble < 2:
+                raise ValueError("n_ensemble must be >= 2")
+            if req.history_size < 1:
+                raise ValueError("history_size must be >= 1")
+            if req.initial_std < 0.0:
+                raise ValueError("initial_std must be >= 0")
+
+            state_dim = int(req.state_dim)
+            transition = _stream_matrix(
+                req.transition,
+                np.eye(state_dim, dtype=np.float64),
+                name="transition",
+            )
+            if transition.shape != (state_dim, state_dim):
+                raise ValueError(
+                    "transition shape must be "
+                    f"({state_dim}, {state_dim}), got {transition.shape}"
+                )
+            observation_matrix = _stream_matrix(
+                req.observation_matrix,
+                np.eye(state_dim, dtype=np.float64),
+                name="observation_matrix",
+            )
+            if observation_matrix.shape[1] != state_dim:
+                raise ValueError(
+                    "observation_matrix columns must equal state_dim: "
+                    f"{observation_matrix.shape[1]} != {state_dim}"
+                )
+            obs_dim = int(observation_matrix.shape[0])
+            observation_covariance = _stream_matrix(
+                req.observation_covariance,
+                0.01 * np.eye(obs_dim, dtype=np.float64),
+                name="observation_covariance",
+            )
+            if observation_covariance.shape != (obs_dim, obs_dim):
+                raise ValueError(
+                    "observation_covariance shape must be "
+                    f"({obs_dim}, {obs_dim}), got {observation_covariance.shape}"
+                )
+
+            rng = np.random.default_rng(req.seed)
+            if req.initial_ensemble is not None:
+                initial_ensemble = np.asarray(req.initial_ensemble, dtype=np.float64)
+            else:
+                initial_mean = (
+                    np.zeros(state_dim, dtype=np.float64)
+                    if req.initial_mean is None
+                    else np.asarray(req.initial_mean, dtype=np.float64)
+                )
+                if initial_mean.shape != (state_dim,):
+                    raise ValueError(
+                        f"initial_mean shape must be ({state_dim},), got {initial_mean.shape}"
+                    )
+                initial_ensemble = initial_mean + req.initial_std * rng.standard_normal(
+                    (req.n_ensemble, state_dim)
+                )
+
+            twin = StreamingDigitalTwin(
+                state_dim=state_dim,
+                n_ensemble=req.n_ensemble,
+                model_fn=lambda x, matrix=transition: matrix @ x,
+                H=observation_matrix,
+                R=observation_covariance,
+                process_noise=req.process_noise,
+                history_size=req.history_size,
+                rng=rng,
+            )
+            twin.initialize(initial_ensemble)
+            session_id = (req.session_id or uuid4().hex).strip()
+            if not session_id:
+                raise ValueError("session_id must not be empty")
+            replaced = session_id in stream_sessions
+            stream_sessions[session_id] = {
+                "twin": twin,
+                "step_count": 0,
+                "observation_count": 0,
+            }
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            raise fastapi.HTTPException(status_code=400, detail=str(exc)) from exc
+
+        payload = _stream_state_payload(session_id, stream_sessions[session_id], event="init")
+        payload["replaced"] = replaced
+        payload["observation_dim"] = obs_dim
+        return payload
+
+    @app.post("/twin/stream/step")
+    def twin_stream_step(req: TwinStreamStepReq = Body(...)) -> dict[str, Any]:
+        if req.steps < 1:
+            raise fastapi.HTTPException(status_code=400, detail="steps must be >= 1")
+        record = _get_stream_record(req.session_id)
+        try:
+            for _ in range(req.steps):
+                record["twin"].step()
+            record["step_count"] += req.steps
+        except (RuntimeError, TypeError, ValueError) as exc:
+            raise fastapi.HTTPException(status_code=400, detail=str(exc)) from exc
+        return _stream_state_payload(req.session_id, record, event="step")
+
+    @app.post("/twin/stream/observe")
+    def twin_stream_observe(req: TwinStreamObserveReq = Body(...)) -> dict[str, Any]:
+        record = _get_stream_record(req.session_id)
+        try:
+            if req.advance:
+                record["twin"].step()
+                record["step_count"] += 1
+            record["twin"].assimilate(np.asarray(req.observation, dtype=np.float64))
+            record["observation_count"] += 1
+        except (RuntimeError, TypeError, ValueError) as exc:
+            raise fastapi.HTTPException(status_code=400, detail=str(exc)) from exc
+        return _stream_state_payload(req.session_id, record, event="observe")
+
+    @app.get("/twin/stream/state")
+    def twin_stream_state(session_id: str) -> dict[str, Any]:
+        record = _get_stream_record(session_id)
+        return _stream_state_payload(session_id, record, event="state")
 
     @app.post("/twin/benchmark")
     def twin_benchmark(req: TwinBenchmarkReq = Body(...)) -> dict[str, Any]:
@@ -585,6 +786,9 @@ __all__ = [
     "TwinPackageInspectReq",
     "TwinPackageVerifyReq",
     "TwinPredictReq",
+    "TwinStreamInitReq",
+    "TwinStreamObserveReq",
+    "TwinStreamStepReq",
     "app",
     "create_app",
 ]
