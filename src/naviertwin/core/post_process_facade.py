@@ -600,7 +600,87 @@ def _op_cell_volume_integrals(
     }
 
 
+def _op_mass_search(
+    query: NDArray[np.float64],
+    series: NDArray[np.float64],
+) -> dict[str, Any]:
+    from naviertwin.core.flow_analysis.ts_similarity import mass_search
+
+    dist = mass_search(query, series)
+    return {
+        "distance_profile": dist,
+        "best_match_index": int(np.argmin(dist)),
+        "best_match_distance": float(dist.min()),
+    }
+
+
+def _op_find_motifs(
+    series: NDArray[np.float64],
+    window: int = 30,
+    k: int = 1,
+) -> dict[str, Any]:
+    from naviertwin.core.flow_analysis.ts_similarity import find_top_k_motifs
+
+    motifs = find_top_k_motifs(series, window=window, k=k)
+    return {"motifs": motifs, "n_motifs": len(motifs)}
+
+
+def _op_auto_report_probe(
+    signal: NDArray[np.float64],
+    fs: float = 1.0,
+    period_hint: float | None = None,
+) -> dict[str, Any]:
+    from naviertwin.core.flow_analysis.auto_report import (
+        analyze_probe_signal,
+        to_markdown,
+    )
+
+    report = analyze_probe_signal(signal, fs=fs, period_hint=period_hint)
+    return {"report": report, "markdown": to_markdown(report)}
+
+
+def _op_auto_report_field(
+    X: NDArray[np.float64],
+    n_modes: int = 5,
+) -> dict[str, Any]:
+    from naviertwin.core.flow_analysis.auto_report import (
+        analyze_field_snapshots,
+        to_markdown,
+    )
+
+    report = analyze_field_snapshots(X, n_modes=n_modes)
+    return {"report": report, "markdown": to_markdown(report)}
+
+
 _OPERATIONS: dict[str, dict[str, Any]] = {
+    "mass_search": {
+        "fn": _op_mass_search,
+        "category": "similarity",
+        "description": "MASS 시계열 유사 패턴 검색 (FFT)",
+        "params": ["query", "series"],
+        "returns": ["distance_profile", "best_match_index", "best_match_distance"],
+    },
+    "find_motifs": {
+        "fn": _op_find_motifs,
+        "category": "similarity",
+        "description": "Top-K 시계열 모티프 검색",
+        "params": ["series", "window", "k"],
+        "returns": ["motifs", "n_motifs"],
+    },
+    "auto_report_probe": {
+        "fn": _op_auto_report_probe,
+        "category": "report",
+        "description": "Probe 시계열 종합 자동 보고서 (markdown)",
+        "params": ["signal", "fs", "period_hint"],
+        "returns": ["report", "markdown"],
+    },
+    "auto_report_field": {
+        "fn": _op_auto_report_field,
+        "category": "report",
+        "description": "(n_t, n_x) 스냅샷 ROM/통계 자동 보고서",
+        "params": ["X", "n_modes"],
+        "returns": ["report", "markdown"],
+    },
     "psd_welch": {
         "fn": _op_psd_welch,
         "category": "spectral",

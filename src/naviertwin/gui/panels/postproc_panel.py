@@ -391,6 +391,24 @@ class PostProcessPanel(QWidget):
                 "connectivity": np.array([[0, 1, 2, 3], [4, 5, 6, 7]], dtype=np.int64),
                 "field": np.array([2.0, 4.0]),
             },
+            "mass_search": {
+                "query": base_signal[100:130].copy(),
+                "series": base_signal,
+            },
+            "find_motifs": {
+                "series": base_signal,
+                "window": 30,
+                "k": 1,
+            },
+            "auto_report_probe": {
+                "signal": base_signal,
+                "fs": 100.0,
+                "period_hint": None,
+            },
+            "auto_report_field": {
+                "X": rng.standard_normal((100, 30)),
+                "n_modes": 5,
+            },
         }
         if op_name not in kwargs_map:
             raise ValueError(f"smoke 데이터 미정의: {op_name}")
