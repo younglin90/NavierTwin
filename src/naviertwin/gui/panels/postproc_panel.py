@@ -114,6 +114,12 @@ class PostProcessPanel(QWidget):
         export_row.addWidget(self._export_npz_btn)
         left_layout.addLayout(export_row)
 
+        # 차트 PNG 저장
+        self._save_chart_btn = QPushButton("차트 이미지 저장 (PNG/SVG)")
+        self._save_chart_btn.clicked.connect(self._on_save_chart)
+        self._save_chart_btn.setEnabled(False)
+        left_layout.addWidget(self._save_chart_btn)
+
         # 카테고리 일괄 실행
         self._run_category_btn = QPushButton("카테고리 일괄 실행")
         self._run_category_btn.clicked.connect(self._on_run_category)
@@ -122,6 +128,11 @@ class PostProcessPanel(QWidget):
         # 마지막 결과 저장 (export용)
         self._last_result: dict[str, Any] | None = None
         self._last_op_name: str | None = None
+
+        # 실행 이력
+        from naviertwin.core.post_process_history import RunHistory
+
+        self._history = RunHistory(max_entries=50)
 
         left_layout.addStretch()
         layout.addWidget(left)
@@ -265,6 +276,7 @@ class PostProcessPanel(QWidget):
             self._result_text.setPlainText("연산을 선택하세요.")
             return
         op_name = op_name.text()
+        kwargs: dict[str, Any] = {}
         try:
             kwargs, source = self._build_run_kwargs(op_name)
             result = self._facade.run(op_name, **kwargs)
@@ -284,6 +296,9 @@ class PostProcessPanel(QWidget):
             self._export_csv_btn.setEnabled(True)
             self._export_json_btn.setEnabled(True)
             self._export_npz_btn.setEnabled(True)
+            self._save_chart_btn.setEnabled(self._chart is not None)
+            # 이력 기록
+            self._history.record(op_name, kwargs, result, status="ok")
             self.operation_done.emit(op_name, result)
         except Exception as e:
             self._result_text.setPlainText(f"실행 실패: {e}")
@@ -292,11 +307,36 @@ class PostProcessPanel(QWidget):
             self._export_csv_btn.setEnabled(False)
             self._export_json_btn.setEnabled(False)
             self._export_npz_btn.setEnabled(False)
+            self._save_chart_btn.setEnabled(False)
+            # 실패도 이력 기록
+            self._history.record(op_name, kwargs, None, status="error", error=str(e))
             if self._chart is not None and hasattr(self._chart, "clear"):
                 try:
                     self._chart.clear()
                 except Exception:  # noqa: BLE001
                     pass
+
+    def _on_save_chart(self) -> None:
+        if self._chart is None or not hasattr(self._chart, "save_figure"):
+            return
+        from PySide6.QtWidgets import QFileDialog
+
+        default = f"{self._last_op_name or 'chart'}.png"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "차트 이미지 저장", default,
+            "PNG (*.png);;SVG (*.svg);;PDF (*.pdf)",
+        )
+        if not path:
+            return
+        try:
+            self._chart.save_figure(path)
+            self._result_text.append(f"\n[차트 저장] {path}")
+        except Exception as e:  # noqa: BLE001
+            self._result_text.append(f"\n[차트 저장 실패] {e}")
+
+    def history(self) -> list[dict[str, Any]]:
+        """실행 이력 반환 (외부 GUI/검증용)."""
+        return self._history.entries()
 
     def _on_export_csv(self) -> None:
         self._export_with("csv")

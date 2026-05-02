@@ -56,6 +56,22 @@ class PostProcessChart(QWidget):
         self._canvas.draw()
         self._last_op = None
 
+    def save_figure(self, path: str, dpi: int = 150) -> None:
+        """현재 figure를 PNG/SVG/PDF 등으로 저장.
+
+        파일 확장자로 포맷 자동 결정.
+
+        Args:
+            path: 저장 경로.
+            dpi: 해상도 (raster 형식에만 적용).
+
+        Raises:
+            ValueError: 그려진 figure가 없는 경우.
+        """
+        if not self._figure.axes:
+            raise ValueError("저장할 figure가 없습니다.")
+        self._figure.savefig(path, dpi=dpi, bbox_inches="tight")
+
     def _render_fallback(self, op_name: str, result: dict[str, Any]) -> None:
         """차트 핸들러 없는 op는 첫 번째 ndarray를 line plot."""
         ax = self._figure.add_subplot(111)
