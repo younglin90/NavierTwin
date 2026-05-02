@@ -98,6 +98,31 @@ class PostProcessPanel(QWidget):
         self._run_btn.clicked.connect(self._on_run_clicked)
         left_layout.addWidget(self._run_btn)
 
+        # Export 버튼들
+        export_row = QHBoxLayout()
+        self._export_csv_btn = QPushButton("CSV")
+        self._export_csv_btn.clicked.connect(self._on_export_csv)
+        self._export_csv_btn.setEnabled(False)
+        self._export_json_btn = QPushButton("JSON")
+        self._export_json_btn.clicked.connect(self._on_export_json)
+        self._export_json_btn.setEnabled(False)
+        self._export_npz_btn = QPushButton("NPZ")
+        self._export_npz_btn.clicked.connect(self._on_export_npz)
+        self._export_npz_btn.setEnabled(False)
+        export_row.addWidget(self._export_csv_btn)
+        export_row.addWidget(self._export_json_btn)
+        export_row.addWidget(self._export_npz_btn)
+        left_layout.addLayout(export_row)
+
+        # 카테고리 일괄 실행
+        self._run_category_btn = QPushButton("카테고리 일괄 실행")
+        self._run_category_btn.clicked.connect(self._on_run_category)
+        left_layout.addWidget(self._run_category_btn)
+
+        # 마지막 결과 저장 (export용)
+        self._last_result: dict[str, Any] | None = None
+        self._last_op_name: str | None = None
+
         left_layout.addStretch()
         layout.addWidget(left)
 
@@ -253,14 +278,95 @@ class PostProcessPanel(QWidget):
                     self._chart.render(op_name, result)
                 except Exception:  # noqa: BLE001
                     pass
+            # Export 활성화 + 결과 캐싱
+            self._last_result = result
+            self._last_op_name = op_name
+            self._export_csv_btn.setEnabled(True)
+            self._export_json_btn.setEnabled(True)
+            self._export_npz_btn.setEnabled(True)
             self.operation_done.emit(op_name, result)
         except Exception as e:
             self._result_text.setPlainText(f"실행 실패: {e}")
+            self._last_result = None
+            self._last_op_name = None
+            self._export_csv_btn.setEnabled(False)
+            self._export_json_btn.setEnabled(False)
+            self._export_npz_btn.setEnabled(False)
             if self._chart is not None and hasattr(self._chart, "clear"):
                 try:
                     self._chart.clear()
                 except Exception:  # noqa: BLE001
                     pass
+
+    def _on_export_csv(self) -> None:
+        self._export_with("csv")
+
+    def _on_export_json(self) -> None:
+        self._export_with("json")
+
+    def _on_export_npz(self) -> None:
+        self._export_with("npz")
+
+    def _export_with(self, fmt: str) -> None:
+        if self._last_result is None or self._last_op_name is None:
+            return
+        from PySide6.QtWidgets import QFileDialog
+
+        filters = {
+            "csv": "CSV (*.csv)",
+            "json": "JSON (*.json)",
+            "npz": "NPZ (*.npz)",
+        }
+        default = f"{self._last_op_name}_result.{fmt}"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "결과 저장", default, filters[fmt],
+        )
+        if not path:
+            return
+        try:
+            from naviertwin.core.post_process_export import (
+                save_csv,
+                save_json,
+                save_npz,
+            )
+
+            if fmt == "csv":
+                save_csv(self._last_result, path)
+            elif fmt == "json":
+                save_json(self._last_result, path)
+            else:
+                save_npz(self._last_result, path)
+            self._result_text.append(f"\n[저장] {fmt.upper()} → {path}")
+        except Exception as e:  # noqa: BLE001
+            self._result_text.append(f"\n[저장 실패] {e}")
+
+    def _on_run_category(self) -> None:
+        cat = self._category_combo.currentText()
+        if cat == "전체":
+            self._result_text.setPlainText("'전체' 카테고리는 일괄 실행 비활성. 특정 카테고리를 선택하세요.")
+            return
+        try:
+            from naviertwin.core.post_process_export import (
+                bulk_summary_markdown,
+                run_category,
+            )
+
+            # 모든 op의 smoke kwargs 수집
+            all_smokes: dict[str, dict[str, Any]] = {}
+            for op in self._facade.list_operations():
+                try:
+                    all_smokes[op] = self._build_smoke_kwargs(op)
+                except Exception:  # noqa: BLE001
+                    pass
+            results = run_category(self._facade, cat, smoke_kwargs=all_smokes)
+            self._result_text.setPlainText(bulk_summary_markdown(results))
+            self._last_result = {"bulk": results}  # type: ignore[assignment]
+            self._last_op_name = f"bulk_{cat}"
+            self._export_csv_btn.setEnabled(False)  # bulk는 CSV 불가
+            self._export_json_btn.setEnabled(True)
+            self._export_npz_btn.setEnabled(False)
+        except Exception as e:  # noqa: BLE001
+            self._result_text.setPlainText(f"일괄 실행 실패: {e}")
 
     def _build_run_kwargs(self, op_name: str) -> tuple[dict[str, Any], str]:
         """현재 패널 상태에 맞는 op 입력을 구성한다.
