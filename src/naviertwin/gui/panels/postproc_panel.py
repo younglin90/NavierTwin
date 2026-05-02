@@ -122,10 +122,20 @@ class PostProcessPanel(QWidget):
         result_layout = QVBoxLayout(result_group)
         self._result_text = QTextEdit()
         self._result_text.setReadOnly(True)
+        self._result_text.setMaximumHeight(150)
         result_layout.addWidget(self._result_text)
+        # 차트 위젯 (matplotlib 있으면)
+        self._chart: QWidget | None = None
+        try:
+            from naviertwin.gui.widgets.postproc_chart import PostProcessChart
+
+            self._chart = PostProcessChart()
+            result_layout.addWidget(self._chart, stretch=1)
+        except Exception:  # noqa: BLE001
+            self._chart = None
         right_split.addWidget(result_group)
 
-        right_split.setSizes([200, 400])
+        right_split.setSizes([200, 600])
         layout.addWidget(right_split, stretch=1)
 
         # 초기화
@@ -237,9 +247,20 @@ class PostProcessPanel(QWidget):
             self._result_text.setPlainText(
                 f"입력: {source_label}\n{self._summarize_result(result)}"
             )
+            # 차트 갱신
+            if self._chart is not None and hasattr(self._chart, "render"):
+                try:
+                    self._chart.render(op_name, result)
+                except Exception:  # noqa: BLE001
+                    pass
             self.operation_done.emit(op_name, result)
         except Exception as e:
             self._result_text.setPlainText(f"실행 실패: {e}")
+            if self._chart is not None and hasattr(self._chart, "clear"):
+                try:
+                    self._chart.clear()
+                except Exception:  # noqa: BLE001
+                    pass
 
     def _build_run_kwargs(self, op_name: str) -> tuple[dict[str, Any], str]:
         """현재 패널 상태에 맞는 op 입력을 구성한다.
