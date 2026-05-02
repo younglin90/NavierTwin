@@ -37,11 +37,32 @@ class PostProcessPanel(QWidget):
 
     operation_done = Signal(str, object)
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        parent: Optional[QWidget] = None,
+        translator: Any | None = None,
+    ) -> None:
         super().__init__(parent)
         self._facade = PostProcessFacade()
         self._dataset = None
+        # i18n translator (없으면 키 그대로 반환하는 fallback)
+        if translator is None:
+            try:
+                from naviertwin.utils.i18n import Translator
+
+                self._t = Translator(lang="ko")
+            except Exception:  # noqa: BLE001
+                self._t = lambda key: key  # type: ignore[assignment]
+        else:
+            self._t = translator
         self._setup_ui()
+
+    def _tr(self, key: str) -> str:
+        """Safe i18n lookup — fallback to key if translator missing."""
+        try:
+            return self._t(key) if callable(self._t) else self._t.t(key)
+        except Exception:  # noqa: BLE001
+            return key
 
     def _setup_ui(self) -> None:
         layout = QHBoxLayout(self)
@@ -53,7 +74,7 @@ class PostProcessPanel(QWidget):
         left.setFixedWidth(280)
         left_layout = QVBoxLayout(left)
 
-        title = QLabel("Post-Processor Tools")
+        title = QLabel(self._tr("posttools.title"))
         title.setObjectName("titleLabel")
         left_layout.addWidget(title)
 
@@ -62,10 +83,10 @@ class PostProcessPanel(QWidget):
         left_layout.addWidget(self._data_label)
 
         # 카테고리 필터
-        cat_group = QGroupBox("카테고리")
+        cat_group = QGroupBox(self._tr("posttools.category"))
         cat_layout = QVBoxLayout(cat_group)
         self._category_combo = QComboBox()
-        self._category_combo.addItem("전체")
+        self._category_combo.addItem(self._tr("posttools.category.all"))
         cats = sorted({
             self._facade.describe(op)["category"]
             for op in self._facade.list_operations()
@@ -79,7 +100,7 @@ class PostProcessPanel(QWidget):
         left_layout.addWidget(cat_group)
 
         # op 리스트
-        op_group = QGroupBox("연산")
+        op_group = QGroupBox(self._tr("posttools.operations"))
         op_layout = QVBoxLayout(op_group)
         self._op_list = QListWidget()
         self._op_list.currentTextChanged.connect(self._on_op_selected)
@@ -87,11 +108,11 @@ class PostProcessPanel(QWidget):
         left_layout.addWidget(op_group)
 
         # 동적 파라미터 폼
-        param_group = QGroupBox("Scalar 파라미터")
+        param_group = QGroupBox(self._tr("posttools.params"))
         param_group_layout = QVBoxLayout(param_group)
         # 프리셋 선택 콤보
         preset_row = QHBoxLayout()
-        preset_row.addWidget(QLabel("프리셋:"))
+        preset_row.addWidget(QLabel(self._tr("posttools.preset")))
         self._preset_combo = QComboBox()
         self._preset_combo.currentTextChanged.connect(self._on_preset_selected)
         preset_row.addWidget(self._preset_combo, stretch=1)
@@ -109,7 +130,7 @@ class PostProcessPanel(QWidget):
         self._preset_store = PresetStore()
 
         # 실행 버튼
-        self._run_btn = QPushButton("Demo 실행 (합성 데이터)")
+        self._run_btn = QPushButton(self._tr("posttools.run.demo"))
         self._run_btn.setObjectName("primaryButton")
         self._run_btn.clicked.connect(self._on_run_clicked)
         left_layout.addWidget(self._run_btn)
@@ -131,21 +152,21 @@ class PostProcessPanel(QWidget):
         left_layout.addLayout(export_row)
 
         # 차트 PNG 저장
-        self._save_chart_btn = QPushButton("차트 이미지 저장 (PNG/SVG)")
+        self._save_chart_btn = QPushButton(self._tr("posttools.save.chart"))
         self._save_chart_btn.clicked.connect(self._on_save_chart)
         self._save_chart_btn.setEnabled(False)
         left_layout.addWidget(self._save_chart_btn)
 
         # 카테고리 일괄 실행
-        self._run_category_btn = QPushButton("카테고리 일괄 실행")
+        self._run_category_btn = QPushButton(self._tr("posttools.run.category"))
         self._run_category_btn.clicked.connect(self._on_run_category)
         left_layout.addWidget(self._run_category_btn)
 
         # 프리셋 저장 + 이력 viewer 버튼
         misc_row = QHBoxLayout()
-        self._save_preset_btn = QPushButton("프리셋 저장")
+        self._save_preset_btn = QPushButton(self._tr("posttools.save.preset"))
         self._save_preset_btn.clicked.connect(self._on_save_preset)
-        self._show_history_btn = QPushButton("이력 보기")
+        self._show_history_btn = QPushButton(self._tr("posttools.show.history"))
         self._show_history_btn.clicked.connect(self._on_show_history)
         misc_row.addWidget(self._save_preset_btn)
         misc_row.addWidget(self._show_history_btn)
@@ -167,7 +188,7 @@ class PostProcessPanel(QWidget):
         right_split = QSplitter()
         right_split.setOrientation(Qt.Orientation.Vertical)
 
-        desc_group = QGroupBox("설명")
+        desc_group = QGroupBox(self._tr("posttools.description"))
         desc_layout = QFormLayout(desc_group)
         self._desc_label = QLabel("연산을 선택하세요.")
         self._desc_label.setWordWrap(True)
@@ -180,7 +201,7 @@ class PostProcessPanel(QWidget):
         desc_layout.addRow("Returns:", self._returns_label)
         right_split.addWidget(desc_group)
 
-        result_group = QGroupBox("결과")
+        result_group = QGroupBox(self._tr("posttools.result"))
         result_layout = QVBoxLayout(result_group)
         self._result_text = QTextEdit()
         self._result_text.setReadOnly(True)
@@ -223,7 +244,8 @@ class PostProcessPanel(QWidget):
         self._op_list.clear()
         for op in self._facade.list_operations():
             info = self._facade.describe(op)
-            if cat == "전체" or info["category"] == cat:
+            all_label = self._tr("posttools.category.all")
+            if cat in (all_label, "전체", "All") or info["category"] == cat:
                 self._op_list.addItem(op)
 
     def _on_op_selected(self, op_name: str) -> None:
@@ -242,14 +264,15 @@ class PostProcessPanel(QWidget):
         """현재 op에 대한 프리셋 콤보 갱신."""
         self._preset_combo.blockSignals(True)
         self._preset_combo.clear()
-        self._preset_combo.addItem("(없음)")
+        self._preset_combo.addItem(self._tr("posttools.preset.none"))
         for name in self._preset_store.list_presets(op_name):
             self._preset_combo.addItem(name)
         self._preset_combo.blockSignals(False)
 
     def _on_preset_selected(self, name: str) -> None:
         """프리셋 선택 시 해당 값을 폼에 적용."""
-        if not name or name == "(없음)":
+        none_label = self._tr("posttools.preset.none")
+        if not name or name == none_label or name == "(없음)" or name == "(none)":
             return
         item = self._op_list.currentItem()
         if item is None:
@@ -298,7 +321,7 @@ class PostProcessPanel(QWidget):
 
         specs = self._facade.scalar_param_specs(op_name)
         if not specs:
-            label = QLabel("(scalar 파라미터 없음)")
+            label = QLabel(self._tr("posttools.params.empty"))
             label.setStyleSheet("color: #888;")
             self._param_form_layout.addRow(label)
             return
@@ -535,8 +558,11 @@ class PostProcessPanel(QWidget):
 
     def _on_run_category(self) -> None:
         cat = self._category_combo.currentText()
-        if cat == "전체":
-            self._result_text.setPlainText("'전체' 카테고리는 일괄 실행 비활성. 특정 카테고리를 선택하세요.")
+        all_label = self._tr("posttools.category.all")
+        if cat in (all_label, "전체", "All"):
+            self._result_text.setPlainText(
+                "'전체/All' 카테고리는 일괄 실행 비활성. 특정 카테고리를 선택하세요."
+            )
             return
         try:
             from naviertwin.core.post_process_export import (
