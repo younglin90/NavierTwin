@@ -141,6 +141,16 @@ class PostProcessPanel(QWidget):
         self._run_category_btn.clicked.connect(self._on_run_category)
         left_layout.addWidget(self._run_category_btn)
 
+        # 프리셋 저장 + 이력 viewer 버튼
+        misc_row = QHBoxLayout()
+        self._save_preset_btn = QPushButton("프리셋 저장")
+        self._save_preset_btn.clicked.connect(self._on_save_preset)
+        self._show_history_btn = QPushButton("이력 보기")
+        self._show_history_btn.clicked.connect(self._on_show_history)
+        misc_row.addWidget(self._save_preset_btn)
+        misc_row.addWidget(self._show_history_btn)
+        left_layout.addLayout(misc_row)
+
         # 마지막 결과 저장 (export용)
         self._last_result: dict[str, Any] | None = None
         self._last_op_name: str | None = None
@@ -405,6 +415,81 @@ class PostProcessPanel(QWidget):
     def history(self) -> list[dict[str, Any]]:
         """실행 이력 반환 (외부 GUI/검증용)."""
         return self._history.entries()
+
+    def _on_save_preset(self) -> None:
+        """현재 op + 폼 값을 사용자 프리셋으로 저장."""
+        item = self._op_list.currentItem()
+        if item is None:
+            return
+        op_name = item.text()
+        if not self._param_widgets:
+            self._result_text.append(
+                f"\n[프리셋] {op_name}은 scalar 파라미터 없음.",
+            )
+            return
+        from PySide6.QtWidgets import QInputDialog
+
+        name, ok = QInputDialog.getText(
+            self, "프리셋 저장", f"{op_name}의 프리셋 이름:",
+        )
+        if not ok or not name.strip():
+            return
+        try:
+            self.add_user_preset(op_name, name.strip())
+            self._result_text.append(
+                f"\n[프리셋] '{name}' 저장 완료 ({op_name}).",
+            )
+        except Exception as e:  # noqa: BLE001
+            self._result_text.append(f"\n[프리셋 저장 실패] {e}")
+
+    def _on_show_history(self) -> None:
+        """실행 이력 다이얼로그를 띄운다."""
+        try:
+            from naviertwin.gui.widgets.history_dialog import HistoryDialog
+        except Exception as e:  # noqa: BLE001
+            self._result_text.append(f"\n[이력 viewer 로드 실패] {e}")
+            return
+        dlg = HistoryDialog(self.history(), parent=self)
+        dlg.replay_requested.connect(self._replay_from_history)
+        dlg.exec()
+
+    def _replay_from_history(self, idx: int) -> None:
+        """이력 항목의 op + 파라미터를 폼에 복원."""
+        entries = self.history()
+        if not (0 <= idx < len(entries)):
+            return
+        e = entries[idx]
+        op_name = e.get("op")
+        if not op_name:
+            return
+        # op 선택
+        items = self._op_list.findItems(
+            op_name,
+            __import__("PySide6.QtCore", fromlist=["Qt"]).Qt.MatchFlag.MatchExactly,
+        )
+        if not items:
+            return
+        self._op_list.setCurrentItem(items[0])
+        # 폼 값 적용
+        kwargs = e.get("kwargs_summary") or {}
+        for k, v in kwargs.items():
+            widget = self._param_widgets.get(k)
+            if widget is None:
+                continue
+            try:
+                from PySide6.QtWidgets import QComboBox, QDoubleSpinBox, QSpinBox
+
+                if isinstance(widget, QSpinBox):
+                    widget.setValue(int(v))
+                elif isinstance(widget, QDoubleSpinBox):
+                    widget.setValue(float(v))
+                elif isinstance(widget, QComboBox):
+                    widget.setCurrentText(str(v))
+            except (TypeError, ValueError):
+                continue
+        self._result_text.append(
+            f"\n[재실행 준비] 이력 #{idx} ({op_name}) 폼 복원 완료.",
+        )
 
     def _on_export_csv(self) -> None:
         self._export_with("csv")
