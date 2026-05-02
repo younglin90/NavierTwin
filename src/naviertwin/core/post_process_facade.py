@@ -600,6 +600,180 @@ def _op_cell_volume_integrals(
     }
 
 
+def _op_helmholtz_decomp(
+    u: NDArray[np.float64],
+    v: NDArray[np.float64],
+) -> dict[str, Any]:
+    from naviertwin.core.flow_analysis.helmholtz import helmholtz_2d
+
+    u_s, v_s, u_i, v_i = helmholtz_2d(u, v)
+    return {
+        "solenoidal_u": u_s,
+        "solenoidal_v": v_s,
+        "irrotational_u": u_i,
+        "irrotational_v": v_i,
+    }
+
+
+def _op_rom_residual(
+    X: NDArray[np.float64],
+    basis: NDArray[np.float64],
+) -> dict[str, Any]:
+    from naviertwin.core.dimensionality_reduction.rom_certification import (
+        reconstruction_residual,
+        relative_residual,
+    )
+
+    return {
+        "residual": reconstruction_residual(X, basis),
+        "relative_residual": relative_residual(X, basis),
+    }
+
+
+def _op_rom_envelope(
+    coeffs_train: NDArray[np.float64],
+    new_coeff: NDArray[np.float64],
+) -> dict[str, Any]:
+    from naviertwin.core.dimensionality_reduction.rom_certification import (
+        coefficient_envelope,
+    )
+
+    return {"envelope": coefficient_envelope(coeffs_train, new_coeff)}
+
+
+def _op_subspace_drift(
+    basis_old: NDArray[np.float64],
+    basis_new: NDArray[np.float64],
+) -> dict[str, Any]:
+    from naviertwin.core.dimensionality_reduction.mode_tracking import (
+        drift_score,
+        grassmann_distance,
+        subspace_angles,
+    )
+
+    return {
+        "angles": subspace_angles(basis_old, basis_new),
+        "grassmann_distance": grassmann_distance(basis_old, basis_new),
+        "drift_score": drift_score(basis_old, basis_new),
+    }
+
+
+def _op_gappy_reconstruct(
+    basis: NDArray[np.float64],
+    partial: NDArray[np.float64],
+    mask: NDArray[np.bool_],
+) -> dict[str, Any]:
+    from naviertwin.core.dimensionality_reduction.gappy_pod import (
+        gappy_coefficients,
+        gappy_reconstruct,
+    )
+
+    return {
+        "coefficients": gappy_coefficients(basis, partial, mask),
+        "reconstructed": gappy_reconstruct(basis, partial, mask),
+    }
+
+
+def _op_surrogate_metrics(
+    y_true: NDArray[np.float64],
+    y_pred: NDArray[np.float64],
+) -> dict[str, Any]:
+    from naviertwin.core.surrogate.certification_metrics import (
+        cv_rmse,
+        normalized_rmse,
+        r2_score,
+        rmse,
+    )
+
+    return {
+        "rmse": rmse(y_true, y_pred),
+        "nrmse_range": normalized_rmse(y_true, y_pred, norm="range"),
+        "cv_rmse": cv_rmse(y_true, y_pred),
+        "r2": r2_score(y_true, y_pred),
+    }
+
+
+def _op_residual_diagnostics(
+    residuals: NDArray[np.float64],
+) -> dict[str, Any]:
+    from naviertwin.core.surrogate.residual_analysis import (
+        durbin_watson,
+        shapiro_normality_diagnostic,
+    )
+
+    diag = shapiro_normality_diagnostic(residuals)
+    diag["dw"] = durbin_watson(residuals)
+    return {"diagnostic": diag}
+
+
+def _op_ensemble_average(
+    predictions: list,
+    weights: NDArray[np.float64] | None = None,
+) -> dict[str, Any]:
+    from naviertwin.core.surrogate.model_averaging import (
+        ensemble_variance,
+        equal_weight_average,
+        weighted_average,
+    )
+
+    arr_list = [np.asarray(p, dtype=np.float64) for p in predictions]
+    if weights is not None:
+        avg = weighted_average(arr_list, weights=np.asarray(weights, dtype=np.float64))
+    else:
+        avg = equal_weight_average(arr_list)
+    var = ensemble_variance(arr_list, weights=weights)
+    return {"average": avg, "variance": var}
+
+
+def _op_trajectory_clustering(
+    coeffs: NDArray[np.float64],
+    window: int = 20,
+    n_clusters: int = 3,
+) -> dict[str, Any]:
+    from naviertwin.core.dimensionality_reduction.trajectory_clustering import (
+        cluster_silhouette,
+        label_runs,
+        window_kmeans,
+    )
+
+    labels, centers = window_kmeans(coeffs, window=window, n_clusters=n_clusters)
+    runs = label_runs(labels)
+    # silhouette는 실제 데이터 (label 1대1)에 대해 평가
+    n_win = labels.shape[0]
+    n_modes = coeffs.shape[1]
+    features = np.zeros((n_win, n_modes))
+    for i in range(n_win):
+        features[i] = coeffs[i : i + window].mean(axis=0)
+    sil = cluster_silhouette(features, labels)
+    return {
+        "labels": labels,
+        "centers": centers,
+        "runs": runs,
+        "silhouette": sil,
+    }
+
+
+def _op_acoustic_strouhal(
+    f: float,
+    L: float,
+    U: float,
+) -> dict[str, Any]:
+    from naviertwin.core.flow_analysis.acoustic import strouhal
+
+    return {"strouhal_number": strouhal(f, L, U)}
+
+
+def _op_save_rom(
+    path: str,
+    modes: NDArray[np.float64],
+    singular_values: NDArray[np.float64],
+) -> dict[str, Any]:
+    from naviertwin.core.dimensionality_reduction.rom_serialization import save_rom
+
+    p = save_rom(path, modes=modes, singular_values=singular_values)
+    return {"saved_path": str(p)}
+
+
 def _op_mass_search(
     query: NDArray[np.float64],
     series: NDArray[np.float64],
@@ -653,6 +827,83 @@ def _op_auto_report_field(
 
 
 _OPERATIONS: dict[str, dict[str, Any]] = {
+    "helmholtz_decomp": {
+        "fn": _op_helmholtz_decomp,
+        "category": "topology",
+        "description": "2D Helmholtz 분해 (solenoidal + irrotational)",
+        "params": ["u", "v"],
+        "returns": ["solenoidal_u", "solenoidal_v", "irrotational_u", "irrotational_v"],
+    },
+    "rom_residual": {
+        "fn": _op_rom_residual,
+        "category": "rom",
+        "description": "ROM 재구성 잔차 + 상대 잔차",
+        "params": ["X", "basis"],
+        "returns": ["residual", "relative_residual"],
+    },
+    "rom_envelope": {
+        "fn": _op_rom_envelope,
+        "category": "rom",
+        "description": "POD 계수 외삽 진단 (Mahalanobis + bbox)",
+        "params": ["coeffs_train", "new_coeff"],
+        "returns": ["envelope"],
+    },
+    "subspace_drift": {
+        "fn": _op_subspace_drift,
+        "category": "rom",
+        "description": "부분공간 정준 각도 + Grassmann 거리 + drift",
+        "params": ["basis_old", "basis_new"],
+        "returns": ["angles", "grassmann_distance", "drift_score"],
+    },
+    "gappy_reconstruct": {
+        "fn": _op_gappy_reconstruct,
+        "category": "rom",
+        "description": "결측 데이터 Gappy POD 복원 (Everson-Sirovich)",
+        "params": ["basis", "partial", "mask"],
+        "returns": ["coefficients", "reconstructed"],
+    },
+    "surrogate_metrics": {
+        "fn": _op_surrogate_metrics,
+        "category": "validation",
+        "description": "Surrogate 검증 — RMSE, NRMSE, CV-RMSE, R²",
+        "params": ["y_true", "y_pred"],
+        "returns": ["rmse", "nrmse_range", "cv_rmse", "r2"],
+    },
+    "residual_diagnostics": {
+        "fn": _op_residual_diagnostics,
+        "category": "validation",
+        "description": "잔차 정규성 + 자기상관 (DW) 진단",
+        "params": ["residuals"],
+        "returns": ["diagnostic"],
+    },
+    "ensemble_average": {
+        "fn": _op_ensemble_average,
+        "category": "validation",
+        "description": "다중 surrogate 모델 앙상블 평균 + 분산",
+        "params": ["predictions", "weights"],
+        "returns": ["average", "variance"],
+    },
+    "trajectory_clustering": {
+        "fn": _op_trajectory_clustering,
+        "category": "rom",
+        "description": "POD 계수 trajectory K-means 클러스터링",
+        "params": ["coeffs", "window", "n_clusters"],
+        "returns": ["labels", "centers", "runs", "silhouette"],
+    },
+    "acoustic_strouhal": {
+        "fn": _op_acoustic_strouhal,
+        "category": "spectral",
+        "description": "Strouhal 수 St = f L / U",
+        "params": ["f", "L", "U"],
+        "returns": ["strouhal_number"],
+    },
+    "save_rom": {
+        "fn": _op_save_rom,
+        "category": "rom",
+        "description": "ROM을 NPZ로 저장",
+        "params": ["path", "modes", "singular_values"],
+        "returns": ["saved_path"],
+    },
     "mass_search": {
         "fn": _op_mass_search,
         "category": "similarity",

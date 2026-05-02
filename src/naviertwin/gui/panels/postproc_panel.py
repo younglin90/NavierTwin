@@ -391,6 +391,53 @@ class PostProcessPanel(QWidget):
                 "connectivity": np.array([[0, 1, 2, 3], [4, 5, 6, 7]], dtype=np.int64),
                 "field": np.array([2.0, 4.0]),
             },
+            "helmholtz_decomp": {
+                "u": rng.standard_normal((16, 16)),
+                "v": rng.standard_normal((16, 16)),
+            },
+            "rom_residual": {
+                "X": rng.standard_normal((20, 30)),
+                "basis": np.linalg.qr(rng.standard_normal((30, 5)))[0],
+            },
+            "rom_envelope": {
+                "coeffs_train": rng.standard_normal((100, 5)),
+                "new_coeff": np.zeros(5),
+            },
+            "subspace_drift": {
+                "basis_old": np.linalg.qr(rng.standard_normal((20, 4)))[0],
+                "basis_new": np.linalg.qr(rng.standard_normal((20, 4)))[0],
+            },
+            "gappy_reconstruct": {
+                "basis": np.linalg.qr(rng.standard_normal((30, 4)))[0],
+                "partial": rng.standard_normal(30),
+                "mask": np.array([True] * 20 + [False] * 10, dtype=bool),
+            },
+            "surrogate_metrics": {
+                "y_true": rng.standard_normal(100),
+                "y_pred": rng.standard_normal(100),
+            },
+            "residual_diagnostics": {
+                "residuals": rng.standard_normal(500),
+            },
+            "ensemble_average": {
+                "predictions": [rng.standard_normal(10), rng.standard_normal(10)],
+                "weights": np.array([0.6, 0.4]),
+            },
+            "trajectory_clustering": {
+                "coeffs": rng.standard_normal((100, 5)),
+                "window": 20,
+                "n_clusters": 3,
+            },
+            "acoustic_strouhal": {
+                "f": 100.0,
+                "L": 0.1,
+                "U": 10.0,
+            },
+            "save_rom": {
+                "path": "/tmp/_facade_rom_smoke.npz",
+                "modes": rng.standard_normal((20, 5)),
+                "singular_values": np.array([5.0, 3.0, 2.0, 1.0, 0.5]),
+            },
             "mass_search": {
                 "query": base_signal[100:130].copy(),
                 "series": base_signal,
