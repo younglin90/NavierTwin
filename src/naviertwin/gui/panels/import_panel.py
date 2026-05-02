@@ -13,7 +13,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QFileDialog,
     QGroupBox,
@@ -287,6 +287,7 @@ class ImportPanel(QWidget):
         self._pending_error = msg
         QMetaObject.invokeMethod(self, "_finish_load_error", Qt.ConnectionType.QueuedConnection)
 
+    @Slot()
     def _finish_load_success(self) -> None:
         dataset = self._pending_dataset
         self._set_loading(False)
@@ -298,6 +299,7 @@ class ImportPanel(QWidget):
         self._status_label.setObjectName("statusLabel")
         self.dataset_loaded.emit(dataset)
 
+    @Slot()
     def _finish_load_error(self) -> None:
         msg = self._pending_error
         self._set_loading(False)
