@@ -39,8 +39,8 @@ def main() -> int:
 
     checks += _assert_contains(
         spec,
-        "ROOT = Path(SPECPATH).parent.parent",
-        message="PyInstaller spec must derive ROOT from SPECPATH",
+        "ROOT = _resolve_project_root()",
+        message="PyInstaller spec must robustly resolve the project root",
     )
     checks += _assert_contains(
         spec,
@@ -59,13 +59,48 @@ def main() -> int:
     )
     checks += _assert_contains(
         spec,
-        "naviertwin.gui.panels.postproc_panel",
-        message="PyInstaller spec must include postproc panel hidden import",
+        "NAVIER_TWIN_BUILD_PROFILE",
+        message="PyInstaller spec must support size-optimized build profiles",
     )
     checks += _assert_contains(
         spec,
-        "naviertwin.core.post_process_facade",
-        message="PyInstaller spec must include postproc facade hidden import",
+        'gui_entry.py"',
+        message="PyInstaller spec must use the GUI-only entry point",
+    )
+    checks += _assert_contains(
+        spec,
+        '"torch"',
+        message="PyInstaller spec must explicitly control heavyweight optional packages",
+    )
+    checks += _assert_contains(
+        spec,
+        "PySide6.QtWebEngineCore",
+        message="PyInstaller spec must exclude unused heavyweight Qt stacks by default",
+    )
+    checks += _assert_contains(
+        spec,
+        "_drop_desktop_bundle_item",
+        message="PyInstaller spec must prune optional desktop bundle artifacts",
+    )
+    checks += _assert_contains(
+        spec,
+        "trame_vtk",
+        message="PyInstaller spec must exclude PyVista browser/Jupyter viewer packages",
+    )
+    checks += _assert_contains(
+        spec,
+        "PySide6/Qt6Qml.dll",
+        message="PyInstaller spec must prune unused Qt QML runtime DLLs",
+    )
+    checks += _assert_contains(
+        spec,
+        "matplotlib.backends.backend_qtagg",
+        message="PyInstaller spec must include matplotlib Qt backend when installed",
+    )
+    checks += _assert_contains(
+        spec,
+        "resources_dir.exists()",
+        message="PyInstaller spec must handle optional resources directory",
     )
 
     checks += _assert_contains(
@@ -132,6 +167,26 @@ def main() -> int:
         iss,
         "$f",
         message="Inno SignTool documentation must include the setup-file placeholder",
+    )
+    checks += _assert_contains(
+        (root / "scripts" / "build_windows_installer.ps1").read_text(encoding="utf-8"),
+        "PyInstaller --noconfirm --clean $SpecPath",
+        message="Windows build helper must run PyInstaller with the release spec path",
+    )
+    checks += _assert_contains(
+        (root / "scripts" / "build_windows_installer.ps1").read_text(encoding="utf-8"),
+        "ValidateOnly",
+        message="Windows build helper must support non-Windows validation mode",
+    )
+    checks += _assert_contains(
+        (root / "scripts" / "build_windows_installer.ps1").read_text(encoding="utf-8"),
+        "[ValidateSet(\"desktop\", \"full\")]",
+        message="Windows build helper must expose desktop/full build profiles",
+    )
+    checks += _assert_contains(
+        (root / "docs" / "WINDOWS_INSTALLER.md").read_text(encoding="utf-8"),
+        "scripts\\build_windows_installer.ps1",
+        message="Windows installer documentation must reference the build helper",
     )
 
     publisher = next(

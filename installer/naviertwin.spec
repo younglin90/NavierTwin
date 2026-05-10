@@ -3,21 +3,55 @@
 # 빌드: pyinstaller installer/naviertwin.spec
 # 출력: dist/NavierTwin/
 
+import os
 import sys
 from pathlib import Path
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
-ROOT = Path(SPECPATH).parent.parent  # 프로젝트 루트
+def _resolve_project_root():
+    """Resolve the project root robustly across relative/absolute PyInstaller calls."""
+    candidates = [
+        Path.cwd(),
+        Path(SPECPATH),
+        Path(SPECPATH).parent,
+        Path(SPECPATH).parent.parent,
+    ]
+    for candidate in candidates:
+        root = candidate.resolve()
+        if (root / "src" / "naviertwin" / "main.py").exists():
+            return root
+    raise FileNotFoundError(
+        "Cannot resolve NavierTwin project root; src/naviertwin/main.py not found"
+    )
+
+
+ROOT = _resolve_project_root()
 SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+BUILD_PROFILE = os.environ.get("NAVIER_TWIN_BUILD_PROFILE", "desktop").strip().lower()
+if BUILD_PROFILE not in {"desktop", "full"}:
+    raise ValueError("NAVIER_TWIN_BUILD_PROFILE must be either 'desktop' or 'full'")
 
 # ──────────────────────────────────────────────────────────────────────
 # 숨겨진 임포트 (런타임에 동적으로 로드되는 모듈)
 # ──────────────────────────────────────────────────────────────────────
 hidden_imports = [
     # PyVista / VTK
-    "vtkmodules.all",
     "vtkmodules.util.numpy_support",
-    "vtkmodules.util.data_model",
+    "vtkmodules.vtkCommonCore",
+    "vtkmodules.vtkCommonDataModel",
+    "vtkmodules.vtkFiltersCore",
+    "vtkmodules.vtkFiltersGeometry",
+    "vtkmodules.vtkFiltersGeneral",
+    "vtkmodules.vtkInteractionStyle",
+    "vtkmodules.vtkIOGeometry",
+    "vtkmodules.vtkIOLegacy",
+    "vtkmodules.vtkIOPLY",
+    "vtkmodules.vtkIOXML",
+    "vtkmodules.vtkRenderingCore",
+    "vtkmodules.vtkRenderingFreeType",
+    "vtkmodules.vtkRenderingOpenGL2",
     "pyvista",
     "pyvistaqt",
     # PySide6
@@ -35,104 +69,168 @@ hidden_imports = [
     "sklearn.linear_model",
     "sklearn.gaussian_process",
     "sklearn.decomposition",
+    "pandas",
     # HDF5
     "h5py",
-    # NavierTwin 모듈
-    "naviertwin",
-    "naviertwin.core",
-    "naviertwin.core.cfd_reader",
-    "naviertwin.core.cfd_reader.reader_factory",
-    "naviertwin.core.cfd_reader.openfoam_reader",
-    "naviertwin.core.cfd_reader.vtk_reader",
-    "naviertwin.core.export.ntwin_format",
-    "naviertwin.core.flow_analysis.vortex.q_criterion",
-    "naviertwin.core.flow_analysis.statistics.fft_psd",
-    "naviertwin.core.flow_analysis.boundary_layer.yplus",
-    "naviertwin.core.flow_analysis.modal.dmd",
-    "naviertwin.core.dimensionality_reduction.linear.pod",
-    "naviertwin.core.dimensionality_reduction.linear.randomized_svd",
-    "naviertwin.core.surrogate.rbf_surrogate",
-    "naviertwin.core.surrogate.kriging_surrogate",
-    "naviertwin.core.validation.metrics",
-    "naviertwin.core.digital_twin.twin_engine",
+    # Matplotlib Qt backend is optional at runtime but should be bundled
+    # whenever it is installed on the Windows release builder.
+    "matplotlib.backends.backend_qtagg",
+    "matplotlib.figure",
+    # GUI modules reached by lazy imports / optional panels.
     "naviertwin.gui.main_window",
-    "naviertwin.gui.panels.import_panel",
-    "naviertwin.gui.panels.analyze_panel",
-    "naviertwin.gui.panels.reduce_panel",
-    "naviertwin.gui.panels.model_panel",
-    "naviertwin.gui.panels.twin_panel",
-    "naviertwin.gui.panels.export_panel",
     "naviertwin.gui.panels.simulation_panel",
     "naviertwin.gui.panels.postproc_panel",
     "naviertwin.gui.widgets.model_compare_widget",
     "naviertwin.gui.widgets.vtk_viewer",
-    "naviertwin.core.post_process_facade",
-    "naviertwin.utils.config",
-    "naviertwin.utils.logger",
+    "naviertwin.gui.wizard.tutorial_wizard",
 ]
 
-# SMT (선택적)
-try:
-    import smt
-    hidden_imports += collect_submodules("smt")
-except ImportError:
-    pass
-
-# PyDMD (선택적)
-try:
-    import pydmd
-    hidden_imports += collect_submodules("pydmd")
-except ImportError:
-    pass
+if BUILD_PROFILE == "full":
+    hidden_imports += [
+        "fastapi",
+        "onnx",
+        "pydmd",
+        "smt",
+        "torch",
+        "uvicorn",
+        "weasyprint",
+    ]
 
 # ──────────────────────────────────────────────────────────────────────
 # 데이터 파일 (QSS, 설정, 리소스)
 # ──────────────────────────────────────────────────────────────────────
-datas = [
-    # 다크 테마 QSS
-    (str(SRC / "naviertwin" / "gui" / "styles" / "dark_theme.qss"),
-     "naviertwin/gui/styles"),
-    # 기본 설정 파일 (있는 경우)
-    # (str(ROOT / "config" / "default.json"), "config"),
-]
+datas = []
+
+for qss_file in (SRC / "naviertwin" / "gui" / "styles").glob("*.qss"):
+    datas.append((str(qss_file), "naviertwin/gui/styles"))
 
 for locale_file in (SRC / "naviertwin" / "gui" / "styles" / "i18n").glob("*.json"):
     datas.append((str(locale_file), "naviertwin/gui/styles/i18n"))
 
-# VTK 데이터 파일
-try:
-    datas += collect_data_files("vtkmodules")
-except Exception:
-    pass
-
-# PySide6 데이터
-try:
-    datas += collect_data_files("PySide6")
-except Exception:
-    pass
+resources_dir = ROOT / "resources"
+if resources_dir.exists():
+    datas.append((str(resources_dir), "resources"))
 
 # ──────────────────────────────────────────────────────────────────────
 # 바이너리 제외 (불필요한 크기 절감)
 # ──────────────────────────────────────────────────────────────────────
 excludes = [
+    # GUI installer must not bundle developer/test stacks.
     "tkinter",
     "PyQt5",
     "PyQt6",
     "wx",
-    "matplotlib",
     "IPython",
     "jupyter",
     "notebook",
     "test",
     "tests",
     "pytest",
+    "mypy",
+    "setuptools.tests",
+    # Server/cloud/PDF/reporting packages are optional and very large.
+    "aiohttp",
+    "boto3",
+    "botocore",
+    "fastapi",
+    "google",
+    "grpc",
+    "psycopg2",
+    "s3transfer",
+    "sqlalchemy",
+    "uvicorn",
+    "watchfiles",
+    "weasyprint",
+    # PyVista's browser/Jupyter viewer stack is not used by the Qt desktop app.
+    "trame",
+    "trame_client",
+    "trame_server",
+    "trame_vtk",
+    "trame_vuetify",
+    "wslink",
+    "multidict",
+    "propcache",
+    "yarl",
+    # API/schema support is excluded from the size-optimized desktop profile.
+    "attrs",
+    "jsonschema",
+    "jsonschema_specifications",
+    "pydantic",
+    "pydantic_core",
+    "rpds",
+    # Heavy optional scientific backends. They can be enabled via full profile.
+    "botorch",
+    "gmsh",
+    "llvmlite",
+    "netCDF4",
+    "nlopt",
+    "numba",
+    "onnx",
+    "openmdao",
+    "pydmd",
+    "pymeshlab",
+    "pyspod",
+    "smt",
+    "torch",
+    "torch_geometric",
+    "torchdiffeq",
+    "xarray",
+    "zarr",
+    # Unused Qt stacks that dominate installer size when collected wholesale.
+    "PySide6.Qt3DAnimation",
+    "PySide6.Qt3DCore",
+    "PySide6.Qt3DExtras",
+    "PySide6.Qt3DInput",
+    "PySide6.Qt3DLogic",
+    "PySide6.Qt3DRender",
+    "PySide6.QtCharts",
+    "PySide6.QtDataVisualization",
+    "PySide6.QtDesigner",
+    "PySide6.QtHelp",
+    "PySide6.QtMultimedia",
+    "PySide6.QtMultimediaWidgets",
+    "PySide6.QtPdf",
+    "PySide6.QtPdfWidgets",
+    "PySide6.QtQml",
+    "PySide6.QtQuick",
+    "PySide6.QtQuick3D",
+    "PySide6.QtQuickControls2",
+    "PySide6.QtQuickWidgets",
+    "PySide6.QtVirtualKeyboard",
+    "PySide6.QtWebEngineCore",
+    "PySide6.QtWebEngineQuick",
+    "PySide6.QtWebEngineWidgets",
 ]
+
+if BUILD_PROFILE == "full":
+    excludes = [
+        item
+        for item in excludes
+        if item
+        not in {
+            "fastapi",
+            "onnx",
+            "pydmd",
+            "smt",
+            "torch",
+            "torch_geometric",
+            "torchdiffeq",
+            "uvicorn",
+            "weasyprint",
+            "attrs",
+            "jsonschema",
+            "jsonschema_specifications",
+            "pydantic",
+            "pydantic_core",
+            "rpds",
+        }
+    ]
 
 # ──────────────────────────────────────────────────────────────────────
 # Analysis
 # ──────────────────────────────────────────────────────────────────────
 a = Analysis(
-    [str(SRC / "naviertwin" / "main.py")],
+    [str(SRC / "naviertwin" / "gui_entry.py")],
     pathex=[str(SRC)],
     binaries=[],
     datas=datas,
@@ -146,6 +244,52 @@ a = Analysis(
     cipher=None,
     noarchive=False,
 )
+
+
+def _drop_desktop_bundle_item(item):
+    """Return True for optional desktop bundle artifacts safe to prune."""
+    target = str(item[0]).replace("\\", "/")
+    source = str(item[1]).replace("\\", "/") if len(item) > 1 else ""
+    paths = (target, source)
+    drop_prefixes = (
+        "trame_client",
+        "trame_vtk",
+        "trame_vuetify",
+        "trimesh",
+        "jsonschema",
+        "jsonschema_specifications",
+        "pydantic",
+        "pydantic_core",
+        "rpds",
+        "attrs",
+        "multidict",
+        "propcache",
+        "yarl",
+    )
+    drop_suffixes = (
+        "PySide6/Qt6Pdf.dll",
+        "PySide6/Qt6Qml.dll",
+        "PySide6/Qt6QmlMeta.dll",
+        "PySide6/Qt6QmlModels.dll",
+        "PySide6/Qt6QmlWorkerScript.dll",
+        "PySide6/Qt6Quick.dll",
+        "PySide6/Qt6VirtualKeyboard.dll",
+    )
+    for path in paths:
+        if any(path == prefix or path.startswith(f"{prefix}/") for prefix in drop_prefixes):
+            return True
+        if any(path.endswith(suffix) for suffix in drop_suffixes):
+            return True
+        if path.startswith("PySide6/translations/") and not (
+            path.endswith("_ko.qm") or path.endswith("_en.qm")
+        ):
+            return True
+    return False
+
+
+if BUILD_PROFILE == "desktop":
+    a.binaries = [item for item in a.binaries if not _drop_desktop_bundle_item(item)]
+    a.datas = [item for item in a.datas if not _drop_desktop_bundle_item(item)]
 
 # ──────────────────────────────────────────────────────────────────────
 # PYZ (Python 아카이브)

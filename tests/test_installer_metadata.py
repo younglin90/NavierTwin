@@ -47,10 +47,18 @@ def test_pyinstaller_spec_uses_project_root_and_runtime_assets() -> None:
     root = Path(__file__).resolve().parents[1]
     spec = (root / "installer" / "naviertwin.spec").read_text(encoding="utf-8")
 
-    assert "ROOT = Path(SPECPATH).parent.parent" in spec
+    assert "ROOT = _resolve_project_root()" in spec
+    assert "src\" / \"naviertwin\" / \"main.py" in spec
+    assert "gui_entry.py" in spec
     assert "gui/styles/i18n" in spec
-    assert "naviertwin.gui.panels.postproc_panel" in spec
-    assert "naviertwin.core.post_process_facade" in spec
+    assert "NAVIER_TWIN_BUILD_PROFILE" in spec
+    assert '"torch"' in spec
+    assert "PySide6.QtWebEngineCore" in spec
+    assert "_drop_desktop_bundle_item" in spec
+    assert "trame_vtk" in spec
+    assert "PySide6/Qt6Qml.dll" in spec
+    assert "matplotlib.backends.backend_qtagg" in spec
+    assert "resources_dir.exists()" in spec
 
 
 def test_inno_publisher_fields_are_present_and_non_empty() -> None:
