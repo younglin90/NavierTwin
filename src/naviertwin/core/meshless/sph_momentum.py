@@ -12,6 +12,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def cubic_spline_grad_1d(r: NDArray[np.float64], *, h: float = 1.0) -> NDArray[np.float64]:
     q = np.abs(r) / h
@@ -30,14 +35,13 @@ def sph_acceleration_1d(
     rho: NDArray[np.float64], p: NDArray[np.float64], *,
     h: float = 1.0,
 ) -> NDArray[np.float64]:
-    a = np.zeros_like(x, dtype=np.float64)
-    n = len(x)
-    for i in range(n):
-        dW = cubic_spline_grad_1d(x[i] - x, h=h)
-        # symmetric pressure
-        coef = m * (p[i] / rho[i] ** 2 + p / rho ** 2) * dW
-        a[i] = -float(coef.sum())
-    return a
+    return _kernels.sph_acceleration_1d(
+        np.asarray(x, dtype=np.float64),
+        np.asarray(m, dtype=np.float64),
+        np.asarray(rho, dtype=np.float64),
+        np.asarray(p, dtype=np.float64),
+        float(h),
+    )
 
 
 __all__ = ["cubic_spline_grad_1d", "sph_acceleration_1d"]

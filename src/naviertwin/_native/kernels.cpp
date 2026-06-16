@@ -1991,6 +1991,46 @@ static py::dict order_table_native(ArrayD h, ArrayD err) {
     return out;
 }
 
+static inline double cubic_spline_grad_1d_value(double r, double h) {
+    const double q = std::abs(r) / h;
+    const double sigma = 2.0 / 3.0 / h;
+    const double sign = (r > 0.0) ? 1.0 : ((r < 0.0) ? -1.0 : 0.0);
+    if (q < 1.0) {
+        return sigma * sign * (-3.0 * q + 2.25 * q * q) / h;
+    }
+    if (q < 2.0) {
+        const double d = 2.0 - q;
+        return sigma * sign * -0.75 * d * d / h;
+    }
+    return 0.0;
+}
+
+static py::array_t<double> sph_acceleration_1d(ArrayD x, ArrayD m, ArrayD rho, ArrayD p, double h) {
+    if (x.ndim() != 1 || m.ndim() != 1 || rho.ndim() != 1 || p.ndim() != 1) {
+        throw std::invalid_argument("x, m, rho, and p must be 1D arrays");
+    }
+    const py::ssize_t n = x.shape(0);
+    if (m.shape(0) != n || rho.shape(0) != n || p.shape(0) != n) {
+        throw std::invalid_argument("x, m, rho, and p must have matching lengths");
+    }
+    const double* xp = x.data();
+    const double* mp = m.data();
+    const double* rp = rho.data();
+    const double* pp = p.data();
+    auto out = py::array_t<double>({n});
+    double* op = out.mutable_data();
+    for (py::ssize_t i = 0; i < n; ++i) {
+        double acc = 0.0;
+        const double pi_over_rhoi2 = pp[i] / (rp[i] * rp[i]);
+        for (py::ssize_t j = 0; j < n; ++j) {
+            const double dW = cubic_spline_grad_1d_value(xp[i] - xp[j], h);
+            acc += mp[j] * (pi_over_rhoi2 + pp[j] / (rp[j] * rp[j])) * dW;
+        }
+        op[i] = -acc;
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -2053,5 +2093,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("laplacian_smooth", &laplacian_smooth_native, py::arg("verts"), py::arg("edges"), py::arg("n_iter"), py::arg("alpha"), py::arg("fixed"));
     m.def("mesh_quality_report", &mesh_quality_report_native, py::arg("points"), py::arg("simplices"));
     m.def("order_table", &order_table_native, py::arg("h"), py::arg("err"));
+    m.def("sph_acceleration_1d", &sph_acceleration_1d, py::arg("x"), py::arg("m"), py::arg("rho"), py::arg("p"), py::arg("h") = 1.0);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
