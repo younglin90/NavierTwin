@@ -22,7 +22,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
 from naviertwin.utils.logger import get_logger
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
 
 logger = get_logger(__name__)
 
@@ -102,16 +106,7 @@ def hex_volume(vertices: NDArray[np.float64]) -> float:
     v = np.asarray(vertices, dtype=np.float64)
     if v.shape != (8, 3):
         raise ValueError(f"vertices must be (8, 3), got {v.shape}")
-
-    # 5-tet decomposition
-    tets = [
-        [0, 1, 3, 4],
-        [1, 2, 3, 6],
-        [1, 3, 4, 6],
-        [3, 4, 6, 7],
-        [1, 4, 5, 6],
-    ]
-    return sum(tet_volume(v[tet]) for tet in tets)
+    return float(_kernels.hex_volume(v))
 
 
 def pyramid_volume(vertices: NDArray[np.float64]) -> float:

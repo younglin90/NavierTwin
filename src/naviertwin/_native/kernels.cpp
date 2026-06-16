@@ -2301,6 +2301,41 @@ static py::array_t<long long> greedy_batch_acquisition_native(
     return out;
 }
 
+static inline double tet_volume_from_vertices(const double* v, const int ids[4], py::ssize_t dim) {
+    const double ax = v[ids[1] * dim] - v[ids[0] * dim];
+    const double ay = v[ids[1] * dim + 1] - v[ids[0] * dim + 1];
+    const double az = v[ids[1] * dim + 2] - v[ids[0] * dim + 2];
+    const double bx = v[ids[2] * dim] - v[ids[0] * dim];
+    const double by = v[ids[2] * dim + 1] - v[ids[0] * dim + 1];
+    const double bz = v[ids[2] * dim + 2] - v[ids[0] * dim + 2];
+    const double cx = v[ids[3] * dim] - v[ids[0] * dim];
+    const double cy = v[ids[3] * dim + 1] - v[ids[0] * dim + 1];
+    const double cz = v[ids[3] * dim + 2] - v[ids[0] * dim + 2];
+    const double cross_x = by * cz - bz * cy;
+    const double cross_y = bz * cx - bx * cz;
+    const double cross_z = bx * cy - by * cx;
+    const double triple = ax * cross_x + ay * cross_y + az * cross_z;
+    return std::abs(triple) / 6.0;
+}
+
+static double hex_volume_native(Array2D vertices) {
+    if (vertices.shape(0) != 8 || vertices.shape(1) != 3) {
+        throw std::invalid_argument("vertices must have shape (8, 3)");
+    }
+    static constexpr int tets[5][4] = {
+        {0, 1, 3, 4},
+        {1, 2, 3, 6},
+        {1, 3, 4, 6},
+        {3, 4, 6, 7},
+        {1, 4, 5, 6},
+    };
+    double volume = 0.0;
+    for (const auto& tet : tets) {
+        volume += tet_volume_from_vertices(vertices.data(), tet, 3);
+    }
+    return volume;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -2378,5 +2413,6 @@ PYBIND11_MODULE(_kernels, m) {
         "greedy_batch_acquisition", &greedy_batch_acquisition_native, py::arg("acq"), py::arg("candidates"),
         py::arg("batch_size"), py::arg("min_distance"), py::arg("use_distance")
     );
+    m.def("hex_volume", &hex_volume_native, py::arg("vertices"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
