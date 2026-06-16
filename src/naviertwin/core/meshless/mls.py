@@ -12,6 +12,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def mls_eval_1d(
     *, x_query: float, x: NDArray[np.float64], y: NDArray[np.float64],
@@ -24,7 +29,7 @@ def mls_eval_1d(
     P = np.vander(x - x_query, order + 1, increasing=True)  # (n, order+1)
     A = (P * w[:, None]).T @ P
     b = (P * w[:, None]).T @ y
-    coef = np.linalg.solve(A + 1e-12 * np.eye(A.shape[0]), b)
+    coef = np.asarray(_kernels.solve_square(A + 1e-12 * np.eye(A.shape[0]), b), dtype=np.float64)
     return float(coef[0])  # value at center
 
 
