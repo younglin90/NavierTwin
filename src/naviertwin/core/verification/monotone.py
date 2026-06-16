@@ -10,18 +10,18 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def is_monotone_decreasing(errs: Sequence[float], *, atol: float = 0.0) -> bool:
-    e = list(errs)
-    return all(e[i + 1] <= e[i] + atol for i in range(len(e) - 1))
+    return bool(_kernels.is_monotone_decreasing(list(errs), float(atol)))
 
 
 def convergence_ratio(errs: Sequence[float]) -> list[float]:
-    e = list(errs)
-    out = []
-    for i in range(len(e) - 1):
-        out.append(e[i + 1] / max(abs(e[i]), 1e-30))
-    return out
+    return list(_kernels.convergence_ratio(list(errs)))
 
 
 __all__ = ["convergence_ratio", "is_monotone_decreasing"]

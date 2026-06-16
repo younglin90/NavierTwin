@@ -2117,6 +2117,37 @@ static py::array_t<double> lbm_step(ArrayD f, double omega) {
     return out;
 }
 
+static bool is_monotone_decreasing_native(py::sequence errs, double atol) {
+    const auto n = py::len(errs);
+    if (n < 2) {
+        return true;
+    }
+    double prev = py::cast<double>(errs[0]);
+    for (py::size_t i = 1; i < n; ++i) {
+        const double cur = py::cast<double>(errs[i]);
+        if (cur > prev + atol) {
+            return false;
+        }
+        prev = cur;
+    }
+    return true;
+}
+
+static py::list convergence_ratio_native(py::sequence errs) {
+    const auto n = py::len(errs);
+    py::list out;
+    if (n < 2) {
+        return out;
+    }
+    double prev = py::cast<double>(errs[0]);
+    for (py::size_t i = 1; i < n; ++i) {
+        const double cur = py::cast<double>(errs[i]);
+        out.append(cur / std::max(std::abs(prev), 1e-30));
+        prev = cur;
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -2182,5 +2213,7 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("sph_acceleration_1d", &sph_acceleration_1d, py::arg("x"), py::arg("m"), py::arg("rho"), py::arg("p"), py::arg("h") = 1.0);
     m.def("lbm_equilibrium", &lbm_equilibrium, py::arg("rho"), py::arg("u"));
     m.def("lbm_step", &lbm_step, py::arg("f"), py::arg("omega") = 1.0);
+    m.def("is_monotone_decreasing", &is_monotone_decreasing_native, py::arg("errs"), py::arg("atol") = 0.0);
+    m.def("convergence_ratio", &convergence_ratio_native, py::arg("errs"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
