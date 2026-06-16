@@ -1308,6 +1308,29 @@ static py::array_t<double> radial_energy_sum(ArrayD k_values, ArrayD energy, Arr
     return out;
 }
 
+static py::list dominant_frequencies_from_power(ArrayD freqs, ArrayD power, int top_k) {
+    if (freqs.ndim() != 1 || power.ndim() != 1 || freqs.shape(0) != power.shape(0)) {
+        throw std::invalid_argument("freqs and power must be matching 1D arrays");
+    }
+    const py::ssize_t n = freqs.shape(0);
+    const double* fp = freqs.data();
+    const double* pp = power.data();
+    std::vector<py::ssize_t> idx(static_cast<std::size_t>(n));
+    for (py::ssize_t i = 0; i < n; ++i) {
+        idx[static_cast<std::size_t>(i)] = i;
+    }
+    std::sort(idx.begin(), idx.end(), [pp](py::ssize_t lhs, py::ssize_t rhs) {
+        return pp[lhs] > pp[rhs];
+    });
+    const py::ssize_t count = std::min(static_cast<py::ssize_t>(top_k), n);
+    py::list out;
+    for (py::ssize_t i = 0; i < count; ++i) {
+        const py::ssize_t j = idx[static_cast<std::size_t>(i)];
+        out.append(py::make_tuple(fp[j], pp[j]));
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -1352,5 +1375,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("cusum_detect", &cusum_detect_native, py::arg("x"), py::arg("threshold"), py::arg("mean"), py::arg("sigma"), py::arg("k"));
     m.def("rom_energy_spectrum", &rom_energy_spectrum_native, py::arg("singular_values"));
     m.def("radial_energy_sum", &radial_energy_sum, py::arg("K"), py::arg("energy"), py::arg("edges"));
+    m.def("dominant_frequencies_from_power", &dominant_frequencies_from_power, py::arg("freqs"), py::arg("power"), py::arg("top_k"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

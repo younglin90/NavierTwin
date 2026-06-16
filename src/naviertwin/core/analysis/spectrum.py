@@ -17,6 +17,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def power_spectrum(
     x: NDArray[np.float64],
@@ -63,9 +68,7 @@ def dominant_frequencies(
     # DC 제외
     f, P = f[1:], P[1:]
     k = int(min(top_k, f.size))
-    idx = np.argpartition(-P, k - 1)[:k]
-    idx = idx[np.argsort(-P[idx])]
-    return [(float(f[i]), float(P[i])) for i in idx]
+    return _kernels.dominant_frequencies_from_power(f, P, k)
 
 
 __all__ = ["power_spectrum", "dominant_frequencies"]
