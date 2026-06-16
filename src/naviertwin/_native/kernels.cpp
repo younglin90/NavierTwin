@@ -1487,6 +1487,36 @@ static py::list jensen_farm_velocity(double v0, py::sequence distances, double r
     return out;
 }
 
+static py::array_t<double> conservative_remap_1d(ArrayD x_old_edges, ArrayD u_old, ArrayD x_new_edges) {
+    if (x_old_edges.ndim() != 1 || u_old.ndim() != 1 || x_new_edges.ndim() != 1) {
+        throw std::invalid_argument("x_old_edges, u_old, and x_new_edges must be 1D arrays");
+    }
+    if (x_old_edges.shape(0) != u_old.shape(0) + 1) {
+        throw std::invalid_argument("u_old length must be one less than x_old_edges length");
+    }
+    const py::ssize_t n_new = x_new_edges.shape(0) - 1;
+    auto out = py::array_t<double>({n_new});
+    const double* xo = x_old_edges.data();
+    const double* uo = u_old.data();
+    const double* xn = x_new_edges.data();
+    double* op = out.mutable_data();
+    const py::ssize_t n_old = u_old.shape(0);
+    for (py::ssize_t i = 0; i < n_new; ++i) {
+        const double a = xn[i];
+        const double b = xn[i + 1];
+        double total = 0.0;
+        for (py::ssize_t j = 0; j < n_old; ++j) {
+            const double ov_a = std::max(a, xo[j]);
+            const double ov_b = std::min(b, xo[j + 1]);
+            if (ov_b > ov_a) {
+                total += (ov_b - ov_a) * uo[j];
+            }
+        }
+        op[i] = total / (b - a);
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -1538,5 +1568,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("vof_step_1d", &vof_step_1d, py::arg("alpha"), py::arg("u"), py::arg("dt"), py::arg("dx"));
     m.def("levelset_advect_step_1d", &levelset_advect_step_1d, py::arg("phi"), py::arg("u"), py::arg("dt"), py::arg("dx"));
     m.def("jensen_farm_velocity", &jensen_farm_velocity, py::arg("V0"), py::arg("distances"), py::arg("R"), py::arg("a") = 0.3, py::arg("k") = 0.04);
+    m.def("conservative_remap_1d", &conservative_remap_1d, py::arg("x_old_edges"), py::arg("u_old"), py::arg("x_new_edges"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

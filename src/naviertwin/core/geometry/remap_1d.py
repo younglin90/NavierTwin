@@ -18,6 +18,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def conservative_remap_1d(
     x_old_edges: NDArray[np.float64],
@@ -25,20 +30,11 @@ def conservative_remap_1d(
     x_new_edges: NDArray[np.float64],
 ) -> NDArray[np.float64]:
     """piecewise-constant: u_new[i] = ∫_{x_new[i]}^{x_new[i+1]} u_old / Δx_new."""
-    xo = np.asarray(x_old_edges, dtype=np.float64)
-    xn = np.asarray(x_new_edges, dtype=np.float64)
-    u_old = np.asarray(u_old, dtype=np.float64)
-    u_new = np.zeros(len(xn) - 1)
-    for i in range(len(xn) - 1):
-        a, b = xn[i], xn[i + 1]
-        total = 0.0
-        for j in range(len(xo) - 1):
-            ov_a = max(a, xo[j])
-            ov_b = min(b, xo[j + 1])
-            if ov_b > ov_a:
-                total += (ov_b - ov_a) * u_old[j]
-        u_new[i] = total / (b - a)
-    return u_new
+    return _kernels.conservative_remap_1d(
+        np.asarray(x_old_edges, dtype=np.float64),
+        np.asarray(u_old, dtype=np.float64),
+        np.asarray(x_new_edges, dtype=np.float64),
+    )
 
 
 __all__ = ["conservative_remap_1d"]
