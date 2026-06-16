@@ -2193,6 +2193,55 @@ static double delta99_scan(ArrayD y, ArrayD u, double target) {
     return yp[n - 1];
 }
 
+static py::array_t<double> scale_to_bounds_native(ArrayD unit, Array2D bounds) {
+    if (unit.ndim() != 2 || bounds.shape(1) != 2 || bounds.shape(0) != unit.shape(1)) {
+        throw std::invalid_argument("unit must be (n, d), bounds must be (d, 2)");
+    }
+    const py::ssize_t n = unit.shape(0);
+    const py::ssize_t dim = unit.shape(1);
+    const double* up = unit.data();
+    const double* bp = bounds.data();
+    auto out = py::array_t<double>({n, dim});
+    double* op = out.mutable_data();
+    for (py::ssize_t i = 0; i < n; ++i) {
+        for (py::ssize_t d = 0; d < dim; ++d) {
+            const double lo = bp[d * 2];
+            const double hi = bp[d * 2 + 1];
+            op[i * dim + d] = lo + up[i * dim + d] * (hi - lo);
+        }
+    }
+    return out;
+}
+
+static py::array_t<double> regular_grid_points(Array2D bounds, int per) {
+    if (bounds.shape(1) != 2) {
+        throw std::invalid_argument("bounds must have shape (d, 2)");
+    }
+    if (per < 1) {
+        throw std::invalid_argument("per must be positive");
+    }
+    const py::ssize_t dim = bounds.shape(0);
+    py::ssize_t total = 1;
+    for (py::ssize_t d = 0; d < dim; ++d) {
+        total *= per;
+    }
+    const double* bp = bounds.data();
+    auto out = py::array_t<double>({total, dim});
+    double* op = out.mutable_data();
+    for (py::ssize_t row = 0; row < total; ++row) {
+        py::ssize_t div = total;
+        for (py::ssize_t d = 0; d < dim; ++d) {
+            div /= per;
+            const py::ssize_t idx = (row / div) % per;
+            const double lo = bp[d * 2];
+            const double hi = bp[d * 2 + 1];
+            const double value = (per == 1) ? lo : lo + (hi - lo) * static_cast<double>(idx) / static_cast<double>(per - 1);
+            op[row * dim + d] = value;
+        }
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -2263,5 +2312,7 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("combined_disc_uncertainty", &combined_disc_uncertainty_native, py::arg("uncs"));
     m.def("friction_colebrook", &friction_colebrook_native, py::arg("Re"), py::arg("eps_over_D"), py::arg("n_iter") = 50);
     m.def("delta99_scan", &delta99_scan, py::arg("y"), py::arg("u"), py::arg("target"));
+    m.def("scale_to_bounds", &scale_to_bounds_native, py::arg("unit"), py::arg("bounds"));
+    m.def("regular_grid_points", &regular_grid_points, py::arg("bounds"), py::arg("per"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

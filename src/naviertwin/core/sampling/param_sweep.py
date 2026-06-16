@@ -16,15 +16,20 @@ from typing import Sequence
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
 from naviertwin.utils.logger import get_logger
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
 
 logger = get_logger(__name__)
 
 
 def _scale(unit: NDArray[np.float64], bounds: Sequence[tuple[float, float]]) -> NDArray[np.float64]:
-    lo = np.array([b[0] for b in bounds], dtype=np.float64)
-    hi = np.array([b[1] for b in bounds], dtype=np.float64)
-    return lo + unit * (hi - lo)
+    return _kernels.scale_to_bounds(
+        np.asarray(unit, dtype=np.float64),
+        np.asarray(bounds, dtype=np.float64),
+    )
 
 
 def generate_sweep(
@@ -47,9 +52,7 @@ def generate_sweep(
     dim = len(bounds)
     if kind == "grid":
         per = max(1, int(round(n_points ** (1 / dim))))
-        axes = [np.linspace(lo, hi, per) for (lo, hi) in bounds]
-        mesh = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1)
-        pts = mesh.reshape(-1, dim)
+        pts = _kernels.regular_grid_points(np.asarray(bounds, dtype=np.float64), per)
         if pts.shape[0] > n_points:
             rng = np.random.default_rng(seed)
             idx = rng.choice(pts.shape[0], size=n_points, replace=False)
