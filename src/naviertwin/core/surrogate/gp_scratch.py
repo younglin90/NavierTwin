@@ -16,6 +16,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def rbf_kernel(
     X: NDArray[np.float64], Y: NDArray[np.float64],
@@ -43,7 +48,8 @@ class GPRegressor:
         n = X.shape[0]
         K = rbf_kernel(X, X, self.l, self.s) + self.noise * np.eye(n)
         self._L = np.linalg.cholesky(K)
-        self._alpha = np.linalg.solve(self._L.T, np.linalg.solve(self._L, y))
+        z = np.asarray(_kernels.solve_square(self._L, y), dtype=np.float64)
+        self._alpha = np.asarray(_kernels.solve_square(self._L.T, z), dtype=np.float64)
         self.X = X
         self.y = y
         return self
@@ -54,7 +60,7 @@ class GPRegressor:
         assert self.X is not None and self._L is not None
         Ks = rbf_kernel(Xq, self.X, self.l, self.s)
         mu = Ks @ self._alpha
-        v = np.linalg.solve(self._L, Ks.T)
+        v = np.asarray(_kernels.solve_square(self._L, Ks.T), dtype=np.float64)
         Kss = rbf_kernel(Xq, Xq, self.l, self.s)
         var = np.diag(Kss - v.T @ v)
         return mu, np.clip(var, 0.0, None)
