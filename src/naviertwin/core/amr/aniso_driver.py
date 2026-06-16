@@ -14,6 +14,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def normalize_metric(
     M: NDArray[np.float64], n_target: int = 100,
@@ -21,7 +26,7 @@ def normalize_metric(
     """α^d Σ √det(M) = N_target → scale (d=2)."""
     M = np.asarray(M, dtype=np.float64)
     d = M.shape[-1]
-    dets = np.linalg.det(M)
+    dets = np.asarray(_kernels.determinant_batch(M), dtype=np.float64)
     sqrt_dets = np.sqrt(np.maximum(dets, 0))
     s = sqrt_dets.sum()
     if s <= 0:

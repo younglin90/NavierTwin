@@ -655,6 +655,76 @@ static py::array_t<double> solve_square_native(ArrayD a, ArrayD b) {
     return out;
 }
 
+static double determinant_square(const double* a, py::ssize_t d) {
+    if (d == 2) {
+        return a[0] * a[3] - a[1] * a[2];
+    }
+    if (d == 3) {
+        return
+            a[0] * (a[4] * a[8] - a[5] * a[7]) -
+            a[1] * (a[3] * a[8] - a[5] * a[6]) +
+            a[2] * (a[3] * a[7] - a[4] * a[6]);
+    }
+
+    std::vector<double> m(a, a + d * d);
+    double det = 1.0;
+    int sign = 1;
+    for (py::ssize_t k = 0; k < d; ++k) {
+        py::ssize_t pivot = k;
+        double pivot_abs = std::abs(m[k * d + k]);
+        for (py::ssize_t r = k + 1; r < d; ++r) {
+            const double candidate = std::abs(m[r * d + k]);
+            if (candidate > pivot_abs) {
+                pivot_abs = candidate;
+                pivot = r;
+            }
+        }
+        if (pivot_abs == 0.0) {
+            return 0.0;
+        }
+        if (pivot != k) {
+            for (py::ssize_t c = 0; c < d; ++c) {
+                std::swap(m[k * d + c], m[pivot * d + c]);
+            }
+            sign = -sign;
+        }
+        const double pivot_value = m[k * d + k];
+        det *= pivot_value;
+        for (py::ssize_t r = k + 1; r < d; ++r) {
+            const double factor = m[r * d + k] / pivot_value;
+            for (py::ssize_t c = k + 1; c < d; ++c) {
+                m[r * d + c] -= factor * m[k * d + c];
+            }
+        }
+    }
+    return sign * det;
+}
+
+static py::array_t<double> determinant_batch(ArrayD a) {
+    if (a.ndim() < 2 || a.shape(a.ndim() - 1) != a.shape(a.ndim() - 2)) {
+        throw std::invalid_argument("array of square matrices expected");
+    }
+    const py::ssize_t d = a.shape(a.ndim() - 1);
+    std::vector<py::ssize_t> out_shape;
+    py::ssize_t count = 1;
+    for (py::ssize_t axis = 0; axis < a.ndim() - 2; ++axis) {
+        out_shape.push_back(a.shape(axis));
+        count *= a.shape(axis);
+    }
+    if (out_shape.empty()) {
+        out_shape.push_back(1);
+    }
+
+    auto out = py::array_t<double>(out_shape);
+    const double* ap = a.data();
+    double* op = out.mutable_data();
+    const py::ssize_t stride = d * d;
+    for (py::ssize_t i = 0; i < count; ++i) {
+        op[i] = determinant_square(ap + i * stride, d);
+    }
+    return out;
+}
+
 static py::tuple power_iteration_native(ArrayD a, int n_iter, ArrayD x0, double tol) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -725,6 +795,7 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("symmetric_eigenvalues_3x3", &symmetric_eigenvalues_3x3, py::arg("J"));
     m.def("invariants_3x3", &invariants_3x3, py::arg("J"));
     m.def("solve_square", &solve_square_native, py::arg("A"), py::arg("b"));
+    m.def("determinant_batch", &determinant_batch, py::arg("A"));
     m.def("power_iteration", &power_iteration_native, py::arg("A"), py::arg("n_iter"), py::arg("x0"), py::arg("tol"));
     m.def("inverse_power", &inverse_power_native, py::arg("A"), py::arg("shift"), py::arg("n_iter"), py::arg("x0"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
