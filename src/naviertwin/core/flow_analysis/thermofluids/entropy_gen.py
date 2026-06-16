@@ -25,7 +25,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
 from naviertwin.utils.logger import get_logger
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
 
 logger = get_logger(__name__)
 
@@ -51,31 +55,24 @@ def entropy_generation_2d(
     Returns:
         s_gen (ny, nx).
     """
-    for arr in (u, v, T):
-        if arr.ndim != 2 or arr.shape != u.shape:
-            raise ValueError("u, v, T 는 같은 2D shape 이어야 합니다")
-    if np.any(T <= 0):
-        raise ValueError("T 는 양수(Kelvin) 여야 합니다")
-
-    dTdy, dTdx = np.gradient(T, dy, dx)
-    dudy, dudx = np.gradient(u, dy, dx)
-    dvdy, dvdx = np.gradient(v, dy, dx)
-
-    # strain rate tensor e_ij
-    e11 = dudx
-    e22 = dvdy
-    e12 = 0.5 * (dudy + dvdx)
-    div = dudx + dvdy
-    phi = 2.0 * (e11 ** 2 + e22 ** 2 + 2 * e12 ** 2) - (2.0 / 3.0) * div ** 2
-
-    s_thermal = (k / T ** 2) * (dTdx ** 2 + dTdy ** 2)
-    s_viscous = (mu / T) * phi
+    s_gen = np.asarray(
+        _kernels.entropy_generation_2d(
+            np.asarray(u, dtype=np.float64),
+            np.asarray(v, dtype=np.float64),
+            np.asarray(T, dtype=np.float64),
+            float(dx),
+            float(dy),
+            float(mu),
+            float(k),
+        ),
+        dtype=np.float64,
+    )
 
     logger.debug(
-        "entropy_gen: thermal mean=%.3g, viscous mean=%.3g",
-        float(s_thermal.mean()), float(s_viscous.mean()),
+        "entropy_gen: mean=%.3g",
+        float(s_gen.mean()),
     )
-    return s_thermal + s_viscous
+    return s_gen
 
 
 __all__ = ["entropy_generation_2d"]

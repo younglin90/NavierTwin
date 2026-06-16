@@ -188,6 +188,49 @@ static py::array_t<double> production_rate_2d(Array2D u, Array2D v, double dx, d
     return out;
 }
 
+static py::array_t<double> entropy_generation_2d_native(
+    Array2D u, Array2D v, Array2D t, double dx, double dy, double mu, double k
+) {
+    check_same_2d(u, v);
+    if (t.ndim() != 2 || t.shape(0) != u.shape(0) || t.shape(1) != u.shape(1)) {
+        throw std::invalid_argument("u, v, and T must have the same 2D shape");
+    }
+    if (dx == 0.0 || dy == 0.0) {
+        throw std::invalid_argument("dx and dy must be non-zero");
+    }
+
+    const auto ny = u.shape(0);
+    const auto nx = u.shape(1);
+    auto out = py::array_t<double>({ny, nx});
+    const double* up = u.data();
+    const double* vp = v.data();
+    const double* tp = t.data();
+    double* op = out.mutable_data();
+
+    for (py::ssize_t i = 0; i < ny; ++i) {
+        for (py::ssize_t j = 0; j < nx; ++j) {
+            const py::ssize_t index = i * nx + j;
+            const double temp = tp[index];
+            if (temp <= 0.0) {
+                throw std::invalid_argument("T must be positive");
+            }
+            const double dtdx = grad_x(tp, ny, nx, i, j, dx);
+            const double dtdy = grad_y(tp, ny, nx, i, j, dy);
+            const double dudx = grad_x(up, ny, nx, i, j, dx);
+            const double dudy = grad_y(up, ny, nx, i, j, dy);
+            const double dvdx = grad_x(vp, ny, nx, i, j, dx);
+            const double dvdy = grad_y(vp, ny, nx, i, j, dy);
+            const double e12 = 0.5 * (dudy + dvdx);
+            const double div = dudx + dvdy;
+            const double phi =
+                2.0 * (dudx * dudx + dvdy * dvdy + 2.0 * e12 * e12) -
+                (2.0 / 3.0) * div * div;
+            op[index] = (k / (temp * temp)) * (dtdx * dtdx + dtdy * dtdy) + (mu / temp) * phi;
+        }
+    }
+    return out;
+}
+
 static void check_same_3d(const ArrayD& u, const ArrayD& v, const ArrayD& w) {
     if (u.ndim() != 3 || v.ndim() != 3 || w.ndim() != 3) {
         throw std::invalid_argument("3D arrays expected");
@@ -668,6 +711,10 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("vorticity_2d", &vorticity_2d_native, py::arg("u"), py::arg("v"), py::arg("dx") = 1.0, py::arg("dy") = 1.0);
     m.def("q_criterion_2d", &q_criterion_2d_native, py::arg("u"), py::arg("v"), py::arg("dx") = 1.0, py::arg("dy") = 1.0);
     m.def("production_rate_2d", &production_rate_2d, py::arg("u"), py::arg("v"), py::arg("dx"), py::arg("dy"), py::arg("nu_t"));
+    m.def(
+        "entropy_generation_2d", &entropy_generation_2d_native, py::arg("u"), py::arg("v"), py::arg("T"),
+        py::arg("dx") = 1.0, py::arg("dy") = 1.0, py::arg("mu") = 1.8e-5, py::arg("k") = 0.026
+    );
     m.def(
         "vorticity_3d", &vorticity_3d_native, py::arg("u"), py::arg("v"), py::arg("w"),
         py::arg("dx") = 1.0, py::arg("dy") = 1.0, py::arg("dz") = 1.0
