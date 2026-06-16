@@ -21,6 +21,11 @@ from typing import Callable
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def project_linear_operator(
     Phi: NDArray[np.float64], L: NDArray[np.float64],
@@ -56,7 +61,7 @@ def rom_rhs_linear(
     """선형 ROM RHS factory: a → M_red⁻¹ L_red a."""
     L_red = project_linear_operator(Phi, L)
     M_red = project_mass_matrix(Phi, M)
-    M_inv_L = np.linalg.solve(M_red, L_red)
+    M_inv_L = np.asarray(_kernels.solve_square(M_red, L_red), dtype=np.float64)
 
     def rhs(t: float, a: NDArray[np.float64]) -> NDArray[np.float64]:  # noqa: ARG001
         return M_inv_L @ a
