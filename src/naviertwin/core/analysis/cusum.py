@@ -14,6 +14,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def cusum_detect(
     x: NDArray[np.float64], *,
@@ -31,15 +36,7 @@ def cusum_detect(
         mean = float(x[:max(10, len(x) // 4)].mean())
     if sigma is None:
         sigma = float(x[:max(10, len(x) // 4)].std() + 1e-12)
-    s_pos = 0.0
-    s_neg = 0.0
-    for i, v in enumerate(x):
-        z = (v - mean) / sigma
-        s_pos = max(0.0, s_pos + z - k)
-        s_neg = min(0.0, s_neg + z + k)
-        if s_pos > threshold or -s_neg > threshold:
-            return i
-    return -1
+    return int(_kernels.cusum_detect(x, float(threshold), float(mean), float(sigma), float(k)))
 
 
 __all__ = ["cusum_detect"]

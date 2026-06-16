@@ -1237,6 +1237,24 @@ static py::array_t<long long> dbscan_native(ArrayD points, double eps, int min_s
     return labels;
 }
 
+static int cusum_detect_native(ArrayD x, double threshold, double mean, double sigma, double k) {
+    if (x.ndim() != 1) {
+        throw std::invalid_argument("x must have shape (N,)");
+    }
+    const double* xp = x.data();
+    double s_pos = 0.0;
+    double s_neg = 0.0;
+    for (py::ssize_t i = 0; i < x.shape(0); ++i) {
+        const double z = (xp[i] - mean) / sigma;
+        s_pos = std::max(0.0, s_pos + z - k);
+        s_neg = std::min(0.0, s_neg + z + k);
+        if (s_pos > threshold || -s_neg > threshold) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -1278,5 +1296,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("dtw_distance", &dtw_distance_native, py::arg("a"), py::arg("b"), py::arg("window") = py::none());
     m.def("dtw_matrix", &dtw_matrix_native, py::arg("a"), py::arg("b"));
     m.def("dbscan", &dbscan_native, py::arg("points"), py::arg("eps") = 0.5, py::arg("min_samples") = 5);
+    m.def("cusum_detect", &cusum_detect_native, py::arg("x"), py::arg("threshold"), py::arg("mean"), py::arg("sigma"), py::arg("k"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
