@@ -158,6 +158,36 @@ static py::array_t<double> q_criterion_2d_native(Array2D u, Array2D v, double dx
     return out;
 }
 
+static py::array_t<double> production_rate_2d(Array2D u, Array2D v, double dx, double dy, Array2D nu_t) {
+    check_same_2d(u, v);
+    if (nu_t.ndim() != 2 || nu_t.shape(0) != u.shape(0) || nu_t.shape(1) != u.shape(1)) {
+        throw std::invalid_argument("nu_t must have the same shape as u and v");
+    }
+    if (dx == 0.0 || dy == 0.0) {
+        throw std::invalid_argument("dx and dy must be non-zero");
+    }
+
+    const auto ny = u.shape(0);
+    const auto nx = u.shape(1);
+    auto out = py::array_t<double>({ny, nx});
+    const double* up = u.data();
+    const double* vp = v.data();
+    const double* ntp = nu_t.data();
+    double* op = out.mutable_data();
+
+    for (py::ssize_t i = 0; i < ny; ++i) {
+        for (py::ssize_t j = 0; j < nx; ++j) {
+            const double dudx = grad_x(up, ny, nx, i, j, dx);
+            const double dudy = grad_y(up, ny, nx, i, j, dy);
+            const double dvdx = grad_x(vp, ny, nx, i, j, dx);
+            const double dvdy = grad_y(vp, ny, nx, i, j, dy);
+            const double e12 = 0.5 * (dudy + dvdx);
+            op[i * nx + j] = 2.0 * ntp[i * nx + j] * (dudx * dudx + dvdy * dvdy + 2.0 * e12 * e12);
+        }
+    }
+    return out;
+}
+
 static void check_same_3d(const ArrayD& u, const ArrayD& v, const ArrayD& w) {
     if (u.ndim() != 3 || v.ndim() != 3 || w.ndim() != 3) {
         throw std::invalid_argument("3D arrays expected");
@@ -637,6 +667,7 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("lambda2_2d", &lambda2_2d, py::arg("u"), py::arg("v"), py::arg("dx") = 1.0, py::arg("dy") = 1.0);
     m.def("vorticity_2d", &vorticity_2d_native, py::arg("u"), py::arg("v"), py::arg("dx") = 1.0, py::arg("dy") = 1.0);
     m.def("q_criterion_2d", &q_criterion_2d_native, py::arg("u"), py::arg("v"), py::arg("dx") = 1.0, py::arg("dy") = 1.0);
+    m.def("production_rate_2d", &production_rate_2d, py::arg("u"), py::arg("v"), py::arg("dx"), py::arg("dy"), py::arg("nu_t"));
     m.def(
         "vorticity_3d", &vorticity_3d_native, py::arg("u"), py::arg("v"), py::arg("w"),
         py::arg("dx") = 1.0, py::arg("dy") = 1.0, py::arg("dz") = 1.0

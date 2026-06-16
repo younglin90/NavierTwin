@@ -23,6 +23,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 # 표준 k-ε 계수
 C_MU = 0.09
 C_EPS1 = 1.44
@@ -54,12 +59,16 @@ def production_rate(
 
     e_ij = 0.5·(∂_i u_j + ∂_j u_i).
     """
-    dudy, dudx = np.gradient(u, dy, dx)
-    dvdy, dvdx = np.gradient(v, dy, dx)
-    e11 = dudx
-    e22 = dvdy
-    e12 = 0.5 * (dudy + dvdx)
-    return 2.0 * nu_t * (e11 ** 2 + e22 ** 2 + 2.0 * e12 ** 2)
+    return np.asarray(
+        _kernels.production_rate_2d(
+            np.asarray(u, dtype=np.float64),
+            np.asarray(v, dtype=np.float64),
+            float(dx),
+            float(dy),
+            np.asarray(nu_t, dtype=np.float64),
+        ),
+        dtype=np.float64,
+    )
 
 
 def k_epsilon_step(
