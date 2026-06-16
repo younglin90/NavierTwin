@@ -2478,6 +2478,34 @@ static double kolmogorov_pvalue(double d, double n) {
     return std::min(1.0, std::max(0.0, 2.0 * sum_p));
 }
 
+static int number_peaks_native(ArrayD x, int support) {
+    if (x.ndim() != 1) {
+        throw std::invalid_argument("x must be a 1D array");
+    }
+    if (support <= 0) {
+        return static_cast<int>(x.shape(0) - 2 * static_cast<py::ssize_t>(support));
+    }
+    const py::ssize_t n = x.shape(0);
+    if (n < 2 * static_cast<py::ssize_t>(support) + 1) {
+        return 0;
+    }
+    const double* xp = x.data();
+    int count = 0;
+    for (py::ssize_t i = support; i < n - support; ++i) {
+        bool is_peak = true;
+        for (int k = 1; k <= support; ++k) {
+            if (xp[i] <= xp[i - k] || xp[i] <= xp[i + k]) {
+                is_peak = false;
+                break;
+            }
+        }
+        if (is_peak) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -2562,5 +2590,6 @@ PYBIND11_MODULE(_kernels, m) {
     );
     m.def("quadrant_split", &quadrant_split_native, py::arg("up"), py::arg("vp"), py::arg("hole") = 0.0);
     m.def("kolmogorov_pvalue", &kolmogorov_pvalue, py::arg("D"), py::arg("n"));
+    m.def("number_peaks", &number_peaks_native, py::arg("x"), py::arg("support") = 3);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

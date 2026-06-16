@@ -23,9 +23,13 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
 from naviertwin.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required by accelerated time-series features")
 
 
 def _safe_float(value: float, default: float = 0.0) -> float:
@@ -64,18 +68,7 @@ def number_peaks(x: NDArray[np.float64], support: int = 3) -> int:
         x: 시계열.
         support: 좌우 이웃 길이.
     """
-    if len(x) < 2 * support + 1:
-        return 0
-    count = 0
-    for i in range(support, len(x) - support):
-        is_peak = True
-        for k in range(1, support + 1):
-            if x[i] <= x[i - k] or x[i] <= x[i + k]:
-                is_peak = False
-                break
-        if is_peak:
-            count += 1
-    return count
+    return int(_kernels.number_peaks(np.asarray(x, dtype=np.float64).ravel(), int(support)))
 
 
 def first_index_above_mean(x: NDArray[np.float64]) -> int:
