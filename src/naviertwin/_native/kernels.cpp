@@ -1255,6 +1255,31 @@ static int cusum_detect_native(ArrayD x, double threshold, double mean, double s
     return -1;
 }
 
+static py::dict rom_energy_spectrum_native(ArrayD singular_values) {
+    if (singular_values.ndim() != 1) {
+        throw std::invalid_argument("singular_values must have shape (N,)");
+    }
+    const double* sv = singular_values.data();
+    const py::ssize_t n = singular_values.shape(0);
+    double total = 1e-30;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        total += sv[i] * sv[i];
+    }
+    py::dict out;
+    out["total"] = 1.0;
+    const int ks[5] = {1, 3, 5, 10, 20};
+    for (const int k : ks) {
+        if (k <= n) {
+            double partial = 0.0;
+            for (int i = 0; i < k; ++i) {
+                partial += sv[i] * sv[i];
+            }
+            out[py::str(std::string("top") + std::to_string(k))] = partial / total;
+        }
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -1297,5 +1322,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("dtw_matrix", &dtw_matrix_native, py::arg("a"), py::arg("b"));
     m.def("dbscan", &dbscan_native, py::arg("points"), py::arg("eps") = 0.5, py::arg("min_samples") = 5);
     m.def("cusum_detect", &cusum_detect_native, py::arg("x"), py::arg("threshold"), py::arg("mean"), py::arg("sigma"), py::arg("k"));
+    m.def("rom_energy_spectrum", &rom_energy_spectrum_native, py::arg("singular_values"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

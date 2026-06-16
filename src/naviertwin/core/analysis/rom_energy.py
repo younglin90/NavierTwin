@@ -14,6 +14,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def energy_retention(singular_values: NDArray[np.float64]) -> NDArray[np.float64]:
     """에너지 누적 비율 (σ² 기준). 길이=n_modes."""
@@ -45,13 +50,7 @@ def scree_elbow(singular_values: NDArray[np.float64]) -> int:
 def energy_spectrum(singular_values: NDArray[np.float64]) -> dict[str, float]:
     """전체 / top-1 / top-3 / top-10 에너지 보존율."""
     sv = np.asarray(singular_values, dtype=np.float64).ravel()
-    e = sv ** 2
-    total = float(np.sum(e) + 1e-30)
-    out = {"total": 1.0}
-    for k in (1, 3, 5, 10, 20):
-        if k <= sv.size:
-            out[f"top{k}"] = float(np.sum(e[:k]) / total)
-    return out
+    return _kernels.rom_energy_spectrum(sv)
 
 
 __all__ = [
