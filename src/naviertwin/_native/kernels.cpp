@@ -1966,6 +1966,31 @@ static py::dict mesh_quality_report_native(ArrayD points, ArrayI simplices) {
     return out;
 }
 
+static py::dict order_table_native(ArrayD h, ArrayD err) {
+    if (h.ndim() != 1 || err.ndim() != 1 || h.shape(0) != err.shape(0)) {
+        throw std::invalid_argument("h and err must be matching 1D arrays");
+    }
+    const py::ssize_t n = h.shape(0);
+    const double* hp = h.data();
+    const double* ep = err.data();
+    py::list h_list;
+    py::list err_list;
+    py::list p_pair;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        h_list.append(hp[i]);
+        err_list.append(ep[i]);
+    }
+    for (py::ssize_t i = 0; i < n - 1; ++i) {
+        const double p = std::log(ep[i] / ep[i + 1]) / std::log(hp[i] / hp[i + 1]);
+        p_pair.append(p);
+    }
+    py::dict out;
+    out["h"] = h_list;
+    out["err"] = err_list;
+    out["p_pair"] = p_pair;
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -2027,5 +2052,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("mesh_coarsen_by_tolerance", &mesh_coarsen_by_tolerance, py::arg("x"), py::arg("f"), py::arg("tol") = 1e-3);
     m.def("laplacian_smooth", &laplacian_smooth_native, py::arg("verts"), py::arg("edges"), py::arg("n_iter"), py::arg("alpha"), py::arg("fixed"));
     m.def("mesh_quality_report", &mesh_quality_report_native, py::arg("points"), py::arg("simplices"));
+    m.def("order_table", &order_table_native, py::arg("h"), py::arg("err"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

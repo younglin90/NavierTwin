@@ -15,17 +15,21 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def order_table(
     h: NDArray[np.float64], err: NDArray[np.float64],
 ) -> dict:
-    h = np.asarray(h, dtype=np.float64)
-    err = np.asarray(err, dtype=np.float64)
-    p_pair = []
-    for i in range(len(h) - 1):
-        p = float(np.log(err[i] / err[i + 1]) / np.log(h[i] / h[i + 1]))
-        p_pair.append(p)
-    return {"h": h.tolist(), "err": err.tolist(), "p_pair": p_pair}
+    return dict(
+        _kernels.order_table(
+            np.asarray(h, dtype=np.float64),
+            np.asarray(err, dtype=np.float64),
+        ),
+    )
 
 
 __all__ = ["order_table"]
