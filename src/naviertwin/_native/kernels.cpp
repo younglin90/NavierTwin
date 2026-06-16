@@ -937,6 +937,135 @@ static py::array_t<double> thomas_solve_native(ArrayD a, ArrayD b, ArrayD c, Arr
     return vector_to_numpy(x);
 }
 
+static double dense_residual_norm(const double* a, py::ssize_t n, const std::vector<double>& x, const std::vector<double>& b) {
+    std::vector<double> ax = matvec(a, n, x);
+    double total = 0.0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const double ri = ax[static_cast<std::size_t>(i)] - b[static_cast<std::size_t>(i)];
+        total += ri * ri;
+    }
+    return std::sqrt(total);
+}
+
+static py::tuple jacobi_dense_native(ArrayD a, ArrayD b, ArrayD x0, int max_iter, double tol) {
+    check_square_matrix(a);
+    const py::ssize_t n = a.shape(0);
+    std::vector<double> rhs = contiguous_vector(b, n, "b");
+    std::vector<double> x = contiguous_vector(x0, n, "x0");
+    const double* ap = a.data();
+    std::vector<double> d(static_cast<std::size_t>(n), 0.0);
+    for (py::ssize_t i = 0; i < n; ++i) {
+        d[static_cast<std::size_t>(i)] = ap[i * n + i];
+        if (d[static_cast<std::size_t>(i)] == 0.0) {
+            throw std::invalid_argument("zero diagonal");
+        }
+    }
+    std::vector<double> x_new(static_cast<std::size_t>(n), 0.0);
+    bool converged = false;
+    int iter_count = max_iter;
+    double residual = dense_residual_norm(ap, n, x, rhs);
+    for (int iter = 0; iter < max_iter; ++iter) {
+        for (py::ssize_t row = 0; row < n; ++row) {
+            double offdiag = 0.0;
+            for (py::ssize_t col = 0; col < n; ++col) {
+                if (col != row) {
+                    offdiag += ap[row * n + col] * x[static_cast<std::size_t>(col)];
+                }
+            }
+            x_new[static_cast<std::size_t>(row)] = (rhs[static_cast<std::size_t>(row)] - offdiag) / d[static_cast<std::size_t>(row)];
+        }
+        x = x_new;
+        residual = dense_residual_norm(ap, n, x, rhs);
+        if (residual < tol) {
+            converged = true;
+            iter_count = iter + 1;
+            break;
+        }
+    }
+    py::dict info;
+    info["iters"] = iter_count;
+    info["residual"] = residual;
+    info["converged"] = converged;
+    return py::make_tuple(vector_to_numpy(x), info);
+}
+
+static py::tuple gauss_seidel_dense_native(ArrayD a, ArrayD b, ArrayD x0, int max_iter, double tol) {
+    check_square_matrix(a);
+    const py::ssize_t n = a.shape(0);
+    std::vector<double> rhs = contiguous_vector(b, n, "b");
+    std::vector<double> x = contiguous_vector(x0, n, "x0");
+    const double* ap = a.data();
+    bool converged = false;
+    int iter_count = max_iter;
+    double residual = dense_residual_norm(ap, n, x, rhs);
+    for (int iter = 0; iter < max_iter; ++iter) {
+        for (py::ssize_t row = 0; row < n; ++row) {
+            double s = rhs[static_cast<std::size_t>(row)];
+            for (py::ssize_t col = 0; col < row; ++col) {
+                s -= ap[row * n + col] * x[static_cast<std::size_t>(col)];
+            }
+            for (py::ssize_t col = row + 1; col < n; ++col) {
+                s -= ap[row * n + col] * x[static_cast<std::size_t>(col)];
+            }
+            x[static_cast<std::size_t>(row)] = s / ap[row * n + row];
+        }
+        residual = dense_residual_norm(ap, n, x, rhs);
+        if (residual < tol) {
+            converged = true;
+            iter_count = iter + 1;
+            break;
+        }
+    }
+    py::dict info;
+    info["iters"] = iter_count;
+    info["residual"] = residual;
+    info["converged"] = converged;
+    return py::make_tuple(vector_to_numpy(x), info);
+}
+
+static py::tuple conjugate_gradient_dense_native(ArrayD a, ArrayD b, ArrayD x0, int max_iter, double tol) {
+    check_square_matrix(a);
+    const py::ssize_t n = a.shape(0);
+    std::vector<double> rhs = contiguous_vector(b, n, "b");
+    std::vector<double> x = contiguous_vector(x0, n, "x0");
+    const double* ap = a.data();
+    std::vector<double> ax = matvec(ap, n, x);
+    std::vector<double> r(static_cast<std::size_t>(n), 0.0);
+    for (py::ssize_t i = 0; i < n; ++i) {
+        r[static_cast<std::size_t>(i)] = rhs[static_cast<std::size_t>(i)] - ax[static_cast<std::size_t>(i)];
+    }
+    std::vector<double> p = r;
+    double rs_old = dot(r, r);
+    double residual = std::sqrt(rs_old);
+    bool converged = false;
+    int iter_count = max_iter;
+    for (int iter = 0; iter < max_iter; ++iter) {
+        std::vector<double> ap_vec = matvec(ap, n, p);
+        const double alpha = rs_old / (dot(p, ap_vec) + 1e-30);
+        for (py::ssize_t i = 0; i < n; ++i) {
+            x[static_cast<std::size_t>(i)] += alpha * p[static_cast<std::size_t>(i)];
+            r[static_cast<std::size_t>(i)] -= alpha * ap_vec[static_cast<std::size_t>(i)];
+        }
+        const double rs_new = dot(r, r);
+        residual = std::sqrt(rs_new);
+        if (residual < tol) {
+            converged = true;
+            iter_count = iter + 1;
+            break;
+        }
+        const double beta = rs_new / rs_old;
+        for (py::ssize_t i = 0; i < n; ++i) {
+            p[static_cast<std::size_t>(i)] = r[static_cast<std::size_t>(i)] + beta * p[static_cast<std::size_t>(i)];
+        }
+        rs_old = rs_new;
+    }
+    py::dict info;
+    info["iters"] = iter_count;
+    info["residual"] = residual;
+    info["converged"] = converged;
+    return py::make_tuple(vector_to_numpy(x), info);
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -971,5 +1100,8 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("pcg_jacobi", &pcg_jacobi_native, py::arg("A"), py::arg("b"), py::arg("x0"), py::arg("max_iter"), py::arg("tol"));
     m.def("bicgstab_dense", &bicgstab_dense_native, py::arg("A"), py::arg("b"), py::arg("x0"), py::arg("max_iter"), py::arg("tol"));
     m.def("thomas_solve", &thomas_solve_native, py::arg("a"), py::arg("b"), py::arg("c"), py::arg("d"));
+    m.def("jacobi_dense", &jacobi_dense_native, py::arg("A"), py::arg("b"), py::arg("x0"), py::arg("max_iter"), py::arg("tol"));
+    m.def("gauss_seidel_dense", &gauss_seidel_dense_native, py::arg("A"), py::arg("b"), py::arg("x0"), py::arg("max_iter"), py::arg("tol"));
+    m.def("conjugate_gradient_dense", &conjugate_gradient_dense_native, py::arg("A"), py::arg("b"), py::arg("x0"), py::arg("max_iter"), py::arg("tol"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
