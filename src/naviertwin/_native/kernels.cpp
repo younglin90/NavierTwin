@@ -1280,6 +1280,34 @@ static py::dict rom_energy_spectrum_native(ArrayD singular_values) {
     return out;
 }
 
+static py::array_t<double> radial_energy_sum(ArrayD k_values, ArrayD energy, ArrayD edges) {
+    if (k_values.ndim() != 2 || energy.ndim() != 2 || edges.ndim() != 1) {
+        throw std::invalid_argument("K and energy must be 2D, edges must be 1D");
+    }
+    if (k_values.shape(0) != energy.shape(0) || k_values.shape(1) != energy.shape(1)) {
+        throw std::invalid_argument("K and energy shapes must match");
+    }
+    const py::ssize_t bins = edges.shape(0) - 1;
+    auto out = py::array_t<double>({bins});
+    const double* kp = k_values.data();
+    const double* ep = energy.data();
+    const double* edp = edges.data();
+    double* op = out.mutable_data();
+    std::fill(op, op + bins, 0.0);
+    const py::ssize_t total = k_values.shape(0) * k_values.shape(1);
+    for (py::ssize_t idx = 0; idx < total; ++idx) {
+        const double kval = kp[idx];
+        const double eval = ep[idx];
+        for (py::ssize_t bin = 0; bin < bins; ++bin) {
+            if (kval >= edp[bin] && kval < edp[bin + 1]) {
+                op[bin] += eval;
+                break;
+            }
+        }
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -1323,5 +1351,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("dbscan", &dbscan_native, py::arg("points"), py::arg("eps") = 0.5, py::arg("min_samples") = 5);
     m.def("cusum_detect", &cusum_detect_native, py::arg("x"), py::arg("threshold"), py::arg("mean"), py::arg("sigma"), py::arg("k"));
     m.def("rom_energy_spectrum", &rom_energy_spectrum_native, py::arg("singular_values"));
+    m.def("radial_energy_sum", &radial_energy_sum, py::arg("K"), py::arg("energy"), py::arg("edges"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

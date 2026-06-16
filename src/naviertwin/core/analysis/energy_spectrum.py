@@ -16,6 +16,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def energy_spectrum_1d(
     u: NDArray[np.float64], L: float = 1.0,
@@ -49,11 +54,7 @@ def energy_spectrum_2d_radial(
     k_max = K.max()
     edges = np.linspace(0, k_max, n_bins + 1)
     centers = 0.5 * (edges[:-1] + edges[1:])
-    E_radial = np.zeros(n_bins)
-    for i in range(n_bins):
-        mask = (K >= edges[i]) & (K < edges[i + 1])
-        if mask.any():
-            E_radial[i] = Ek[mask].sum()
+    E_radial = np.asarray(_kernels.radial_energy_sum(K, Ek, edges), dtype=np.float64)
     return centers, E_radial
 
 
