@@ -826,6 +826,90 @@ static py::tuple pcg_jacobi_native(ArrayD a, ArrayD b, ArrayD x0, int max_iter, 
     return py::make_tuple(vector_to_numpy(x), info);
 }
 
+static py::tuple bicgstab_dense_native(ArrayD a, ArrayD b, ArrayD x0, int max_iter, double tol) {
+    check_square_matrix(a);
+    const py::ssize_t n = a.shape(0);
+    std::vector<double> rhs = contiguous_vector(b, n, "b");
+    std::vector<double> x = contiguous_vector(x0, n, "x0");
+    const double* ap = a.data();
+
+    std::vector<double> ax = matvec(ap, n, x);
+    std::vector<double> r(static_cast<std::size_t>(n), 0.0);
+    for (py::ssize_t i = 0; i < n; ++i) {
+        r[static_cast<std::size_t>(i)] = rhs[static_cast<std::size_t>(i)] - ax[static_cast<std::size_t>(i)];
+    }
+    std::vector<double> r_hat = r;
+    double rho_prev = 1.0;
+    double alpha = 1.0;
+    double omega = 1.0;
+    std::vector<double> v(static_cast<std::size_t>(n), 0.0);
+    std::vector<double> p(static_cast<std::size_t>(n), 0.0);
+    int iter_count = max_iter;
+    bool converged = false;
+    double residual = vec_norm(r);
+
+    for (int iter = 0; iter < max_iter; ++iter) {
+        const double rho = dot(r_hat, r);
+        if (std::abs(rho) < 1e-30) {
+            break;
+        }
+        const double beta = (rho / rho_prev) * (alpha / (omega + 1e-30));
+        for (py::ssize_t i = 0; i < n; ++i) {
+            p[static_cast<std::size_t>(i)] =
+                r[static_cast<std::size_t>(i)] +
+                beta * (p[static_cast<std::size_t>(i)] - omega * v[static_cast<std::size_t>(i)]);
+        }
+        std::vector<double> y = p;
+        v = matvec(ap, n, y);
+        alpha = rho / (dot(r_hat, v) + 1e-30);
+        std::vector<double> s(static_cast<std::size_t>(n), 0.0);
+        for (py::ssize_t i = 0; i < n; ++i) {
+            s[static_cast<std::size_t>(i)] = r[static_cast<std::size_t>(i)] - alpha * v[static_cast<std::size_t>(i)];
+        }
+        if (vec_norm(s) < tol) {
+            for (py::ssize_t i = 0; i < n; ++i) {
+                x[static_cast<std::size_t>(i)] += alpha * y[static_cast<std::size_t>(i)];
+            }
+            std::vector<double> new_ax = matvec(ap, n, x);
+            for (py::ssize_t i = 0; i < n; ++i) {
+                r[static_cast<std::size_t>(i)] = rhs[static_cast<std::size_t>(i)] - new_ax[static_cast<std::size_t>(i)];
+            }
+            residual = vec_norm(r);
+            iter_count = iter + 1;
+            converged = true;
+            break;
+        }
+        std::vector<double> z = s;
+        std::vector<double> t = matvec(ap, n, z);
+        omega = dot(t, s) / (dot(t, t) + 1e-30);
+        for (py::ssize_t i = 0; i < n; ++i) {
+            x[static_cast<std::size_t>(i)] += alpha * y[static_cast<std::size_t>(i)] + omega * z[static_cast<std::size_t>(i)];
+            r[static_cast<std::size_t>(i)] = s[static_cast<std::size_t>(i)] - omega * t[static_cast<std::size_t>(i)];
+        }
+        residual = vec_norm(r);
+        if (residual < tol) {
+            iter_count = iter + 1;
+            converged = true;
+            break;
+        }
+        rho_prev = rho;
+    }
+
+    if (!converged) {
+        std::vector<double> new_ax = matvec(ap, n, x);
+        for (py::ssize_t i = 0; i < n; ++i) {
+            r[static_cast<std::size_t>(i)] = rhs[static_cast<std::size_t>(i)] - new_ax[static_cast<std::size_t>(i)];
+        }
+        residual = vec_norm(r);
+    }
+
+    py::dict info;
+    info["iters"] = iter_count;
+    info["residual"] = residual;
+    info["converged"] = converged;
+    return py::make_tuple(vector_to_numpy(x), info);
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -858,5 +942,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("power_iteration", &power_iteration_native, py::arg("A"), py::arg("n_iter"), py::arg("x0"), py::arg("tol"));
     m.def("inverse_power", &inverse_power_native, py::arg("A"), py::arg("shift"), py::arg("n_iter"), py::arg("x0"));
     m.def("pcg_jacobi", &pcg_jacobi_native, py::arg("A"), py::arg("b"), py::arg("x0"), py::arg("max_iter"), py::arg("tol"));
+    m.def("bicgstab_dense", &bicgstab_dense_native, py::arg("A"), py::arg("b"), py::arg("x0"), py::arg("max_iter"), py::arg("tol"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
