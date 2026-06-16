@@ -1440,6 +1440,27 @@ static py::array_t<double> vof_step_1d(ArrayD alpha, ArrayD u, double dt, double
     return out;
 }
 
+static inline double jensen_wake_velocity(double v0, double x, double r, double a, double k) {
+    if (x <= 0.0) {
+        return v0;
+    }
+    const double denom = 1.0 + k * x / r;
+    const double deficit = 2.0 * a / (denom * denom);
+    return v0 * (1.0 - deficit);
+}
+
+static py::list jensen_farm_velocity(double v0, py::sequence distances, double r, double a, double k) {
+    py::list out;
+    out.append(v0);
+    double current = v0;
+    const auto n = py::len(distances);
+    for (py::size_t i = 0; i < n; ++i) {
+        current = jensen_wake_velocity(current, py::cast<double>(distances[i]), r, a, k);
+        out.append(current);
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -1489,5 +1510,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("sph_density_1d", &sph_density_1d, py::arg("positions"), py::arg("masses"), py::arg("h") = 1.0);
     m.def("reaction_rate", &reaction_rate_native, py::arg("k"), py::arg("concentrations"), py::arg("orders"));
     m.def("vof_step_1d", &vof_step_1d, py::arg("alpha"), py::arg("u"), py::arg("dt"), py::arg("dx"));
+    m.def("jensen_farm_velocity", &jensen_farm_velocity, py::arg("V0"), py::arg("distances"), py::arg("R"), py::arg("a") = 0.3, py::arg("k") = 0.04);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
