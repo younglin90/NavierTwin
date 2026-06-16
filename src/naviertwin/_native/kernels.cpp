@@ -1670,6 +1670,53 @@ static py::tuple poisson_2d_jacobi_native(Array2D f, double dx, double dy, int m
     return py::make_tuple(out, info);
 }
 
+static py::array_t<double> levelset_reinit_1d(ArrayD phi, double dx, int n_iter) {
+    if (phi.ndim() != 1) {
+        throw std::invalid_argument("phi must be a 1D array");
+    }
+    if (dx == 0.0) {
+        throw std::invalid_argument("dx must be non-zero");
+    }
+    if (n_iter < 0) {
+        throw std::invalid_argument("n_iter must be non-negative");
+    }
+    const py::ssize_t n = phi.shape(0);
+    const double* phip = phi.data();
+    std::vector<double> p(static_cast<std::size_t>(n));
+    std::vector<double> p_new(static_cast<std::size_t>(n));
+    std::vector<double> s0(static_cast<std::size_t>(n));
+    for (py::ssize_t i = 0; i < n; ++i) {
+        p[static_cast<std::size_t>(i)] = phip[i];
+        s0[static_cast<std::size_t>(i)] = (phip[i] > 0.0) ? 1.0 : ((phip[i] < 0.0) ? -1.0 : 0.0);
+    }
+    const double dt = 0.3 * dx;
+    for (int iter = 0; iter < n_iter; ++iter) {
+        for (py::ssize_t i = 0; i < n; ++i) {
+            const double dxp = (i == n - 1) ? 0.0 : (p[static_cast<std::size_t>(i + 1)] - p[static_cast<std::size_t>(i)]) / dx;
+            const double dxm = (i == 0) ? 0.0 : (p[static_cast<std::size_t>(i)] - p[static_cast<std::size_t>(i - 1)]) / dx;
+            double gp;
+            if (s0[static_cast<std::size_t>(i)] > 0.0) {
+                const double a = std::max(dxm, 0.0);
+                const double b = std::min(dxp, 0.0);
+                gp = std::max(a * a, b * b);
+            } else {
+                const double a = std::max(dxp, 0.0);
+                const double b = std::min(dxm, 0.0);
+                gp = std::max(a * a, b * b);
+            }
+            const double grad = std::sqrt(gp);
+            p_new[static_cast<std::size_t>(i)] = p[static_cast<std::size_t>(i)] - dt * s0[static_cast<std::size_t>(i)] * (grad - 1.0);
+        }
+        p.swap(p_new);
+    }
+    auto out = py::array_t<double>({n});
+    double* op = out.mutable_data();
+    for (py::ssize_t i = 0; i < n; ++i) {
+        op[i] = p[static_cast<std::size_t>(i)];
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -1725,5 +1772,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("fd_heat_1d_evolve", &fd_heat_1d_evolve, py::arg("u0"), py::arg("n_steps"), py::arg("coef"), py::arg("dt"));
     m.def("fd_burgers_1d_evolve", &fd_burgers_1d_evolve, py::arg("u0"), py::arg("n_steps"), py::arg("dt"), py::arg("dx"), py::arg("nu"));
     m.def("poisson_2d_jacobi", &poisson_2d_jacobi_native, py::arg("f"), py::arg("dx") = 1.0, py::arg("dy") = 1.0, py::arg("max_iter") = 5000, py::arg("tol") = 1e-6);
+    m.def("levelset_reinit_1d", &levelset_reinit_1d, py::arg("phi"), py::arg("dx") = 1.0, py::arg("n_iter") = 30);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

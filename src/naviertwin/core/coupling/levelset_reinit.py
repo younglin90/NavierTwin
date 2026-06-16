@@ -16,26 +16,20 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def reinit_1d(
     phi: NDArray[np.float64], *, dx: float = 1.0, n_iter: int = 30,
 ) -> NDArray[np.float64]:
-    p = np.asarray(phi, dtype=np.float64).copy()
-    p0 = p.copy()
-    s0 = np.sign(p0)
-    dt = 0.3 * dx
-    for _ in range(n_iter):
-        # |grad phi| via central, with godunov-like sign-aware:
-        dxp = (np.roll(p, -1) - p) / dx
-        dxm = (p - np.roll(p, 1)) / dx
-        dxp[-1] = 0
-        dxm[0] = 0
-        gp = np.where(s0 > 0,
-                      np.maximum(np.maximum(dxm, 0) ** 2, np.minimum(dxp, 0) ** 2),
-                      np.maximum(np.maximum(dxp, 0) ** 2, np.minimum(dxm, 0) ** 2))
-        grad = np.sqrt(gp)
-        p = p - dt * s0 * (grad - 1.0)
-    return p
+    return _kernels.levelset_reinit_1d(
+        np.asarray(phi, dtype=np.float64),
+        float(dx),
+        int(n_iter),
+    )
 
 
 __all__ = ["reinit_1d"]
