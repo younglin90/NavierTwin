@@ -19,6 +19,11 @@ from collections.abc import Callable
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def imex_rk2_step(
     u: NDArray[np.float64],
@@ -36,8 +41,9 @@ def imex_rk2_step(
     delta = 1.0 - 1.0 / (2.0 * gamma)
 
     # Stage 1: U1 = u + dt γ L U1 + dt γ f_E(u)
+    implicit_matrix = Im - dt * gamma * L
     rhs1 = u + dt * gamma * f_explicit(u)
-    U1 = np.linalg.solve(Im - dt * gamma * L, rhs1)
+    U1 = np.asarray(_kernels.solve_square(implicit_matrix, rhs1), dtype=np.float64)
 
     # Stage 2:
     # U2 = u + dt δ L U1 + dt γ L U2 + dt [(1-γ) f_E(U1) - δ f_E(u)] -- ARS variant
@@ -47,7 +53,7 @@ def imex_rk2_step(
     rhs2 = u + dt * delta * (L @ U1) + dt * ((1 - gamma) * fe_1 + (1 - delta - (1 - gamma)) * fe_u)
     # simpler: stable Runge-Kutta:  u_new = u + dt*( (1-γ)*L@U1 + γ*L@U_new + (1-γ)*f_E(U1) + γ*f_E(u) )
     rhs2 = u + dt * (1 - gamma) * (L @ U1) + dt * ((1 - gamma) * fe_1 + gamma * fe_u)
-    u_new = np.linalg.solve(Im - dt * gamma * L, rhs2)
+    u_new = np.asarray(_kernels.solve_square(implicit_matrix, rhs2), dtype=np.float64)
     return u_new
 
 
