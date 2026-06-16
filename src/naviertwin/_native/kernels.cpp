@@ -767,6 +767,65 @@ static py::tuple inverse_power_native(ArrayD a, double shift, int n_iter, ArrayD
     return py::make_tuple(lam, vector_to_numpy(x));
 }
 
+static py::tuple pcg_jacobi_native(ArrayD a, ArrayD b, ArrayD x0, int max_iter, double tol) {
+    check_square_matrix(a);
+    const py::ssize_t n = a.shape(0);
+    std::vector<double> rhs = contiguous_vector(b, n, "b");
+    std::vector<double> x = contiguous_vector(x0, n, "x0");
+    const double* ap = a.data();
+    std::vector<double> inv_d(static_cast<std::size_t>(n), 0.0);
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const double d = ap[i * n + i];
+        if (d == 0.0) {
+            throw std::invalid_argument("zero diagonal");
+        }
+        inv_d[static_cast<std::size_t>(i)] = 1.0 / d;
+    }
+
+    std::vector<double> ax = matvec(ap, n, x);
+    std::vector<double> r(static_cast<std::size_t>(n), 0.0);
+    std::vector<double> z(static_cast<std::size_t>(n), 0.0);
+    for (py::ssize_t i = 0; i < n; ++i) {
+        r[static_cast<std::size_t>(i)] = rhs[static_cast<std::size_t>(i)] - ax[static_cast<std::size_t>(i)];
+        z[static_cast<std::size_t>(i)] = inv_d[static_cast<std::size_t>(i)] * r[static_cast<std::size_t>(i)];
+    }
+    std::vector<double> p = z;
+    double rz = dot(r, z);
+    int iter_count = max_iter;
+    bool converged = false;
+    double residual = vec_norm(r);
+
+    for (int iter = 0; iter < max_iter; ++iter) {
+        std::vector<double> ap_vec = matvec(ap, n, p);
+        const double alpha = rz / (dot(p, ap_vec) + 1e-30);
+        for (py::ssize_t i = 0; i < n; ++i) {
+            x[static_cast<std::size_t>(i)] += alpha * p[static_cast<std::size_t>(i)];
+            r[static_cast<std::size_t>(i)] -= alpha * ap_vec[static_cast<std::size_t>(i)];
+        }
+        residual = vec_norm(r);
+        if (residual < tol) {
+            iter_count = iter + 1;
+            converged = true;
+            break;
+        }
+        for (py::ssize_t i = 0; i < n; ++i) {
+            z[static_cast<std::size_t>(i)] = inv_d[static_cast<std::size_t>(i)] * r[static_cast<std::size_t>(i)];
+        }
+        const double rz_new = dot(r, z);
+        const double beta = rz_new / rz;
+        for (py::ssize_t i = 0; i < n; ++i) {
+            p[static_cast<std::size_t>(i)] = z[static_cast<std::size_t>(i)] + beta * p[static_cast<std::size_t>(i)];
+        }
+        rz = rz_new;
+    }
+
+    py::dict info;
+    info["iters"] = iter_count;
+    info["residual"] = residual;
+    info["converged"] = converged;
+    return py::make_tuple(vector_to_numpy(x), info);
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -798,5 +857,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("determinant_batch", &determinant_batch, py::arg("A"));
     m.def("power_iteration", &power_iteration_native, py::arg("A"), py::arg("n_iter"), py::arg("x0"), py::arg("tol"));
     m.def("inverse_power", &inverse_power_native, py::arg("A"), py::arg("shift"), py::arg("n_iter"), py::arg("x0"));
+    m.def("pcg_jacobi", &pcg_jacobi_native, py::arg("A"), py::arg("b"), py::arg("x0"), py::arg("max_iter"), py::arg("tol"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
