@@ -1362,6 +1362,41 @@ static py::array_t<double> deposit_cic_1d(ArrayD x, ArrayD weights, int n_grid, 
     return out;
 }
 
+static inline double cubic_spline_1d_value(double r, double h) {
+    const double q = std::abs(r) / h;
+    const double sigma = 2.0 / 3.0 / h;
+    if (q < 1.0) {
+        return sigma * (1.0 - 1.5 * q * q + 0.75 * q * q * q);
+    }
+    if (q < 2.0) {
+        const double d = 2.0 - q;
+        return sigma * 0.25 * d * d * d;
+    }
+    return 0.0;
+}
+
+static py::array_t<double> sph_density_1d(ArrayD positions, ArrayD masses, double h) {
+    if (positions.ndim() != 1 || masses.ndim() != 1 || positions.shape(0) != masses.shape(0)) {
+        throw std::invalid_argument("positions and masses must be matching 1D arrays");
+    }
+    if (h == 0.0) {
+        throw std::invalid_argument("h must be non-zero");
+    }
+    const py::ssize_t n = positions.shape(0);
+    auto out = py::array_t<double>({n});
+    const double* pp = positions.data();
+    const double* mp = masses.data();
+    double* op = out.mutable_data();
+    for (py::ssize_t i = 0; i < n; ++i) {
+        double rho = 0.0;
+        for (py::ssize_t j = 0; j < n; ++j) {
+            rho += mp[j] * cubic_spline_1d_value(pp[j] - pp[i], h);
+        }
+        op[i] = rho;
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -1408,5 +1443,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("radial_energy_sum", &radial_energy_sum, py::arg("K"), py::arg("energy"), py::arg("edges"));
     m.def("dominant_frequencies_from_power", &dominant_frequencies_from_power, py::arg("freqs"), py::arg("power"), py::arg("top_k"));
     m.def("deposit_cic_1d", &deposit_cic_1d, py::arg("x"), py::arg("weights"), py::arg("n_grid"), py::arg("dx") = 1.0, py::arg("x0") = 0.0);
+    m.def("sph_density_1d", &sph_density_1d, py::arg("positions"), py::arg("masses"), py::arg("h") = 1.0);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

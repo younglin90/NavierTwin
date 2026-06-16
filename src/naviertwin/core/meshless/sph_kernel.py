@@ -13,6 +13,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def cubic_spline_1d(r: float | NDArray[np.float64], *, h: float = 1.0) -> NDArray[np.float64]:
     """Monaghan 1992 1D cubic-spline kernel (sigma_1D = 2/3)."""
@@ -27,14 +32,16 @@ def cubic_spline_1d(r: float | NDArray[np.float64], *, h: float = 1.0) -> NDArra
 
 
 def density_1d(
-    positions: NDArray[np.float64], masses: NDArray[np.float64], *, h: float = 1.0,
+    positions: NDArray[np.float64],
+    masses: NDArray[np.float64],
+    *,
+    h: float = 1.0,
 ) -> NDArray[np.float64]:
-    p = np.asarray(positions, dtype=np.float64)
-    m = np.asarray(masses, dtype=np.float64)
-    rho = np.zeros_like(p)
-    for i, xi in enumerate(p):
-        rho[i] = float(np.sum(m * cubic_spline_1d(p - xi, h=h)))
-    return rho
+    return _kernels.sph_density_1d(
+        np.asarray(positions, dtype=np.float64),
+        np.asarray(masses, dtype=np.float64),
+        float(h),
+    )
 
 
 __all__ = ["cubic_spline_1d", "density_1d"]
