@@ -14,17 +14,17 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
 
 def decompose_J_3x3(
     J: NDArray[np.float64],
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     """J = S + Ω, S = (J + Jᵀ)/2, Ω = (J - Jᵀ)/2."""
     J = np.asarray(J, dtype=np.float64)
-    if J.shape != (3, 3):
-        raise ValueError("3x3 expected")
-    S = 0.5 * (J + J.T)
-    W = 0.5 * (J - J.T)
-    return S, W
+    if _kernels is None:
+        raise ImportError("decompose_J_3x3 requires the NavierTwin C++ native kernels")
+    return _kernels.decompose_j_3x3(J)
 
 
 def invariants_3x3(J: NDArray[np.float64]) -> dict[str, float]:
@@ -33,10 +33,9 @@ def invariants_3x3(J: NDArray[np.float64]) -> dict[str, float]:
     P = -tr J, Q = ½(P² - tr(J²)), R = -det J.
     """
     J = np.asarray(J, dtype=np.float64)
-    P = -float(np.trace(J))
-    Q = 0.5 * (P ** 2 - float(np.trace(J @ J)))
-    R = -float(np.linalg.det(J))
-    return {"P": P, "Q": Q, "R": R}
+    if _kernels is None:
+        raise ImportError("invariants_3x3 requires the NavierTwin C++ native kernels")
+    return dict(_kernels.invariants_3x3(J))
 
 
 def field_J_2d(
@@ -44,15 +43,9 @@ def field_J_2d(
     dx: float = 1.0, dy: float = 1.0,
 ) -> NDArray[np.float64]:
     """격자의 2D velocity gradient J (ny, nx, 2, 2)."""
-    du_dx = np.gradient(u, dx, axis=1)
-    du_dy = np.gradient(u, dy, axis=0)
-    dv_dx = np.gradient(v, dx, axis=1)
-    dv_dy = np.gradient(v, dy, axis=0)
-    J = np.stack([
-        np.stack([du_dx, du_dy], axis=-1),
-        np.stack([dv_dx, dv_dy], axis=-1),
-    ], axis=-2)
-    return J
+    if _kernels is None:
+        raise ImportError("field_J_2d requires the NavierTwin C++ native kernels")
+    return _kernels.field_j_2d(u, v, dx, dy)
 
 
 __all__ = ["decompose_J_3x3", "invariants_3x3", "field_J_2d"]

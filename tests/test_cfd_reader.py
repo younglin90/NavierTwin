@@ -146,6 +146,49 @@ def test_vtk_reader_stl(tmp_path: Path) -> None:
     assert dataset.n_points > 0
 
 
+def test_vtk_reader_pvd_time_series(tmp_path: Path) -> None:
+    """VTKReader 가 PVD 컬렉션을 time-series snapshot 행렬로 읽어야 한다."""
+    from naviertwin.core.cfd_reader.vtk_pvd_writer import write_pvd
+    from naviertwin.core.cfd_reader.vtk_reader import VTKReader
+
+    entries: list[tuple[float, str]] = []
+    for index, time_value in enumerate([0.0, 0.5, 1.0]):
+        mesh = _make_simple_ug()
+        n_points = mesh.n_points
+        mesh.point_data["p"] = np.full(n_points, index + 1, dtype=np.float32)
+        mesh.point_data["U"] = np.column_stack(
+            [
+                np.full(n_points, index + 1, dtype=np.float32),
+                np.zeros(n_points, dtype=np.float32),
+                np.zeros(n_points, dtype=np.float32),
+            ]
+        )
+        file_name = f"step_{index:04d}.vtu"
+        mesh.save(str(tmp_path / file_name))
+        entries.append((time_value, file_name))
+
+    pvd_path = tmp_path / "series.pvd"
+    write_pvd(pvd_path, entries)
+
+    dataset = VTKReader().read(pvd_path)
+
+    assert dataset.time_steps == pytest.approx([0.0, 0.5, 1.0])
+    assert dataset.n_time_steps == 3
+    assert "p" in dataset.field_names
+    assert "U" in dataset.field_names
+    assert dataset.metadata["time_series_locations"]["p"] == "point"
+
+    p_snapshots = dataset.extract_field_snapshots("p")
+    assert p_snapshots.shape == (n_points, 3)
+    np.testing.assert_allclose(p_snapshots[:, 0], np.ones(n_points))
+    np.testing.assert_allclose(p_snapshots[:, 1], np.full(n_points, 2.0))
+    np.testing.assert_allclose(p_snapshots[:, 2], np.full(n_points, 3.0))
+
+    u_snapshots = dataset.extract_field_snapshots("U")
+    assert u_snapshots.shape == (n_points, 3)
+    np.testing.assert_allclose(u_snapshots[:, 2], np.full(n_points, 3.0))
+
+
 # ---------------------------------------------------------------------------
 # 테스트: ReaderFactory
 # ---------------------------------------------------------------------------
@@ -204,6 +247,7 @@ def test_reader_factory_registered_extensions() -> None:
     exts = ReaderFactory.registered_extensions()
     assert ".vtu" in exts
     assert ".vtk" in exts
+    assert ".pvd" in exts
     assert ".stl" in exts
     assert ".foam" in exts
 

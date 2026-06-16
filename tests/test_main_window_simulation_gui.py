@@ -8,7 +8,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 
-def test_simulation_tab_present(qtbot) -> None:
+def test_simulation_is_not_a_workflow_tab(qtbot) -> None:
     from naviertwin.gui.main_window import MainWindow
 
     win = MainWindow(confirm_on_close=False)
@@ -16,25 +16,18 @@ def test_simulation_tab_present(qtbot) -> None:
 
     assert win._simulation_panel is not None
     tab_texts = [win._tabs.tabText(i) for i in range(win._tabs.count())]
-    assert any("Simulation" in text for text in tab_texts)
+    assert not any("Simulation" in text or "시뮬레이션" in text for text in tab_texts)
 
 
-def test_view_menu_switches_to_simulation_tab(qtbot) -> None:
+def test_library_route_reports_removed_simulation_tab(qtbot) -> None:
     from naviertwin.gui.main_window import MainWindow
 
     win = MainWindow(confirm_on_close=False)
     qtbot.addWidget(win)
-    assert win._simulation_panel is not None
-    sim_index = win._tabs.indexOf(win._simulation_panel)
-    assert sim_index >= 0
 
-    action = [
-        action for action in win._view_menu.actions()
-        if action.data() == sim_index
-    ][0]
-    action.trigger()
+    win._on_library_navigate("Simulation")
 
-    assert win._tabs.currentWidget() is win._simulation_panel
+    assert "제거" in win._status_label.text()
 
 
 def test_simulation_burgers_result_routes_to_viewer(qtbot) -> None:
@@ -43,7 +36,7 @@ def test_simulation_burgers_result_routes_to_viewer(qtbot) -> None:
     win = MainWindow(confirm_on_close=False)
     qtbot.addWidget(win)
     viewer = _CaptureViewer()
-    win._twin_panel._viewer = viewer
+    win._global_viewer = viewer
     result = {
         "U": np.zeros((3, 8), dtype=float),
         "summary": "burgers ok",
@@ -62,7 +55,7 @@ def test_simulation_lbm_result_routes_to_viewer(qtbot) -> None:
     win = MainWindow(confirm_on_close=False)
     qtbot.addWidget(win)
     viewer = _CaptureViewer()
-    win._twin_panel._viewer = viewer
+    win._global_viewer = viewer
     result = {
         "snapshots": np.zeros((2, 4, 5, 3), dtype=float),
         "summary": "lbm ok",

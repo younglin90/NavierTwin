@@ -1,6 +1,6 @@
 """CFD 파일 가져오기 패널.
 
-지원 포맷: OpenFOAM, VTK/VTU/VTP/STL/PLY, Fluent, CGNS, Gmsh, SU2.
+지원 포맷: OpenFOAM, VTK/VTU/VTP/PVD/STL/PLY, Fluent, CGNS, Gmsh, SU2.
 드래그앤드롭 및 파일 브라우저 지원.
 
 Signals:
@@ -36,7 +36,7 @@ from naviertwin.core.cfd_reader import ReaderFactory
 def supported_format_label() -> str:
     """고객에게 표시할 지원 포맷 요약을 반환한다."""
     return (
-        "지원 포맷: OpenFOAM, VTK/VTU/VTP/STL/PLY, "
+        "지원 포맷: OpenFOAM, VTK/VTU/VTP/PVD/STL/PLY, "
         "Fluent CAS/DAT, CGNS, Gmsh MSH, SU2"
     )
 
@@ -47,7 +47,7 @@ def cfd_file_filter() -> str:
     return (
         f"All Supported CFD ({registered});;"
         "OpenFOAM (*.foam *.OpenFOAM);;"
-        "VTK / PolyData (*.vtk *.vtu *.vtp *.stl *.ply);;"
+        "VTK / PolyData / Time-Series (*.vtk *.vtu *.vtp *.pvd *.stl *.ply);;"
         "Fluent (*.cas *.dat);;"
         "CGNS (*.cgns);;"
         "Gmsh (*.msh);;"
@@ -69,6 +69,8 @@ class ImportPanel(QWidget):
         super().__init__(parent)
         self._factory = ReaderFactory()
         self._current_path: Optional[Path] = None
+        self._case_paths: list[Path] = []
+        self._suppress_path_change_clear = False
         self._setup_ui()
         self.setAcceptDrops(True)
 
@@ -113,6 +115,15 @@ class ImportPanel(QWidget):
         path_row.addWidget(self._browse_dir_btn)
 
         path_layout.addLayout(path_row)
+
+        case_row = QHBoxLayout()
+        self._browse_cases_btn = QPushButton("다중 케이스 선택")
+        self._browse_cases_btn.clicked.connect(self._browse_cases)
+        case_row.addWidget(self._browse_cases_btn)
+        self._case_label = QLabel("다중 steady-state 케이스: 선택 안 됨")
+        self._case_label.setObjectName("subtitleLabel")
+        case_row.addWidget(self._case_label, stretch=1)
+        path_layout.addLayout(case_row)
 
         # 드래그앤드롭 안내
         dnd_label = QLabel("또는 파일/폴더를 여기에 드래그하세요")
@@ -215,12 +226,36 @@ class ImportPanel(QWidget):
         if path:
             self._path_edit.setText(path)
 
+    def _browse_cases(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "다중 CFD 케이스 선택",
+            "",
+            cfd_file_filter(),
+        )
+        if not paths:
+            return
+        self._case_paths = [Path(path) for path in paths]
+        self._current_path = self._case_paths[0]
+        self._suppress_path_change_clear = True
+        try:
+            self._path_edit.setText(str(self._current_path))
+        finally:
+            self._suppress_path_change_clear = False
+        self._case_label.setText(f"{len(self._case_paths)}개 케이스 선택됨")
+        self._preflight_btn.setEnabled(True)
+        self._load_btn.setEnabled(True)
+        self._log(f"다중 케이스 선택: {len(self._case_paths)} files")
+
     def _browse_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "OpenFOAM 케이스 디렉토리 선택")
         if path:
             self._path_edit.setText(path)
 
     def _on_path_changed(self, text: str) -> None:
+        if not self._suppress_path_change_clear:
+            self._case_paths = []
+            self._case_label.setText("다중 steady-state 케이스: 선택 안 됨")
         p = Path(text.strip())
         self._current_path = p if text.strip() else None
         has_path = bool(text.strip())
@@ -233,6 +268,8 @@ class ImportPanel(QWidget):
         self._log_text.clear()
         self._status_label.setText("파일을 선택하거나 드래그하세요.")
         self._current_path = None
+        self._case_paths = []
+        self._case_label.setText("다중 steady-state 케이스: 선택 안 됨")
         self._preflight_btn.setEnabled(False)
         self._load_btn.setEnabled(False)
 
@@ -261,12 +298,21 @@ class ImportPanel(QWidget):
         if self._current_path is None:
             return
         self._set_loading(True)
-        self._log("Loading: %s" % self._current_path)
+        if self._case_paths:
+            self._log("Loading representative case: %s" % self._current_path)
+            self._log("PhysicsNeMo case set: %d files" % len(self._case_paths))
+        else:
+            self._log("Loading: %s" % self._current_path)
         path = self._current_path
+        case_paths = list(self._case_paths)
 
         def _worker() -> None:
             try:
                 dataset = self._factory.create_and_read(path)
+                if case_paths:
+                    dataset.metadata["case_paths"] = [str(item) for item in case_paths]
+                    dataset.metadata["case_count"] = len(case_paths)
+                    dataset.metadata["case_representative"] = str(path)
                 self._on_load_success(dataset)
             except Exception as exc:
                 self._on_load_error(str(exc))
@@ -317,6 +363,7 @@ class ImportPanel(QWidget):
         self._load_btn.setEnabled(not loading)
         self._preflight_btn.setEnabled(not loading and self._current_path is not None)
         self._browse_file_btn.setEnabled(not loading)
+        self._browse_cases_btn.setEnabled(not loading)
         self._browse_dir_btn.setEnabled(not loading)
 
     def _populate_info(self, dataset: object) -> None:

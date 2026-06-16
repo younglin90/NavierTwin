@@ -24,10 +24,12 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QProcess, QUrl
+from PySide6.QtCore import QPoint, QProcess, QRect, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
+    QDockWidget,
     QFileDialog,
     QInputDialog,
     QLabel,
@@ -42,13 +44,15 @@ from PySide6.QtWidgets import (
 )
 
 from naviertwin import __version__
-from naviertwin.gui.panels.analyze_panel import AnalyzePanel
+from naviertwin.gui.panels.analyze_panel import AnalyzePanel, analysis_result_field
 from naviertwin.gui.panels.explainability_panel import ExplainabilityPanel
 from naviertwin.gui.panels.export_panel import ExportPanel
 from naviertwin.gui.panels.import_panel import ImportPanel
+from naviertwin.gui.panels.library_panel import LibraryPanel
 from naviertwin.gui.panels.model_panel import ModelPanel
 from naviertwin.gui.panels.reduce_panel import ReducePanel
 from naviertwin.gui.panels.twin_panel import TwinPanel
+from naviertwin.gui.widgets.pipeline_tabs import PipelineTabWidget
 from naviertwin.utils.config import NavierTwinConfig, load_config, save_config
 from naviertwin.utils.updater import UpdateCheckResult
 
@@ -142,6 +146,13 @@ class MainWindow(QMainWindow):
         self._setup_statusbar()
         self._connect_signals()
 
+        # Feature Pack 누락 자동 감지 + 첫 실행 시 사용자에게 안내.
+        # showEvent 직후 한 번만 동작하도록 QTimer.singleShot 사용.
+        from PySide6.QtCore import QTimer  # noqa: PLC0415
+
+        QTimer.singleShot(300, self._prompt_missing_feature_packs_once)
+        self._install_combo_close_fix()
+
     # ──────────────────────────────────────────────────────────────────
     # 초기화
     # ──────────────────────────────────────────────────────────────────
@@ -150,6 +161,18 @@ class MainWindow(QMainWindow):
         qss = _load_stylesheet(self._config.theme)
         QApplication.instance().setStyleSheet(qss)  # type: ignore[union-attr]
 
+    def _install_combo_close_fix(self) -> None:
+        """QSS 적용 후에도 QComboBox popup 이 클릭 선택 시 닫히도록 보정한다."""
+        from naviertwin.gui.utils.combo_fix import (
+            apply_to_widget_tree,
+            install_combo_close_filter,
+        )
+
+        app = QApplication.instance()
+        if app is not None:
+            install_combo_close_filter(app)
+        apply_to_widget_tree(self)
+
     def _setup_panels(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
@@ -157,9 +180,11 @@ class MainWindow(QMainWindow):
         vbox.setContentsMargins(0, 0, 0, 0)
         vbox.setSpacing(0)
 
-        self._tabs = QTabWidget()
+        self._tabs = PipelineTabWidget(max_columns=3)
         self._tabs.setDocumentMode(True)
         self._tabs.setTabPosition(QTabWidget.TabPosition.North)
+        self._tabs.setUsesScrollButtons(False)
+        self._tabs.setElideMode(Qt.TextElideMode.ElideRight)
 
         from naviertwin.utils.i18n import Translator
 
@@ -167,12 +192,13 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(self._t("app.title", "NavierTwin — CFD Digital Twin"))
 
         self._import_panel = ImportPanel()
-        self._analyze_panel = AnalyzePanel()
+        self._analyze_panel = AnalyzePanel(use_embedded_viewer=False)
         self._reduce_panel = ReducePanel()
         self._model_panel = ModelPanel()
         self._twin_panel = TwinPanel()
         self._export_panel = ExportPanel()
         self._explain_panel: ExplainabilityPanel | None = ExplainabilityPanel()
+        self._library_panel = LibraryPanel()
 
         # 모델 비교 대시보드 탭
         try:
@@ -198,35 +224,123 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001
             self._postproc_panel = None
 
+        self._analyze_workbench = self._build_analyze_workbench()
+        self._model_workbench = self._build_model_workbench()
+
         self._tab_title_specs: list[tuple[QWidget, str, str, str]] = [
             (self._import_panel, "panel.import", "①", "Import"),
-            (self._analyze_panel, "panel.analyze", "②", "Analyze"),
+            (self._analyze_workbench, "panel.analyze", "②", "Analyze"),
             (self._reduce_panel, "panel.reduce", "③", "Reduce"),
-            (self._model_panel, "panel.model", "④", "Model"),
+            (self._model_workbench, "panel.model", "④", "Model"),
             (self._twin_panel, "panel.twin", "⑤", "Twin"),
             (self._export_panel, "panel.export", "⑥", "Export"),
         ]
-        if self._compare_panel is not None:
-            self._tab_title_specs.append(
-                (self._compare_panel, "panel.compare", "⑦", "Compare")
-            )
-        if self._simulation_panel is not None:
-            self._tab_title_specs.append(
-                (self._simulation_panel, "panel.simulation", "⑧", "Simulation")
-            )
-        if self._explain_panel is not None:
-            self._tab_title_specs.append(
-                (self._explain_panel, "panel.explain", "⑨", "Explain")
-            )
-        if self._postproc_panel is not None:
-            self._tab_title_specs.append(
-                (self._postproc_panel, "panel.post_tools", "⑩", "Post-Tools")
-            )
 
         for widget, key, num, default in self._tab_title_specs:
             self._tabs.addTab(widget, self._localized_tab_title(key, num, default))
 
         vbox.addWidget(self._tabs)
+        self._setup_persistent_viewer()
+        self._setup_library_search_dialog()
+
+    def _build_analyze_workbench(self) -> QWidget:
+        """Analyze 탭 안에 분석 화면과 후처리 도구를 함께 배치한다."""
+        if self._postproc_panel is None:
+            return self._analyze_panel
+
+        workbench = QTabWidget()
+        workbench.setDocumentMode(True)
+        workbench.setObjectName("analyzeWorkbenchTabs")
+        workbench.addTab(self._analyze_panel, self._t("panel.analyze", "Analyze"))
+        workbench.addTab(self._postproc_panel, self._t("panel.post_tools", "Post-Tools"))
+        return workbench
+
+    def _build_model_workbench(self) -> QWidget:
+        """Model 탭 안에 모델링, 비교, 설명 화면을 함께 배치한다."""
+        if self._compare_panel is None and self._explain_panel is None:
+            return self._model_panel
+
+        workbench = QTabWidget()
+        workbench.setDocumentMode(True)
+        workbench.setObjectName("modelWorkbenchTabs")
+        workbench.addTab(self._model_panel, self._t("panel.model", "Model"))
+        if self._compare_panel is not None:
+            workbench.addTab(self._compare_panel, self._t("panel.compare", "Compare"))
+        if self._explain_panel is not None:
+            workbench.addTab(self._explain_panel, self._t("panel.explain", "Explain"))
+        return workbench
+
+    def _refresh_analyze_workbench_tabs(self) -> None:
+        """Analyze 내부 하위 탭도 현재 언어에 맞춰 갱신한다."""
+        if not isinstance(self._analyze_workbench, QTabWidget):
+            return
+
+        analyze_idx = self._analyze_workbench.indexOf(self._analyze_panel)
+        if analyze_idx >= 0:
+            self._analyze_workbench.setTabText(
+                analyze_idx,
+                self._t("panel.analyze", "Analyze"),
+            )
+        if self._postproc_panel is not None:
+            post_idx = self._analyze_workbench.indexOf(self._postproc_panel)
+            if post_idx >= 0:
+                self._analyze_workbench.setTabText(
+                    post_idx,
+                    self._t("panel.post_tools", "Post-Tools"),
+                )
+
+    def _refresh_model_workbench_tabs(self) -> None:
+        """Model 내부 하위 탭도 현재 언어에 맞춰 갱신한다."""
+        if not isinstance(self._model_workbench, QTabWidget):
+            return
+
+        model_idx = self._model_workbench.indexOf(self._model_panel)
+        if model_idx >= 0:
+            self._model_workbench.setTabText(
+                model_idx,
+                self._t("panel.model", "Model"),
+            )
+        if self._compare_panel is not None:
+            compare_idx = self._model_workbench.indexOf(self._compare_panel)
+            if compare_idx >= 0:
+                self._model_workbench.setTabText(
+                    compare_idx,
+                    self._t("panel.compare", "Compare"),
+                )
+        if self._explain_panel is not None:
+            explain_idx = self._model_workbench.indexOf(self._explain_panel)
+            if explain_idx >= 0:
+                self._model_workbench.setTabText(
+                    explain_idx,
+                    self._t("panel.explain", "Explain"),
+                )
+
+    def _setup_persistent_viewer(self) -> None:
+        """탭과 독립적으로 유지되는 전역 3D viewer dock을 구성한다."""
+        from naviertwin.gui.widgets.vtk_viewer import VtkViewer
+
+        self._global_viewer = VtkViewer()
+        self._viewer_dock = QDockWidget("3D Viewer", self)
+        self._viewer_dock.setObjectName("global3DViewerDock")
+        self._viewer_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea
+            | Qt.DockWidgetArea.RightDockWidgetArea
+            | Qt.DockWidgetArea.BottomDockWidgetArea
+        )
+        self._viewer_dock.setWidget(self._global_viewer)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._viewer_dock)
+        self.resizeDocks([self._viewer_dock], [340], Qt.Orientation.Horizontal)
+
+    def _setup_library_search_dialog(self) -> None:
+        """Library/기능 검색을 도움말에서 여는 독립 팝업 창으로 구성한다."""
+        self._library_dialog = QDialog(self)
+        self._library_dialog.setObjectName("librarySearchDialog")
+        self._library_dialog.setWindowTitle(self._t("panel.library", "Library"))
+        self._library_dialog.setModal(False)
+        self._library_dialog.setMinimumSize(980, 680)
+        layout = QVBoxLayout(self._library_dialog)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._library_panel)
 
     def _localized_tab_title(self, key: str, num: str, default: str) -> str:
         """번호 prefix가 붙은 탭 제목을 현재 언어로 구성한다."""
@@ -241,6 +355,11 @@ class MainWindow(QMainWindow):
             index = self._tabs.indexOf(widget)
             if index >= 0:
                 self._tabs.setTabText(index, self._localized_tab_title(key, num, default))
+        self._refresh_analyze_workbench_tabs()
+        self._refresh_model_workbench_tabs()
+        library_dialog = getattr(self, "_library_dialog", None)
+        if library_dialog is not None:
+            library_dialog.setWindowTitle(self._t("panel.library", "Library"))
         # Post-Tools 패널 retranslate (있으면)
         if self._postproc_panel is not None:
             try:
@@ -361,6 +480,11 @@ class MainWindow(QMainWindow):
 
         # 도움말 메뉴
         self._help_menu = mb.addMenu("도움말(&H)")
+        library_action = QAction("기능 검색(&L)", self)
+        library_action.setShortcut("Ctrl+K")
+        library_action.triggered.connect(self._show_library_search)
+        self._help_menu.addAction(library_action)
+
         tutorial_action = QAction("튜토리얼(&T)", self)
         tutorial_action.triggered.connect(self._show_tutorial)
         self._help_menu.addAction(tutorial_action)
@@ -407,6 +531,16 @@ class MainWindow(QMainWindow):
             action.setData(i)
             action.triggered.connect(self._switch_tab)
             view_menu.addAction(action)
+
+        viewer_dock = getattr(self, "_viewer_dock", None)
+        if viewer_dock is not None:
+            view_menu.addSeparator()
+            view_menu.addAction(viewer_dock.toggleViewAction())
+
+        if getattr(self, "_library_dialog", None) is not None:
+            library_action = QAction(self._t("panel.library", "Library"), self)
+            library_action.triggered.connect(self._show_library_search)
+            view_menu.addAction(library_action)
 
         view_menu.addSeparator()
         for theme, key, default in (
@@ -472,18 +606,14 @@ class MainWindow(QMainWindow):
         )
 
         # Analyze 완료 상태 업데이트
-        self._analyze_panel.analysis_done.connect(
-            lambda method, _: self._set_status(f"분석 완료 ({method})")
-        )
+        self._analyze_panel.analysis_done.connect(self._on_analysis_done)
 
         # Export 완료 상태 업데이트
         self._export_panel.export_done.connect(self._on_export_done)
         self._export_panel.project_loaded.connect(self._on_project_loaded)
 
         # Twin 예측 완료
-        self._twin_panel.prediction_done.connect(
-            lambda _: self._set_status("예측 완료")
-        )
+        self._twin_panel.prediction_done.connect(self._on_twin_prediction_done)
         self._twin_panel.optimization_done.connect(
             lambda result: self._set_status(
                 f"최적화 완료: f_best={float(result.get('f_best', 0.0)):.4g}"
@@ -500,6 +630,17 @@ class MainWindow(QMainWindow):
                 f"{result.get('method', 'Design Optimization')} 완료"
             )
         )
+        self._twin_panel.uq_done.connect(
+            lambda result: self._set_status(
+                f"UQ 완료: {result.get('method', 'UQ')}, "
+                f"N={result.get('n_samples', '?')}"
+            )
+        )
+        self._twin_panel.applied_done.connect(
+            lambda result: self._set_status(
+                f"Applied 계산 완료: {result.get('calculator', 'calculator')}"
+            )
+        )
         if self._explain_panel is not None:
             self._explain_panel.explanation_done.connect(
                 lambda result: self._set_status(
@@ -507,23 +648,23 @@ class MainWindow(QMainWindow):
                 )
             )
 
+        self._library_panel.capability_done.connect(
+            lambda cap_id, _: self._set_status(f"기능 데모 완료: {cap_id}")
+        )
+        self._library_panel.navigate_requested.connect(self._on_library_navigate)
+
         # Simulation 결과 → 상태바 + 전역 viewer 연동 훅
         if self._simulation_panel is not None:
             self._simulation_panel.simulation_done.connect(self._on_simulation_done)
 
     # ------------------------------------------------------------------
     def _on_simulation_done(self, kind: str, result: object) -> None:
-        """SimulationPanel 결과를 Twin 탭 VTK viewer 로 전달 (가능한 경우)."""
+        """SimulationPanel 결과를 viewer 로 전달 (가능한 경우)."""
         self._set_status(
             f"시뮬레이션 완료: {kind} — {getattr(result, 'get', lambda *_: '')('summary', '')}"
         )
-        # Twin 패널에 vtk_viewer 가 있으면 렌더 시도
-        viewer = None
-        for cand in (self._twin_panel, self._import_panel):
-            v = getattr(cand, "_viewer", None) or getattr(cand, "_vtk_viewer", None)
-            if v is not None:
-                viewer = v
-                break
+        # viewer 가 있으면 시뮬레이션 결과를 표시 가능한 형태로 전달한다.
+        viewer = getattr(self, "_global_viewer", None)
         if viewer is None:
             return
         try:
@@ -542,6 +683,129 @@ class MainWindow(QMainWindow):
     # 시그널 핸들러
     # ──────────────────────────────────────────────────────────────────
 
+    def _on_analysis_done(self, method: str, _: object) -> None:
+        """분석 완료 후 전역 viewer를 분석 결과 field로 동기화한다."""
+        self._set_status(f"분석 완료 ({method})")
+        field_name = analysis_result_field(method)
+        if field_name:
+            self._show_field_in_global_viewer(field_name)
+
+    def _on_twin_prediction_done(self, prediction: object) -> None:
+        """Twin 예측 field를 현재 CFD mesh에 붙이고 3D viewer에 표시한다."""
+        self._set_status("예측 완료")
+        dataset = self._latest_dataset
+        if dataset is None:
+            return
+
+        try:
+            import numpy as np
+
+            mesh = dataset.mesh  # type: ignore[union-attr]
+            values = np.asarray(prediction, dtype=float).reshape(-1)
+            n_points = int(getattr(dataset, "n_points", 0))
+            n_cells = int(getattr(dataset, "n_cells", 0))
+            if self._attach_structured_twin_prediction(values, mesh, dataset):
+                return
+            field_name = self._prediction_field_name()
+            if values.size == n_cells:
+                mesh.cell_data[field_name] = values
+            elif values.size == n_points:
+                mesh.point_data[field_name] = values
+            else:
+                self._set_status(
+                    f"예측 완료 — viewer 표시 생략(shape={values.shape}, "
+                    f"points={n_points}, cells={n_cells})"
+                )
+                return
+
+            if field_name not in dataset.field_names:  # type: ignore[operator]
+                dataset.field_names.append(field_name)  # type: ignore[union-attr]
+            self._analyze_panel._sync_result_field_to_viewer(field_name)
+            self._show_field_in_global_viewer(field_name)
+            self._set_status(f"예측 완료 — 3D viewer 표시: {field_name}")
+        except Exception as exc:  # noqa: BLE001
+            self._set_status(f"예측 완료 — viewer 표시 실패: {exc}")
+
+    def _attach_structured_twin_prediction(
+        self,
+        values: object,
+        mesh: object,
+        dataset: object,
+    ) -> bool:
+        """Attach multi-output PhysicsNeMo CFD predictions to the current mesh."""
+        import numpy as np
+
+        metadata = self._latest_prediction_metadata()
+        output_fields = metadata.get("output_fields") if isinstance(metadata, Mapping) else None
+        if not isinstance(output_fields, list) or not output_fields:
+            return False
+
+        array = np.asarray(values, dtype=float).reshape(-1)
+        shown_field = ""
+        attached = 0
+        for spec in output_fields:
+            if not isinstance(spec, Mapping):
+                continue
+            try:
+                start = int(spec.get("start", -1))
+                end = int(spec.get("end", -1))
+            except (TypeError, ValueError):
+                continue
+            if start < 0 or end <= start or end > array.size:
+                continue
+            raw_name = str(spec.get("display_name") or spec.get("field_name") or "field")
+            field_name = self._safe_prediction_field_name(raw_name)
+            part = array[start:end]
+            location = str(spec.get("location", "point"))
+            if location == "cell":
+                mesh.cell_data[field_name] = part  # type: ignore[attr-defined]
+            else:
+                mesh.point_data[field_name] = part  # type: ignore[attr-defined]
+            if field_name not in dataset.field_names:  # type: ignore[operator]
+                dataset.field_names.append(field_name)  # type: ignore[union-attr]
+            shown_field = shown_field or field_name
+            attached += 1
+
+        if attached == 0:
+            return False
+        if shown_field:
+            self._analyze_panel._sync_result_field_to_viewer(shown_field)
+            self._show_field_in_global_viewer(shown_field)
+        self._set_status(f"예측 완료 — {attached}개 field를 3D viewer에 연결")
+        return True
+
+    def _latest_prediction_metadata(self) -> Mapping[str, object]:
+        """Return metadata from the latest model/engine that produced predictions."""
+        for source in (self._latest_engine, self._latest_surrogate, self._latest_reducer):
+            meta = getattr(source, "training_metadata", None)
+            if isinstance(meta, Mapping):
+                return meta
+        return {}
+
+    @staticmethod
+    def _safe_prediction_field_name(raw_name: str) -> str:
+        safe = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in raw_name)
+        return f"twin_pred_{safe or 'field'}"
+
+    def _prediction_field_name(self) -> str:
+        """Reducer metadata에서 예측 대상 field 이름을 추출한다."""
+        reducer = self._latest_reducer
+        field = ""
+        for source in (reducer, self._latest_surrogate, self._latest_engine):
+            meta = getattr(source, "training_metadata", None)
+            if isinstance(meta, Mapping):
+                candidate = meta.get("field_name")
+                if isinstance(candidate, str):
+                    field = candidate
+                    break
+        if not field and self._latest_dataset is not None:
+            fields = getattr(self._latest_dataset, "field_names", [])
+            if fields:
+                field = str(fields[0])
+        if field == "U":
+            field = "U_mag"
+        return self._safe_prediction_field_name(field)
+
     def _on_dataset_loaded(self, dataset: object) -> None:
         self._latest_dataset = dataset
         self._latest_reducer = None
@@ -553,6 +817,7 @@ class MainWindow(QMainWindow):
             f"{dataset.n_cells} cells, {dataset.n_time_steps} steps"
         )
         self._analyze_panel.set_dataset(dataset)  # type: ignore[arg-type]
+        self._load_global_viewer_dataset(dataset)
         self._reduce_panel.set_dataset(dataset)    # type: ignore[arg-type]
         self._model_panel.set_dataset(dataset)     # type: ignore[arg-type]
         self._export_panel.set_dataset(dataset)    # type: ignore[arg-type]
@@ -560,8 +825,165 @@ class MainWindow(QMainWindow):
             self._explain_panel.set_dataset(dataset)
         if self._postproc_panel is not None:
             self._postproc_panel.set_dataset(dataset)
+        self._library_panel.set_dataset(dataset)
         # Import 탭 완료 후 Analyze 탭으로 자동 이동
         self._tabs.setCurrentIndex(1)
+
+    def _load_global_viewer_dataset(self, dataset: object) -> None:
+        """전역 viewer에 CFD dataset을 로드한다."""
+        viewer = getattr(self, "_global_viewer", None)
+        if viewer is None:
+            return
+        try:
+            viewer.load_dataset(dataset)
+        except Exception as exc:  # noqa: BLE001
+            self._set_status(f"전역 3D viewer 로드 실패: {exc}")
+
+    def _show_field_in_global_viewer(self, field_name: str) -> None:
+        """전역 viewer field 목록을 갱신하고 지정 field를 표시한다."""
+        viewer = getattr(self, "_global_viewer", None)
+        if viewer is None:
+            return
+        try:
+            viewer.refresh_fields(prefer_field=field_name)
+            viewer.show_field(field_name)
+            dock = getattr(self, "_viewer_dock", None)
+            if dock is not None:
+                dock.show()
+                dock.raise_()
+        except Exception as exc:  # noqa: BLE001
+            self._set_status(f"전역 3D viewer 표시 실패: {exc}")
+
+    def _switch_to_model_workbench(self, subtab: QWidget | None = None) -> None:
+        """Model 최상위 탭으로 이동하고 필요한 경우 내부 하위 탭도 선택한다."""
+        self._tabs.setCurrentWidget(self._model_workbench)
+        if subtab is not None and isinstance(self._model_workbench, QTabWidget):
+            self._model_workbench.setCurrentWidget(subtab)
+
+    def _switch_to_analyze_workbench(self, subtab: QWidget | None = None) -> None:
+        """Analyze 최상위 탭으로 이동하고 필요한 경우 내부 하위 탭도 선택한다."""
+        self._tabs.setCurrentWidget(self._analyze_workbench)
+        if subtab is not None and isinstance(self._analyze_workbench, QTabWidget):
+            self._analyze_workbench.setCurrentWidget(subtab)
+
+    def _show_library_search(self) -> None:
+        """기능 검색 팝업을 화면 중앙에 적절한 크기로 연다."""
+        dialog = getattr(self, "_library_dialog", None)
+        if dialog is None:
+            return
+        self._position_library_search_dialog()
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        self._set_status("기능 검색 열림")
+
+    def _position_library_search_dialog(self) -> None:
+        """기능 검색 dialog를 현재 창/화면 중앙에 배치한다."""
+        dialog = self._library_dialog
+        screen = self.screen() or QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen is not None else QRect(0, 0, 1280, 800)
+        width = min(max(int(self.width() * 0.78), 980), max(640, available.width() - 80))
+        height = min(max(int(self.height() * 0.78), 680), max(520, available.height() - 80))
+        dialog.resize(width, height)
+
+        center = self.frameGeometry().center() if self.isVisible() else available.center()
+        left = max(available.left(), min(center.x() - width // 2, available.right() - width + 1))
+        top = max(available.top(), min(center.y() - height // 2, available.bottom() - height + 1))
+        dialog.move(left, top)
+
+    def _prompt_missing_feature_packs_once(self) -> None:
+        """첫 실행 시 누락된 Feature Pack 을 검사하고 GUI Library 탭으로 안내.
+
+        테스트/offscreen 환경, 또는 ``NAVIERTWIN_SKIP_FEATURE_PACK_PROMPT=1`` 이면
+        팝업을 띄우지 않는다.
+        """
+        import os  # noqa: PLC0415
+
+        if getattr(self, "_feature_pack_prompt_shown", False):
+            return
+        self._feature_pack_prompt_shown = True
+        if os.environ.get("NAVIERTWIN_SKIP_FEATURE_PACK_PROMPT") == "1":
+            return
+        if os.environ.get("QT_QPA_PLATFORM", "").lower() in {"offscreen", "minimal"}:
+            return
+        if os.environ.get("PYTEST_CURRENT_TEST"):
+            return
+        try:
+            from naviertwin.utils.feature_packs import (  # noqa: PLC0415
+                FEATURE_PACKS,
+                feature_pack_status,
+            )
+        except Exception:
+            return
+        missing: list[str] = []
+        for pack_id in FEATURE_PACKS:
+            try:
+                st = feature_pack_status(pack_id)
+            except Exception:
+                continue
+            if not st.get("installed") or st.get("missing_modules"):
+                missing.append(pack_id)
+        if not missing:
+            self._set_status("Feature Pack 상태: 모두 설치됨")
+            return
+        # 한 번만 알림. 사용자가 "Library 로 이동" 누르면 패널로 점프.
+        from PySide6.QtWidgets import QMessageBox  # noqa: PLC0415
+
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Information)
+        msg.setWindowTitle("Feature Pack 안내")
+        msg.setText(
+            "다음 선택 기능 (Feature Pack) 이 아직 설치되지 않았습니다:\n\n"
+            f"  • {chr(10).join(['• ' + p for p in missing]).replace('• ', '', 1)}\n\n"
+            "Library 탭에서 한 번의 클릭으로 PyPI 에서 직접 설치할 수 있습니다."
+        )
+        go_btn = msg.addButton("Library 탭으로 이동", QMessageBox.ButtonRole.AcceptRole)
+        msg.addButton("나중에", QMessageBox.ButtonRole.RejectRole)
+        msg.exec()
+        if msg.clickedButton() is go_btn:
+            try:
+                idx = self._tabs.indexOf(self._library_panel)
+                if idx >= 0:
+                    self._tabs.setCurrentIndex(idx)
+            except Exception:
+                pass
+
+    def _on_library_navigate(self, route: str) -> None:
+        """Library 탭에서 요청한 기존 기능 탭으로 이동한다."""
+        route_key = route.lower()
+        if route_key.startswith("compare") and self._compare_panel is not None:
+            self._switch_to_model_workbench(self._compare_panel)
+            self._set_status(f"기능 탭 이동: {route}")
+            return
+        if route_key.startswith("explain") and self._explain_panel is not None:
+            self._switch_to_model_workbench(self._explain_panel)
+            self._set_status(f"기능 탭 이동: {route}")
+            return
+        if route_key.startswith("post-tools") and self._postproc_panel is not None:
+            self._switch_to_analyze_workbench(self._postproc_panel)
+            self._set_status(f"기능 탭 이동: {route}")
+            return
+        if route_key.startswith("library"):
+            self._show_library_search()
+            return
+        if route_key.startswith("simulation"):
+            self._set_status("Simulation은 workflow 최상위 탭에서 제거되었습니다.")
+            return
+
+        targets: list[tuple[str, QWidget | None]] = [
+            ("import", self._import_panel),
+            ("analyze", self._analyze_workbench),
+            ("reduce", self._reduce_panel),
+            ("model", self._model_workbench),
+            ("twin", self._twin_panel),
+            ("export", self._export_panel),
+        ]
+        for key, widget in targets:
+            if widget is not None and route_key.startswith(key):
+                self._tabs.setCurrentWidget(widget)
+                self._set_status(f"기능 탭 이동: {route}")
+                return
+        self._set_status(f"알 수 없는 기능 탭: {route}")
 
     def _on_reduction_done(self, method: str, reducer: object) -> None:
         self._latest_reducer = reducer
@@ -573,6 +995,46 @@ class MainWindow(QMainWindow):
         self._tabs.setCurrentIndex(3)
 
     def _on_model_trained(self, model_type: str, surrogate: object) -> None:
+        if self._is_physics_ai_model(model_type, surrogate):
+            try:
+                engine = self._build_physics_ai_engine(model_type, surrogate)
+                self._latest_surrogate = surrogate
+                self._latest_engine = engine
+                self._twin_panel.set_engine(engine)
+                self._export_panel.set_engine(engine)
+                if self._explain_panel is not None:
+                    self._explain_panel.set_model(surrogate)
+                self._set_status(
+                    f"Physics AI 모델 학습 완료 ({model_type}) — Twin 직접 연결 완료"
+                )
+            except Exception as exc:
+                self._set_status(
+                    f"Physics AI 모델 학습 완료 ({model_type}) — Twin 연결 실패: {exc}"
+                )
+            self._record_model_comparison(model_type, surrogate)
+            self._tabs.setCurrentWidget(self._twin_panel)
+            return
+
+        if self._is_direct_field_model(surrogate):
+            try:
+                engine = self._build_physics_ai_engine(model_type, surrogate)
+                self._latest_surrogate = surrogate
+                self._latest_engine = engine
+                self._twin_panel.set_engine(engine)
+                self._export_panel.set_engine(engine)
+                if self._explain_panel is not None:
+                    self._explain_panel.set_model(surrogate)
+                self._set_status(
+                    f"직접 CFD field surrogate 학습 완료 ({model_type}) — Twin 직접 연결 완료"
+                )
+            except Exception as exc:
+                self._set_status(
+                    f"직접 CFD field surrogate 학습 완료 ({model_type}) — Twin 연결 실패: {exc}"
+                )
+            self._record_model_comparison(model_type, surrogate)
+            self._tabs.setCurrentWidget(self._twin_panel)
+            return
+
         if self._is_operator_model(model_type, surrogate):
             self._latest_operator = surrogate
             self._export_panel.set_model(surrogate)
@@ -580,7 +1042,7 @@ class MainWindow(QMainWindow):
                 f"연산자 학습 완료 ({model_type}) — TwinEngine 자동 연결 생략"
             )
             self._record_model_comparison(model_type, surrogate)
-            self._tabs.setCurrentWidget(self._model_panel)
+            self._switch_to_model_workbench(self._model_panel)
             return
 
         self._latest_surrogate = surrogate
@@ -639,6 +1101,32 @@ class MainWindow(QMainWindow):
         from naviertwin.core.digital_twin.twin_engine import TwinEngine
 
         return TwinEngine.from_fitted_components(reducer, surrogate)
+
+    def _build_physics_ai_engine(self, model_type: str, model: object) -> object:
+        """PhysicsNeMo/PINN 직접 예측 모델을 Twin 패널용 엔진으로 감싼다."""
+        from naviertwin.core.digital_twin.physics_ai_engine import PhysicsAITwinEngine
+
+        return PhysicsAITwinEngine.from_fitted_model(model, model_type=model_type)
+
+    @staticmethod
+    def _is_physics_ai_model(model_type: str, model: object) -> bool:
+        """PhysicsNeMo/PINN 계열 모델인지 판정한다."""
+        lower = model_type.lower()
+        if lower.startswith(("physics", "physnemo", "physicsnemo")):
+            return True
+        module = type(model).__module__.lower()
+        return ".physnemo" in module
+
+    @staticmethod
+    def _is_direct_field_model(model: object) -> bool:
+        """Return True for models that already predict full CFD fields."""
+        meta = getattr(model, "training_metadata", None)
+        if not isinstance(meta, Mapping):
+            return False
+        if bool(meta.get("direct_field_model")):
+            return True
+        output_fields = meta.get("output_fields")
+        return isinstance(output_fields, list) and bool(output_fields)
 
     @staticmethod
     def _is_operator_model(model_type: str, model: object) -> bool:
@@ -2502,18 +2990,45 @@ class MainWindow(QMainWindow):
             event.accept()
             return
 
-        reply = QMessageBox.question(
-            self,
-            "종료 확인",
-            "NavierTwin을 종료하시겠습니까?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
+        if self._ask_close_confirmation():
             self._stop_api_server_on_close()
             event.accept()
         else:
             event.ignore()
+
+    def _ask_close_confirmation(self) -> bool:
+        """종료 확인 다이얼로그를 메인 윈도우 중앙에 띄우고 결과를 반환한다."""
+        dialog = self._build_close_confirmation_dialog()
+        QTimer.singleShot(0, lambda: self._center_child_window(dialog))
+        return dialog.exec() == QMessageBox.StandardButton.Yes
+
+    def _build_close_confirmation_dialog(self) -> QMessageBox:
+        """테스트 가능한 종료 확인 다이얼로그를 구성한다."""
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Question)
+        dialog.setWindowTitle("종료 확인")
+        dialog.setText("NavierTwin을 종료하시겠습니까?")
+        dialog.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        dialog.setDefaultButton(QMessageBox.StandardButton.No)
+        dialog.setModal(True)
+        dialog.adjustSize()
+        self._center_child_window(dialog)
+        return dialog
+
+    def _center_child_window(self, child: QWidget) -> None:
+        """자식 다이얼로그를 현재 메인 윈도우 화면 좌표 중앙으로 이동한다."""
+        parent_rect = self.frameGeometry() if self.isVisible() else QRect(
+            self.mapToGlobal(QPoint(0, 0)),
+            self.size(),
+        )
+        child_size = child.sizeHint()
+        if child_size.width() <= 0 or child_size.height() <= 0:
+            child_size = child.size()
+        child_rect = QRect(QPoint(0, 0), child_size)
+        child_rect.moveCenter(parent_rect.center())
+        child.move(child_rect.topLeft())
 
     def _stop_api_server_on_close(self) -> None:
         """윈도우 종료 시 GUI가 시작한 서버 프로세스를 정리한다."""

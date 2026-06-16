@@ -23,8 +23,8 @@ class TestMainWindowAssembly:
         assert t("panel.post_tools") == "Post-Tools"
         assert t("view.tab_action") == "{title} Tab"
         t.set_language("ko")
-        assert "불러오기" in t("panel.import")
-        assert "후처리 도구" in t("panel.post_tools")
+        assert t("panel.import") == "불러오기"
+        assert t("panel.post_tools") == "후처리"
         assert t("view.tab_action").endswith("탭")
 
     def test_startup_applies_language_and_theme_config(
@@ -142,15 +142,14 @@ class TestMainWindowAssembly:
         win = MainWindow(confirm_on_close=False)
         qtbot.addWidget(win)
 
-        optional_expectations = []
-        if win._compare_panel is not None:
-            optional_expectations.append(("⑦ Compare (비교)", "⑦ Compare"))
-        if win._simulation_panel is not None:
-            optional_expectations.append(("⑧ Simulation (시뮬레이션)", "⑧ Simulation"))
-        if win._explain_panel is not None:
-            optional_expectations.append(("⑨ Explain (설명가능성)", "⑨ Explain"))
-        if win._postproc_panel is not None:
-            optional_expectations.append(("⑩ Post-Tools (후처리 도구)", "⑩ Post-Tools"))
+        workflow_expectations = [
+            ("① 불러오기", "① Import"),
+            ("② 분석", "② Analyze"),
+            ("③ 차원축소", "③ Reduce"),
+            ("④ 모델", "④ Model"),
+            ("⑤ 디지털트윈", "⑤ Twin"),
+            ("⑥ 내보내기", "⑥ Export"),
+        ]
 
         win.set_language("ko")
         ko_titles = [win._tabs.tabText(i) for i in range(win._tabs.count())]
@@ -160,7 +159,7 @@ class TestMainWindowAssembly:
             if not action.isSeparator()
         ]
 
-        for ko_title, _ in optional_expectations:
+        for ko_title, _ in workflow_expectations:
             assert ko_title in ko_titles
             assert f"{ko_title} 탭" in ko_actions
 
@@ -172,6 +171,79 @@ class TestMainWindowAssembly:
             if not action.isSeparator()
         ]
 
-        for _, en_title in optional_expectations:
+        for _, en_title in workflow_expectations:
             assert en_title in en_titles
             assert f"{en_title} Tab" in en_actions
+
+    def test_compare_dashboard_is_nested_under_model_tab(self, qtbot) -> None:
+        pytest.importorskip("PySide6")
+        from PySide6.QtWidgets import QTabWidget
+
+        from naviertwin.gui.main_window import MainWindow
+
+        win = MainWindow(confirm_on_close=False)
+        qtbot.addWidget(win)
+
+        top_titles = [win._tabs.tabText(i) for i in range(win._tabs.count())]
+        assert not any("Compare" in title or "비교" in title for title in top_titles)
+        assert not any("Explain" in title or "설명" in title for title in top_titles)
+        assert win._tabs.indexOf(win._model_workbench) >= 0
+
+        assert isinstance(win._model_workbench, QTabWidget)
+        model_subtabs = [
+            win._model_workbench.tabText(i)
+            for i in range(win._model_workbench.count())
+        ]
+        assert any("Model" in title or "모델" in title for title in model_subtabs)
+        assert any("Compare" in title or "비교" in title for title in model_subtabs)
+        assert any("Explain" in title or "설명" in title for title in model_subtabs)
+
+    def test_post_tools_is_nested_under_analyze_tab(self, qtbot) -> None:
+        pytest.importorskip("PySide6")
+        from PySide6.QtWidgets import QTabWidget
+
+        from naviertwin.gui.main_window import MainWindow
+
+        win = MainWindow(confirm_on_close=False)
+        qtbot.addWidget(win)
+
+        top_titles = [win._tabs.tabText(i) for i in range(win._tabs.count())]
+        assert not any("Post-Tools" in title or "후처리" in title for title in top_titles)
+        assert win._tabs.indexOf(win._analyze_workbench) >= 0
+
+        assert isinstance(win._analyze_workbench, QTabWidget)
+        analyze_subtabs = [
+            win._analyze_workbench.tabText(i)
+            for i in range(win._analyze_workbench.count())
+        ]
+        assert any("Analyze" in title or "분석" in title for title in analyze_subtabs)
+        assert any("Post-Tools" in title or "후처리" in title for title in analyze_subtabs)
+
+    def test_pipeline_tabs_wrap_to_multiple_rows(self, qtbot) -> None:
+        pytest.importorskip("PySide6")
+        from naviertwin.gui.main_window import MainWindow
+
+        win = MainWindow(confirm_on_close=False)
+        qtbot.addWidget(win)
+
+        assert win._tabs.count() == 6
+        assert win._tabs._tab_layout.rowCount() >= 2
+        assert all(button.minimumHeight() >= 38 for button in win._tabs._buttons)
+
+    def test_library_is_help_dialog_not_workflow_tab(self, qtbot) -> None:
+        pytest.importorskip("PySide6")
+        from naviertwin.gui.main_window import MainWindow
+
+        win = MainWindow(confirm_on_close=False)
+        qtbot.addWidget(win)
+
+        top_titles = [win._tabs.tabText(i) for i in range(win._tabs.count())]
+        assert not any("Library" in title or "기능" in title for title in top_titles)
+        assert win._library_panel.parentWidget() is win._library_dialog
+        assert not win._library_dialog.isVisible()
+
+        win._show_library_search()
+
+        assert win._library_dialog.isVisible()
+        assert win._library_dialog.width() >= 980
+        assert win._library_dialog.height() >= 680

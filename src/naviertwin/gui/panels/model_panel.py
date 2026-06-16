@@ -6,14 +6,19 @@ Signals:
 
 from __future__ import annotations
 
+import json
+import tempfile
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Optional
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QComboBox,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -56,6 +61,8 @@ class ModelPanel(QWidget):
         self._loss_series: dict[str, list[float]] = {}
         self._online_learner: Optional[object] = None
         self._last_active_candidates: Optional[np.ndarray] = None
+        self._physics_params_path: Path | None = None
+        self._surrogate_params_path: Path | None = None
         self._setup_ui()
 
     # ──────────────────────────────────────────────────────────────────
@@ -74,38 +81,73 @@ class ModelPanel(QWidget):
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(8)
 
-        title = QLabel("Surrogate Model")
+        title = QLabel("Model Workbench")
         title.setObjectName("titleLabel")
         left_layout.addWidget(title)
 
-        # 모델 선택
-        model_group = QGroupBox("모델 선택")
-        model_form = QFormLayout(model_group)
+        subtitle = QLabel(
+            "1 학습 준비 → 2 모델 학습 → 3 검증/비교 → "
+            "4 샘플 추천 → 5 운영 업데이트"
+        )
+        subtitle.setObjectName("subtitleLabel")
+        subtitle.setWordWrap(True)
+        left_layout.addWidget(subtitle)
 
-        self._model_combo = QComboBox()
-        self._model_combo.addItems(["Kriging (RBF default)", "RBF", "Kriging"])
-        model_form.addRow("Surrogate 타입:", self._model_combo)
-
-        left_layout.addWidget(model_group)
-
-        # 학습 데이터 설정
-        data_group = QGroupBox("학습 데이터 생성 (데모)")
+        # 1. 학습 준비
+        data_group = QGroupBox("1. 학습 준비")
         data_form = QFormLayout(data_group)
+
+        self._physics_case_label = QLabel("Import dataset 사용")
+        self._physics_case_label.setWordWrap(True)
+        data_form.addRow("Import cases:", self._physics_case_label)
+
+        self._surrogate_source_combo = QComboBox()
+        self._surrogate_source_combo.addItems([
+            "자동",
+            "CFD fields (direct)",
+            "Reduce/POD coefficients",
+            "Demo",
+        ])
+        data_form.addRow("학습 소스:", self._surrogate_source_combo)
+
+        self._surrogate_params_btn = QPushButton("입력 파라미터 CSV 선택")
+        self._surrogate_params_btn.clicked.connect(self._select_surrogate_params_csv)
+        data_form.addRow(self._surrogate_params_btn)
+
+        self._surrogate_params_label = QLabel("CSV 없음: case/time index 사용")
+        self._surrogate_params_label.setWordWrap(True)
+        data_form.addRow("입력 CSV:", self._surrogate_params_label)
+
+        self._surrogate_param_columns_edit = QLineEdit()
+        self._surrogate_param_columns_edit.setPlaceholderText("예: inlet_u,reynolds")
+        data_form.addRow("Input columns:", self._surrogate_param_columns_edit)
+
+        self._surrogate_field_list = QListWidget()
+        self._surrogate_field_list.setSelectionMode(
+            QAbstractItemView.SelectionMode.MultiSelection
+        )
+        self._surrogate_field_list.setMaximumHeight(96)
+        data_form.addRow("Output fields:", self._surrogate_field_list)
+
+        self._physics_params_btn = self._surrogate_params_btn
+        self._physics_params_label = self._surrogate_params_label
+        self._physics_param_columns_edit = self._surrogate_param_columns_edit
+        self._physics_field_list = self._surrogate_field_list
 
         self._n_samples_spin = QSpinBox()
         self._n_samples_spin.setRange(2, 1000)
         self._n_samples_spin.setValue(20)
-        data_form.addRow("샘플 수:", self._n_samples_spin)
+        data_form.addRow("데모 샘플 수:", self._n_samples_spin)
 
         self._n_params_spin = QSpinBox()
         self._n_params_spin.setRange(1, 20)
         self._n_params_spin.setValue(2)
-        data_form.addRow("파라미터 차원:", self._n_params_spin)
+        data_form.addRow("데모 input 차원:", self._n_params_spin)
 
         self._n_outputs_spin = QSpinBox()
         self._n_outputs_spin.setRange(1, 100)
         self._n_outputs_spin.setValue(5)
-        data_form.addRow("출력 차원:", self._n_outputs_spin)
+        data_form.addRow("데모 output 차원:", self._n_outputs_spin)
 
         self._train_ratio_spin = QDoubleSpinBox()
         self._train_ratio_spin.setRange(0.5, 0.95)
@@ -113,15 +155,95 @@ class ModelPanel(QWidget):
         self._train_ratio_spin.setSingleStep(0.05)
         data_form.addRow("학습 비율:", self._train_ratio_spin)
 
+        cfd_hint = QLabel(
+            "다중 steady-state 케이스는 Import 탭에서 선택하고, CSV 각 행은 "
+            "케이스/스냅샷 1개에 대응해야 합니다."
+        )
+        cfd_hint.setObjectName("subtitleLabel")
+        cfd_hint.setWordWrap(True)
+        data_form.addRow(cfd_hint)
+
         left_layout.addWidget(data_group)
 
-        self._train_btn = QPushButton("모델 학습")
-        self._train_btn.setObjectName("primaryButton")
-        self._train_btn.clicked.connect(self._train_model)
-        left_layout.addWidget(self._train_btn)
+        # 2. 모델 학습
+        model_group = QGroupBox("2A. 모델 학습 - 빠른 Surrogate")
+        model_form = QFormLayout(model_group)
 
-        # Active learning candidate selection
-        active_group = QGroupBox("Active Learning")
+        self._model_combo = QComboBox()
+        self._model_combo.addItems(["Kriging (RBF default)", "RBF", "Kriging"])
+        model_form.addRow("모델:", self._model_combo)
+
+        self._train_btn = QPushButton("모델 학습")
+        self._train_btn.clicked.connect(self._train_model)
+        model_form.addRow(self._train_btn)
+        left_layout.addWidget(model_group)
+
+        physics_group = QGroupBox("2B. 모델 학습 - Physics AI")
+        physics_form = QFormLayout(physics_group)
+
+        self._physics_combo = QComboBox()
+        self._physics_combo.addItems(["PhysicsNeMo CFD Field"])
+        physics_form.addRow("모델:", self._physics_combo)
+
+        self._physics_epochs_spin = QSpinBox()
+        self._physics_epochs_spin.setRange(1, 2000)
+        self._physics_epochs_spin.setValue(150)
+        physics_form.addRow("Epoch:", self._physics_epochs_spin)
+
+        self._physics_hidden_spin = QSpinBox()
+        self._physics_hidden_spin.setRange(4, 256)
+        self._physics_hidden_spin.setValue(32)
+        physics_form.addRow("Hidden:", self._physics_hidden_spin)
+
+        self._physics_max_samples_spin = QSpinBox()
+        self._physics_max_samples_spin.setRange(100, 1_000_000)
+        self._physics_max_samples_spin.setSingleStep(1000)
+        self._physics_max_samples_spin.setValue(20_000)
+        physics_form.addRow("Max samples:", self._physics_max_samples_spin)
+
+        self._physics_train_btn = QPushButton("Physics AI 학습")
+        self._physics_train_btn.clicked.connect(self._train_physics_ai)
+        physics_form.addRow(self._physics_train_btn)
+
+        self._physics_module_btn = QPushButton("PhysicsNeMo Module 저장")
+        self._physics_module_btn.clicked.connect(self._save_physicsnemo_module)
+        physics_form.addRow(self._physics_module_btn)
+
+        left_layout.addWidget(physics_group)
+
+        op_group = QGroupBox("2C. 모델 학습 - Operator Learning (실험)")
+        op_form = QFormLayout(op_group)
+
+        self._op_combo = QComboBox()
+        self._op_combo.addItems(["FNO1D", "FNO2D", "TFNO2D", "DeepONet", "UNet2D", "WNO1D"])
+        op_form.addRow("모델:", self._op_combo)
+
+        self._op_epochs_spin = QSpinBox()
+        self._op_epochs_spin.setRange(1, 1000)
+        self._op_epochs_spin.setValue(10)
+        op_form.addRow("Epoch:", self._op_epochs_spin)
+
+        self._op_samples_spin = QSpinBox()
+        self._op_samples_spin.setRange(4, 1000)
+        self._op_samples_spin.setValue(20)
+        op_form.addRow("데모 샘플 수:", self._op_samples_spin)
+
+        op_hint = QLabel(
+            "현재 Operator GUI는 데모 텐서 quick training입니다. 실제 CFD "
+            "다중 입출력 학습은 CFD 직접 필드 또는 Physics AI 경로를 사용하세요."
+        )
+        op_hint.setObjectName("subtitleLabel")
+        op_hint.setWordWrap(True)
+        op_form.addRow(op_hint)
+
+        self._op_train_btn = QPushButton("연산자 학습")
+        self._op_train_btn.clicked.connect(self._train_operator)
+        op_form.addRow(self._op_train_btn)
+
+        left_layout.addWidget(op_group)
+
+        # 4. Active learning candidate selection
+        active_group = QGroupBox("4. 데이터 보강 - Active Learning")
         active_form = QFormLayout(active_group)
 
         self._active_strategy_combo = QComboBox()
@@ -155,7 +277,7 @@ class ModelPanel(QWidget):
         active_form.addRow(self._active_btn)
         left_layout.addWidget(active_group)
 
-        online_group = QGroupBox("Online Update")
+        online_group = QGroupBox("5. 운영 중 업데이트 - Online Update")
         online_form = QFormLayout(online_group)
 
         self._online_buffer_spin = QSpinBox()
@@ -178,34 +300,46 @@ class ModelPanel(QWidget):
         self._online_y_spin.setValue(0.0)
         online_form.addRow("Observed y:", self._online_y_spin)
 
+        self._online_output_index_spin = QSpinBox()
+        self._online_output_index_spin.setRange(0, 999999)
+        self._online_output_index_spin.setValue(0)
+        online_form.addRow("Output index:", self._online_output_index_spin)
+
+        online_hint = QLabel("Online Update는 선택한 scalar output 1개만 업데이트합니다.")
+        online_hint.setObjectName("subtitleLabel")
+        online_hint.setWordWrap(True)
+        online_form.addRow(online_hint)
+
         self._online_update_btn = QPushButton("온라인 업데이트")
         self._online_update_btn.clicked.connect(self._run_online_update)
         online_form.addRow(self._online_update_btn)
         left_layout.addWidget(online_group)
 
-        # ─── 신경 연산자 (v2.0+) ───
-        op_group = QGroupBox("신경 연산자 (Operator Learning)")
-        op_form = QFormLayout(op_group)
+        advanced_group = QGroupBox("실험 기능 - Advanced AI quick-check")
+        advanced_form = QFormLayout(advanced_group)
 
-        self._op_combo = QComboBox()
-        self._op_combo.addItems(["FNO1D", "FNO2D", "TFNO2D", "DeepONet", "UNet2D", "WNO1D"])
-        op_form.addRow("연산자 타입:", self._op_combo)
+        self._advanced_ai_combo = QComboBox()
+        self._advanced_ai_combo.addItems([
+            "GNN Surrogate",
+            "LSTM + KNO",
+            "Diffusion PDE",
+        ])
+        advanced_form.addRow("기능:", self._advanced_ai_combo)
 
-        self._op_epochs_spin = QSpinBox()
-        self._op_epochs_spin.setRange(1, 1000)
-        self._op_epochs_spin.setValue(10)
-        op_form.addRow("Epoch:", self._op_epochs_spin)
+        advanced_hint = QLabel(
+            "Advanced AI는 현재 기능 smoke/quick-check입니다. 고객 CFD "
+            "학습 워크플로우로 노출된 모델은 위 capability 표를 기준으로 사용하세요."
+        )
+        advanced_hint.setObjectName("subtitleLabel")
+        advanced_hint.setWordWrap(True)
+        advanced_form.addRow(advanced_hint)
 
-        self._op_samples_spin = QSpinBox()
-        self._op_samples_spin.setRange(4, 1000)
-        self._op_samples_spin.setValue(20)
-        op_form.addRow("데모 샘플 수:", self._op_samples_spin)
+        self._advanced_ai_btn = QPushButton("AI quick-check 실행")
+        self._advanced_ai_btn.clicked.connect(self._run_advanced_ai)
+        advanced_form.addRow(self._advanced_ai_btn)
 
-        self._op_train_btn = QPushButton("연산자 학습")
-        self._op_train_btn.clicked.connect(self._train_operator)
-        op_form.addRow(self._op_train_btn)
-
-        left_layout.addWidget(op_group)
+        left_layout.addWidget(advanced_group)
+        self._apply_model_action_style()
 
         left_layout.addStretch()
         self._left_scroll = QScrollArea()
@@ -219,8 +353,25 @@ class ModelPanel(QWidget):
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
 
+        capability_group = QGroupBox("3. 검증/비교 - 모델 입출력 지원 범위")
+        capability_layout = QVBoxLayout(capability_group)
+        self._capability_table = QTableWidget(0, 4)
+        self._capability_table.setHorizontalHeaderLabels([
+            "방법",
+            "다중 input",
+            "다중 output",
+            "GUI 데이터 경로",
+        ])
+        self._capability_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self._capability_table.setMaximumHeight(170)
+        capability_layout.addWidget(self._capability_table)
+        right_layout.addWidget(capability_group)
+        self._render_capability_table()
+
         # 검증 지표
-        metrics_group = QGroupBox("검증 지표")
+        metrics_group = QGroupBox("3. 검증/비교 - 검증 지표")
         metrics_layout = QVBoxLayout(metrics_group)
         self._metrics_list = QListWidget()
         self._metrics_list.setAlternatingRowColors(True)
@@ -228,7 +379,7 @@ class ModelPanel(QWidget):
         metrics_layout.addWidget(self._metrics_list)
         right_layout.addWidget(metrics_group)
 
-        active_result_group = QGroupBox("Active Learning 후보")
+        active_result_group = QGroupBox("4. 데이터 보강 결과 - 추천 후보")
         active_result_layout = QVBoxLayout(active_result_group)
         self._active_table = QTableWidget(0, 3)
         self._active_table.setHorizontalHeaderLabels(["Rank", "Parameters", "Score"])
@@ -238,7 +389,7 @@ class ModelPanel(QWidget):
         active_result_layout.addWidget(self._active_table)
         right_layout.addWidget(active_result_group)
 
-        online_result_group = QGroupBox("Online Update 상태")
+        online_result_group = QGroupBox("5. 운영 중 업데이트 상태")
         online_result_layout = QVBoxLayout(online_result_group)
         self._online_table = QTableWidget(0, 3)
         self._online_table.setHorizontalHeaderLabels(["Metric", "Value", "Notes"])
@@ -249,7 +400,7 @@ class ModelPanel(QWidget):
         right_layout.addWidget(online_result_group)
 
         # 학습 loss curve
-        loss_group = QGroupBox("학습 Loss Curve")
+        loss_group = QGroupBox("3. 검증/비교 - 학습 Loss Curve")
         loss_layout = QVBoxLayout(loss_group)
         from naviertwin.gui.widgets.loss_curve_widget import LossCurveWidget
 
@@ -267,6 +418,65 @@ class ModelPanel(QWidget):
 
         layout.addWidget(right, stretch=1)
 
+    def _apply_model_action_style(self) -> None:
+        """모델 탭의 동등한 실행 버튼을 같은 시각 계층으로 맞춘다."""
+        for button in (
+            self._train_btn,
+            self._active_btn,
+            self._online_update_btn,
+            self._op_train_btn,
+            self._physics_train_btn,
+            self._physics_module_btn,
+            self._advanced_ai_btn,
+        ):
+            button.setObjectName("modelActionButton")
+
+    def _render_capability_table(self) -> None:
+        """Show which model families are wired to real multi-I/O CFD training."""
+        rows = [
+            (
+                "RBF / Kriging",
+                "가능",
+                "가능",
+                "CFD fields 또는 Reduce/POD 계수",
+            ),
+            (
+                "PhysicsNeMo CFD Field",
+                "가능",
+                "가능",
+                "Import 다중 케이스 + params CSV + output fields",
+            ),
+            (
+                "Online Update",
+                "가능",
+                "scalar 1개",
+                "학습된 surrogate의 선택 output index",
+            ),
+            (
+                "Active Learning",
+                "가능",
+                "해당 없음",
+                "학습된 surrogate 후보 추천",
+            ),
+            (
+                "FNO/DeepONet/UNet/WNO",
+                "코어 가능",
+                "코어 가능",
+                "현재 GUI는 데모 텐서",
+            ),
+            (
+                "GNN/LSTM+KNO/Diffusion",
+                "코어 가능",
+                "코어 가능",
+                "현재 GUI는 quick-check",
+            ),
+        ]
+        self._capability_table.setRowCount(len(rows))
+        for row, values in enumerate(rows):
+            for col, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                self._capability_table.setItem(row, col, item)
+
     # ──────────────────────────────────────────────────────────────────
     # 공개 API
     # ──────────────────────────────────────────────────────────────────
@@ -280,6 +490,13 @@ class ModelPanel(QWidget):
         """학습에 사용할 원본 데이터셋을 설정한다."""
         self._dataset = dataset
         self._reduction_artifact = None
+        self._populate_surrogate_output_fields(list(dataset.field_names))
+        self._populate_physics_output_fields(list(dataset.field_names))
+        case_paths = self._imported_case_paths()
+        if case_paths:
+            self._physics_case_label.setText(f"Import 탭에서 {len(case_paths)}개 케이스 로드됨")
+        else:
+            self._physics_case_label.setText("Import dataset 1개 사용")
         self._log(
             f"Dataset 설정: {dataset.n_points} pts, {dataset.n_cells} cells, "
             f"{dataset.n_time_steps} steps"
@@ -362,14 +579,17 @@ class ModelPanel(QWidget):
         n_params = self._n_params_spin.value()
         n_outputs = self._n_outputs_spin.value()
         ratio = self._train_ratio_spin.value()
+        source_mode = self._surrogate_source_mode()
 
         try:
             X: np.ndarray
             Y: np.ndarray
             used_real_data = False
+            used_direct_cfd = False
+            direct_metadata: dict[str, object] = {}
 
             # 최우선: Reduce 단계 산출물(coeffs/params) 사용
-            if self._reduction_artifact is not None:
+            if self._reduction_artifact is not None and source_mode in {"auto", "reduced"}:
                 coeffs_raw = self._reduction_artifact.get("coeffs")
                 params_raw = self._reduction_artifact.get("params")
                 if coeffs_raw is not None and params_raw is not None:
@@ -393,9 +613,32 @@ class ModelPanel(QWidget):
                             f"params={n_params}, outputs={n_outputs}"
                         )
 
+            # RBF/Kriging 직접 필드 surrogate: input params -> selected CFD fields
+            if not used_real_data and source_mode in {"auto", "cfd"}:
+                try:
+                    X, Y, direct_metadata = self._build_cfd_field_surrogate_training_data()
+                    used_real_data = True
+                    used_direct_cfd = True
+                    n_samples = X.shape[0]
+                    n_params = X.shape[1]
+                    n_outputs = Y.shape[1]
+                    self._n_samples_spin.setValue(min(max(n_samples, 2), self._n_samples_spin.maximum()))
+                    self._n_params_spin.setValue(n_params)
+                    self._n_outputs_spin.setValue(min(n_outputs, self._n_outputs_spin.maximum()))
+                    self._log(
+                        f"CFD 직접 필드 학습 사용: samples={n_samples}, "
+                        f"params={n_params}, outputs={n_outputs}, "
+                        f"fields={','.join(direct_metadata.get('field_names', []))}"
+                    )
+                except Exception as exc:
+                    if source_mode == "cfd":
+                        raise
+                    self._log(f"[INFO] CFD 직접 필드 학습 생략: {exc}")
+
             # 우선: reducer + dataset이 있으면 실제 스냅샷 기반 학습 데이터 사용
             if (
                 not used_real_data
+                and source_mode in {"auto", "reduced"}
                 and self._reducer is not None
                 and self._dataset is not None
                 and self._dataset.field_names
@@ -434,6 +677,12 @@ class ModelPanel(QWidget):
                 except Exception as exc:
                     self._log(f"[WARN] 실데이터 학습 데이터 구성 실패, 데모로 폴백: {exc}")
 
+            if not used_real_data and source_mode == "reduced":
+                raise RuntimeError(
+                    "Reduce/POD coefficients 학습을 선택했지만 Reduce 산출물 또는 "
+                    "인코딩 가능한 스냅샷이 없습니다."
+                )
+
             if not used_real_data:
                 if self._reducer is not None:
                     reducer_modes = int(getattr(self._reducer, "n_components", n_outputs))
@@ -466,22 +715,32 @@ class ModelPanel(QWidget):
             self._online_learner = None
             self._last_active_candidates = None
             model_name = type(surrogate).__name__
-            surrogate.training_metadata = {
+            field_name = (
+                self._dataset.field_names[0]
+                if self._dataset and self._dataset.field_names
+                else ""
+            )
+            metadata: dict[str, object] = {
                 "dataset_id": id(self._dataset) if self._dataset is not None else None,
-                "field_name": (
-                    self._dataset.field_names[0]
-                    if self._dataset and self._dataset.field_names
-                    else ""
-                ),
+                "field_name": field_name,
                 "n_modes": int(Y.shape[1]),
                 "n_outputs": int(Y.shape[1]),
                 "n_params": int(X.shape[1]),
                 "n_samples": int(Y.shape[0]),
                 "source": "real_data" if used_real_data else "demo",
+                "model_family": "surrogate",
             }
-            surrogate.training_metadata["explainability"] = (
-                self._build_explainability_metadata(X_train)
-            )
+            if used_direct_cfd:
+                metadata.update(direct_metadata)
+                metadata["source"] = "cfd_field_surrogate"
+                metadata["direct_field_model"] = True
+            explainability = self._build_explainability_metadata(X_train)
+            parameter_names = metadata.get("parameter_names")
+            if isinstance(parameter_names, list) and len(parameter_names) == X_train.shape[1]:
+                explainability["feature_names"] = [str(item) for item in parameter_names]
+            explainability["output_index"] = int(self._online_output_index_spin.value())
+            metadata["explainability"] = explainability
+            surrogate.training_metadata = metadata
 
             # 검증
             metrics_text = ""
@@ -503,6 +762,11 @@ class ModelPanel(QWidget):
                 self._metrics_list.clear()
                 self._metrics_list.addItem("테스트 셋 없음 (샘플 수 증가 필요)")
             surrogate.training_metadata["validation_metrics"] = validation_metrics
+            if used_direct_cfd and isinstance(direct_metadata.get("output_fields"), list):
+                self._metrics_list.addItem(
+                    "direct CFD fields: "
+                    + ", ".join(str(item) for item in direct_metadata.get("field_names", []))
+                )
 
             self._log(f"{model_name} 학습 완료 (n_train={n_train}){metrics_text}")
             self.model_trained.emit(model_name.lower(), surrogate)
@@ -622,21 +886,24 @@ class ModelPanel(QWidget):
         if arr.ndim == 1:
             return arr
         flat = arr.reshape(arr.shape[0], -1)
-        idx = min(self._online_output_index(surrogate), flat.shape[1] - 1)
+        idx = min(self._selected_online_output_index(surrogate), flat.shape[1] - 1)
         return flat[:, idx]
 
-    @staticmethod
-    def _online_output_index(surrogate: object) -> int:
+    def _selected_online_output_index(self, surrogate: object) -> int:
+        """Return scalar output index selected for Online Update."""
+        ui_value = int(self._online_output_index_spin.value())
+        if ui_value > 0:
+            return ui_value
         metadata = getattr(surrogate, "training_metadata", None)
         if not isinstance(metadata, Mapping):
-            return 0
+            return ui_value
         explain_meta = metadata.get("explainability")
         if not isinstance(explain_meta, Mapping):
-            return 0
+            return ui_value
         try:
-            return max(0, int(explain_meta.get("output_index", 0)))
+            return max(0, int(explain_meta.get("output_index", ui_value)))
         except (TypeError, ValueError):
-            return 0
+            return ui_value
 
     def _online_update_x(self, n_params: int) -> np.ndarray:
         text = self._online_x_edit.text().strip()
@@ -710,7 +977,7 @@ class ModelPanel(QWidget):
             "explainability": {
                 "background": background[:32].copy(),
                 "feature_names": [f"param_{i}" for i in range(n_features)],
-                "output_index": 0,
+                "output_index": int(self._online_output_index_spin.value()),
             },
         }
 
@@ -808,6 +1075,385 @@ class ModelPanel(QWidget):
             )
             score_text = "n/a" if not np.isfinite(score) else f"{float(score):.6g}"
             self._active_table.setItem(row, 2, QTableWidgetItem(score_text))
+
+    def _select_surrogate_params_csv(self) -> None:
+        """Select CSV containing operating parameters for direct CFD surrogates."""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Surrogate 입력 파라미터 CSV 선택",
+            "",
+            "CSV (*.csv);;All Files (*)",
+        )
+        if not path:
+            return
+        self._surrogate_params_path = Path(path)
+        self._physics_params_path = self._surrogate_params_path
+        self._surrogate_params_label.setText(str(self._surrogate_params_path))
+
+    def _populate_surrogate_output_fields(self, field_names: list[str]) -> None:
+        """Refresh the direct CFD surrogate multi-output selector."""
+        self._surrogate_field_list.clear()
+        for field_name in field_names:
+            self._surrogate_field_list.addItem(str(field_name))
+        if self._surrogate_field_list.count() > 0:
+            self._surrogate_field_list.item(0).setSelected(True)
+
+    def _selected_surrogate_output_fields(self) -> list[str]:
+        """Return selected direct CFD surrogate fields, defaulting to first field."""
+        selected = [item.text() for item in self._surrogate_field_list.selectedItems()]
+        if selected:
+            return selected
+        if self._surrogate_field_list.count() > 0:
+            return [self._surrogate_field_list.item(0).text()]
+        return []
+
+    def _surrogate_param_columns(self) -> list[str] | None:
+        """Parse optional comma-separated surrogate parameter CSV columns."""
+        raw = self._surrogate_param_columns_edit.text().strip()
+        if not raw:
+            return None
+        return [part.strip() for part in raw.split(",") if part.strip()]
+
+    def _surrogate_source_mode(self) -> str:
+        """Return normalized training source mode for classical surrogates."""
+        text = self._surrogate_source_combo.currentText().lower()
+        if text.startswith("cfd"):
+            return "cfd"
+        if text.startswith("reduce"):
+            return "reduced"
+        if text.startswith("demo"):
+            return "demo"
+        return "auto"
+
+    def _load_surrogate_training_datasets(self) -> list[object]:
+        """Load Import-tab CFD cases for direct field surrogate fitting."""
+        case_paths = self._imported_case_paths()
+        if case_paths:
+            from naviertwin.core.cfd_reader import ReaderFactory
+
+            return [
+                ReaderFactory.create_and_read(path)
+                for path in case_paths
+            ]
+        if self._dataset is None:
+            return []
+        return [self._dataset]
+
+    def _build_cfd_field_surrogate_training_data(
+        self,
+    ) -> tuple[np.ndarray, np.ndarray, dict[str, object]]:
+        """Build X/Y arrays for direct CFD field surrogate training."""
+        from naviertwin.core.physnemo.cfd_field_model import (
+            count_dataset_snapshots,
+            load_parameter_table,
+            prepare_cfd_field_training_data_from_datasets,
+        )
+
+        datasets = self._load_surrogate_training_datasets()
+        if not datasets:
+            raise RuntimeError("Import 탭에서 CFD 데이터셋을 먼저 로드하세요.")
+
+        field_names = self._selected_surrogate_output_fields()
+        if not field_names:
+            raise RuntimeError("CFD 직접 필드 학습 output field를 하나 이상 선택하세요.")
+
+        params = None
+        parameter_names = None
+        if self._surrogate_params_path is not None:
+            expected_rows = count_dataset_snapshots(datasets, field_names)
+            params, parameter_names = load_parameter_table(
+                self._surrogate_params_path,
+                columns=self._surrogate_param_columns(),
+                expected_rows=expected_rows,
+            )
+        elif len(datasets) > 1:
+            self._log(
+                "[WARN] Surrogate 입력 파라미터 CSV가 없어 case index를 input으로 사용합니다. "
+                "실제 inlet 조건 학습에는 CSV를 지정하세요."
+            )
+
+        data = prepare_cfd_field_training_data_from_datasets(
+            datasets,
+            field_names=field_names,
+            params=params,
+            parameter_names=parameter_names,
+        )
+        X = np.asarray(data.params, dtype=float)
+        Y = self._flatten_field_snapshots(data.values)
+        if X.ndim != 2 or X.shape[0] < 2:
+            raise RuntimeError(
+                "직접 필드 surrogate는 최소 2개 케이스/스냅샷이 필요합니다."
+            )
+        if Y.ndim != 2 or Y.shape[0] != X.shape[0]:
+            raise RuntimeError(
+                f"CFD field output shape 불일치: X={X.shape}, Y={Y.shape}"
+            )
+        metadata = {
+            "field_name": data.field_name,
+            "field_names": list(data.field_names),
+            "field_location": data.field_location,
+            "source_components": list(data.source_components),
+            "output_fields": list(data.output_fields),
+            "n_field_outputs": len(data.field_names),
+            "n_locations": int(data.coords.shape[0]),
+            "n_snapshots": int(X.shape[0]),
+            "parameter_names": list(data.parameter_names),
+            "parameter_min": np.min(X, axis=0).astype(float).tolist(),
+            "parameter_max": np.max(X, axis=0).astype(float).tolist(),
+        }
+        return X, Y, metadata
+
+    @staticmethod
+    def _flatten_field_snapshots(values: np.ndarray) -> np.ndarray:
+        """Flatten (snapshots, locations, fields) to field-major Y matrix."""
+        arr = np.asarray(values, dtype=float)
+        if arr.ndim != 3:
+            raise ValueError(f"field values must be 3D, got shape {arr.shape}")
+        rows = [
+            np.concatenate([arr[step, :, field] for field in range(arr.shape[2])])
+            for step in range(arr.shape[0])
+        ]
+        return np.vstack(rows)
+
+    def _select_physics_params_csv(self) -> None:
+        """Select CSV containing operating input parameters."""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "PhysicsNeMo 입력 파라미터 CSV 선택",
+            "",
+            "CSV (*.csv);;All Files (*)",
+        )
+        if not path:
+            return
+        self._physics_params_path = Path(path)
+        self._surrogate_params_path = self._physics_params_path
+        self._physics_params_label.setText(str(self._physics_params_path))
+
+    def _populate_physics_output_fields(self, field_names: list[str]) -> None:
+        """Refresh the multi-output field selector."""
+        self._physics_field_list.clear()
+        for field_name in field_names:
+            self._physics_field_list.addItem(str(field_name))
+        if self._physics_field_list.count() > 0:
+            self._physics_field_list.item(0).setSelected(True)
+
+    def _selected_physics_output_fields(self) -> list[str]:
+        """Return selected output fields, defaulting to the first field."""
+        selected = [item.text() for item in self._physics_field_list.selectedItems()]
+        if selected:
+            return selected
+        if self._physics_field_list.count() > 0:
+            return [self._physics_field_list.item(0).text()]
+        return []
+
+    def _physics_param_columns(self) -> list[str] | None:
+        """Parse optional comma-separated parameter CSV columns."""
+        raw = self._physics_param_columns_edit.text().strip()
+        if not raw:
+            return None
+        return [part.strip() for part in raw.split(",") if part.strip()]
+
+    def _imported_case_paths(self) -> list[Path]:
+        """Return multi-case paths provided by the Import tab."""
+        if self._dataset is None:
+            return []
+        metadata = getattr(self._dataset, "metadata", {}) or {}
+        raw_paths = metadata.get("case_paths") if isinstance(metadata, Mapping) else None
+        if not isinstance(raw_paths, list):
+            return []
+        paths = [Path(str(path)) for path in raw_paths if str(path).strip()]
+        return paths
+
+    def _load_physics_training_datasets(self) -> list[object]:
+        """Load Import-tab CFD cases or fall back to the representative dataset."""
+        case_paths = self._imported_case_paths()
+        if case_paths:
+            from naviertwin.core.cfd_reader import ReaderFactory
+
+            return [
+                ReaderFactory.create_and_read(path)
+                for path in case_paths
+            ]
+        if self._dataset is None:
+            return []
+        return [self._dataset]
+
+    def _train_physics_ai(self) -> None:
+        """Train a PhysicsNeMo-style CFD field model from loaded CFD data."""
+        datasets = self._load_physics_training_datasets()
+        if not datasets:
+            self._log("[WARN] 먼저 Import 탭에서 CFD 파일을 로드하거나 학습 케이스를 선택하세요.")
+            return
+
+        physics_type = self._physics_combo.currentText()
+        epochs = int(self._physics_epochs_spin.value())
+        hidden = int(self._physics_hidden_spin.value())
+        max_samples = int(self._physics_max_samples_spin.value())
+        field_names = self._selected_physics_output_fields()
+        if not field_names:
+            self._log("[WARN] 학습할 CFD output field를 하나 이상 선택하세요.")
+            return
+
+        try:
+            model = self._fit_physics_ai_from_dataset(
+                datasets=datasets,
+                field_names=field_names,
+                epochs=epochs,
+                hidden=hidden,
+                max_samples=max_samples,
+            )
+            losses = self._physics_train_losses(model)
+            if losses:
+                setattr(model, "train_losses_", losses)
+
+            self._surrogate = model
+            self._online_learner = None
+            self._last_active_candidates = None
+
+            self._metrics_list.clear()
+            self._metrics_list.addItem(f"physics_model: {physics_type}")
+            self._metrics_list.addItem(f"outputs: {', '.join(field_names)}")
+            metadata = getattr(model, "training_metadata", {})
+            metrics = metadata.get("validation_metrics", {})
+            if isinstance(metrics, Mapping):
+                for key, value in metrics.items():
+                    self._metrics_list.addItem(f"{key}: {float(value):.6g}")
+            self._metrics_list.addItem(
+                f"locations: {metadata.get('n_locations', 'unknown')}"
+            )
+            self._metrics_list.addItem(
+                f"snapshots: {metadata.get('n_snapshots', 'unknown')}"
+            )
+            self._update_loss_curve(physics_type, model)
+
+            model_id = "physicsnemo_cfd"
+            rmse = (
+                float(metrics.get("rmse", float("nan")))
+                if isinstance(metrics, Mapping)
+                else float("nan")
+            )
+            self._log(
+                f"[{physics_type}] 학습 완료 — "
+                f"outputs={','.join(field_names)}, rmse={rmse:.4g}, "
+                f"params={getattr(model, 'input_dim', 0)}"
+            )
+            self.model_trained.emit(model_id, model)
+
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[ERROR] {physics_type} 학습 실패: {exc}")
+
+    def _fit_physics_ai_from_dataset(
+        self,
+        *,
+        datasets: list[object],
+        field_names: list[str],
+        epochs: int,
+        hidden: int,
+        max_samples: int,
+    ) -> object:
+        """Fit PhysicsNeMo-style model from selected CFD datasets."""
+        from naviertwin.core.physnemo.cfd_field_model import (
+            PhysicsNeMoCFDFieldModel,
+            count_dataset_snapshots,
+            load_parameter_table,
+        )
+
+        params = None
+        parameter_names = None
+        if self._physics_params_path is not None:
+            expected_rows = count_dataset_snapshots(datasets, field_names)
+            params, parameter_names = load_parameter_table(
+                self._physics_params_path,
+                columns=self._physics_param_columns(),
+                expected_rows=expected_rows,
+            )
+        elif len(datasets) > 1:
+            self._log(
+                "[WARN] 입력 파라미터 CSV가 없어 case index를 input으로 사용합니다. "
+                "실제 inlet 조건 학습에는 CSV를 지정하세요."
+            )
+
+        return PhysicsNeMoCFDFieldModel.from_datasets(
+            datasets,
+            field_names=field_names,
+            params=params,
+            parameter_names=parameter_names,
+            hidden=hidden,
+            max_epochs=epochs,
+            max_train_points=max_samples,
+        )
+
+    @staticmethod
+    def _physics_train_losses(model: object) -> list[float]:
+        raw = getattr(model, "train_losses_", None)
+        if raw is None:
+            pinn = getattr(model, "_pinn", None)
+            raw = getattr(pinn, "train_losses_", None)
+        if raw is None:
+            subs = getattr(model, "_subs", None)
+            if isinstance(subs, list):
+                raw = [
+                    loss
+                    for sub in subs
+                    for loss in getattr(sub, "train_losses_", [])
+                ]
+        if raw is None:
+            return []
+        losses: list[float] = []
+        for value in raw:
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(parsed):
+                losses.append(parsed)
+        return losses
+
+    def _save_physicsnemo_module(self) -> None:
+        """Wrap the latest PyTorch/Physics model as PhysicsNeMo Module."""
+        if self._surrogate is None:
+            self._log("[WARN] PhysicsNeMo Module로 저장할 학습 모델이 없습니다.")
+            return
+        try:
+            from naviertwin.core.physnemo.physicsnemo_model import (
+                physicsnemo_available,
+                save_checkpoint,
+                wrap_as_physicsnemo_module,
+            )
+
+            if not physicsnemo_available():
+                self._log("[WARN] physicsnemo 미설치: pip install nvidia-physicsnemo")
+                return
+            torch_model = self._resolve_torch_module(self._surrogate)
+            wrapped = wrap_as_physicsnemo_module(
+                torch_model,
+                name=f"naviertwin_{type(self._surrogate).__name__}",
+            )
+            out = Path(tempfile.gettempdir()) / "naviertwin_physicsnemo_gui.pt"
+            save_checkpoint(wrapped, out)
+            self._log(f"PhysicsNeMo Module 저장 완료: {out}")
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[ERROR] PhysicsNeMo Module 저장 실패: {exc}")
+
+    @staticmethod
+    def _resolve_torch_module(source: object) -> object:
+        import torch
+
+        candidates = [source]
+        for attr in ("_model", "model", "module", "net", "network"):
+            value = getattr(source, attr, None)
+            if value is not None:
+                candidates.append(value)
+        pinn = getattr(source, "_pinn", None)
+        if pinn is not None:
+            candidates.append(pinn)
+            inner = getattr(pinn, "_model", None)
+            if inner is not None:
+                candidates.append(inner)
+        for candidate in candidates:
+            if isinstance(candidate, torch.nn.Module):
+                return candidate
+        raise RuntimeError("PyTorch nn.Module을 찾을 수 없습니다.")
 
     def _train_operator(self) -> None:
         """선택한 신경 연산자를 합성 데이터로 빠르게 학습/검증한다."""
@@ -919,6 +1565,27 @@ class ModelPanel(QWidget):
         except Exception as exc:  # noqa: BLE001
             self._log(f"[ERROR] {op_type} 학습 실패: {exc}")
 
+    def _run_advanced_ai(self) -> None:
+        """Run GUI-accessible smoke checks for heavier AI families."""
+        mapping = {
+            "GNN Surrogate": "gnn.surrogate",
+            "LSTM + KNO": "timeseries.koopman",
+            "Diffusion PDE": "generative.diffusion",
+        }
+        label = self._advanced_ai_combo.currentText()
+        capability_id = mapping.get(label)
+        if capability_id is None:
+            self._log(f"[WARN] 알 수 없는 Advanced AI 기능: {label}")
+            return
+
+        try:
+            from naviertwin.gui.panels.library_panel import run_capability_demo
+
+            result = run_capability_demo(capability_id)
+            self._log(f"[{label}] quick-check 완료\n{self._format_demo_result(result)}")
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[ERROR] {label} quick-check 실패: {exc}")
+
     def _extract_snapshots_from_dataset(self, field: str) -> np.ndarray:
         """CFDDataset에서 (n_features, n_samples) 스냅샷 행렬을 구성한다."""
         if self._dataset is None:
@@ -971,3 +1638,30 @@ class ModelPanel(QWidget):
         self._log_text.append(msg)
         sb = self._log_text.verticalScrollBar()
         sb.setValue(sb.maximum())
+
+    def _format_demo_result(self, value: Any) -> str:
+        return json.dumps(
+            self._json_safe(value),
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+    def _json_safe(self, value: Any) -> Any:
+        if isinstance(value, np.ndarray):
+            return {
+                "shape": list(value.shape),
+                "dtype": str(value.dtype),
+                "min": float(np.nanmin(value)) if value.size else None,
+                "max": float(np.nanmax(value)) if value.size else None,
+                "mean": float(np.nanmean(value)) if value.size else None,
+            }
+        if isinstance(value, np.generic):
+            return value.item()
+        if isinstance(value, Path):
+            return str(value)
+        if isinstance(value, Mapping):
+            return {str(k): self._json_safe(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self._json_safe(v) for v in value]
+        return value

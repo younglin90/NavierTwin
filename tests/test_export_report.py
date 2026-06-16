@@ -137,7 +137,7 @@ class TestI18n:
         from naviertwin.utils.i18n import Translator
 
         t = Translator(lang="ko")
-        assert "Import" in t("panel.import")  # "Import (불러오기)"
+        assert t("panel.import") == "불러오기"
         t.set_language("en")
         assert t("panel.import") == "Import"
 

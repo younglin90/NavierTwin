@@ -8,6 +8,7 @@
     - ExplainabilityPanel: 모델 설명 패널
     - ExportPanel: 결과 내보내기 패널
     - SimulationPanel: 실시간 시뮬레이션 패널
+    - LibraryPanel: 라이브러리/기능 통합 브라우저
     - PostProcessPanel: 후처리 도구 패널
 """
 
@@ -15,6 +16,7 @@ from naviertwin.gui.panels.analyze_panel import AnalyzePanel
 from naviertwin.gui.panels.explainability_panel import ExplainabilityPanel
 from naviertwin.gui.panels.export_panel import ExportPanel
 from naviertwin.gui.panels.import_panel import ImportPanel
+from naviertwin.gui.panels.library_panel import LibraryPanel
 from naviertwin.gui.panels.model_panel import ModelPanel
 from naviertwin.gui.panels.postproc_panel import PostProcessPanel
 from naviertwin.gui.panels.reduce_panel import ReducePanel
@@ -30,5 +32,6 @@ __all__ = [
     "ExplainabilityPanel",
     "ExportPanel",
     "SimulationPanel",
+    "LibraryPanel",
     "PostProcessPanel",
 ]

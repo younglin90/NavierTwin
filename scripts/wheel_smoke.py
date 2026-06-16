@@ -213,10 +213,11 @@ def _validate_wheel(wheel: Path) -> None:
         if "LICENSE" not in license_files:
             raise RuntimeError(f"wheel License-File missing LICENSE: {license_files}")
         extras = set(message.get_all("Provides-Extra", []))
-        if extras != {"core", "full", "dev"}:
+        if extras != {"desktop", "core", "full", "dev"}:
             raise RuntimeError(f"wheel Provides-Extra mismatch: {extras}")
         requires_dist = message.get_all("Requires-Dist", [])
         required_requires_dist_snippets = [
+            "PySide6>=6.6; extra == \"desktop\"",
             "PySide6>=6.6; extra == \"core\"",
             "naviertwin[core]; extra == \"full\"",
             "pytest>=8.1; extra == \"dev\"",

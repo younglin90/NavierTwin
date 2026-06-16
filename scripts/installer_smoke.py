@@ -33,7 +33,12 @@ def main() -> int:
 
     checks += _assert_contains(
         iss,
-        f"AppVersion={version}",
+        f'#define NavierTwinVersion "{version}"',
+        message="Inno NavierTwinVersion define must match project.version",
+    )
+    checks += _assert_contains(
+        iss,
+        "AppVersion={#NavierTwinVersion}",
         message="Inno AppVersion must match project.version",
     )
 
@@ -71,6 +76,16 @@ def main() -> int:
         spec,
         '"torch"',
         message="PyInstaller spec must explicitly control heavyweight optional packages",
+    )
+    checks += _assert_contains(
+        spec,
+        '"smt"',
+        message="PyInstaller desktop profile must include essential SMT surrogate backend",
+    )
+    checks += _assert_contains(
+        spec,
+        '"pydmd"',
+        message="PyInstaller desktop profile must include essential PyDMD ROM backend",
     )
     checks += _assert_contains(
         spec,
@@ -169,9 +184,51 @@ def main() -> int:
         message="Inno SignTool documentation must include the setup-file placeholder",
     )
     checks += _assert_contains(
+        iss,
+        "featurepacks\\mlcpu",
+        message="Inno must ask users whether to install optional ML features",
+    )
+    checks += _assert_contains(
+        iss,
+        "--install-feature-pack",
+        message="Inno must run NavierTwin's online optional feature installer",
+    )
+    checks += _assert_contains(
+        iss,
+        "{commonappdata}\\NavierTwin\\feature-packs",
+        message="Inno must install selected optional features into shared app data",
+    )
+    checks += _assert_contains(
+        (root / "src" / "naviertwin" / "gui_entry.py").read_text(encoding="utf-8"),
+        "--install-feature-pack",
+        message="GUI entry point must support setup-invoked optional feature installation",
+    )
+    checks += _assert_contains(
+        (root / "src" / "naviertwin" / "utils" / "feature_packs.py").read_text(
+            encoding="utf-8"
+        ),
+        "install_feature_pack_online",
+        message="Feature-pack utility must support online setup installation",
+    )
+    checks += _assert_contains(
+        spec,
+        "pip._internal.cli.main",
+        message="Packager must bundle pip for setup-time optional feature installation",
+    )
+    checks += _assert_contains(
         (root / "scripts" / "build_windows_installer.ps1").read_text(encoding="utf-8"),
         "PyInstaller --noconfirm --clean $SpecPath",
         message="Windows build helper must run PyInstaller with the release spec path",
+    )
+    checks += _assert_contains(
+        (root / "scripts" / "build_windows_installer.ps1").read_text(encoding="utf-8"),
+        "[ValidateSet(\"nuitka\", \"pyinstaller\")]",
+        message="Windows build helper must expose Nuitka/PyInstaller backends",
+    )
+    checks += _assert_contains(
+        (root / "scripts" / "build_windows_installer.ps1").read_text(encoding="utf-8"),
+        "-m\", \"nuitka\"",
+        message="Windows build helper must support Nuitka standalone builds",
     )
     checks += _assert_contains(
         (root / "scripts" / "build_windows_installer.ps1").read_text(encoding="utf-8"),
@@ -187,6 +244,11 @@ def main() -> int:
         (root / "docs" / "WINDOWS_INSTALLER.md").read_text(encoding="utf-8"),
         "scripts\\build_windows_installer.ps1",
         message="Windows installer documentation must reference the build helper",
+    )
+    checks += _assert_contains(
+        (root / "scripts" / "build_feature_pack.py").read_text(encoding="utf-8"),
+        "NavierTwinFeaturePack",
+        message="Feature-pack build helper must generate release asset archives",
     )
 
     publisher = next(

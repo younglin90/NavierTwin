@@ -54,6 +54,26 @@ def test_model_panel_active_learning_controls_render(qtbot) -> None:
     assert panel._left_scroll.maximumWidth() == 300
 
 
+def test_model_panel_actions_use_equal_visual_priority(qtbot) -> None:
+    from naviertwin.gui.panels.model_panel import ModelPanel
+
+    panel = ModelPanel()
+    qtbot.addWidget(panel)
+
+    action_buttons = [
+        panel._train_btn,
+        panel._active_btn,
+        panel._online_update_btn,
+        panel._op_train_btn,
+        panel._physics_train_btn,
+        panel._physics_module_btn,
+        panel._advanced_ai_btn,
+    ]
+
+    assert all(button.objectName() == "modelActionButton" for button in action_buttons)
+    assert panel._train_btn.objectName() != "primaryButton"
+
+
 def test_model_panel_active_learning_recommends_candidates(
     qtbot,
     monkeypatch: pytest.MonkeyPatch,

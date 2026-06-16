@@ -26,7 +26,8 @@ QTabWidget::pane {
 QTabBar::tab {
     background-color: #2A2A42;
     color: #9090B0;
-    padding: 8px 18px;
+    min-height: 30px;
+    padding: 7px 18px;
     border: 1px solid #3A3A5C;
     border-bottom: none;
     border-top-left-radius: 4px;
@@ -43,6 +44,35 @@ QTabBar::tab:selected {
 QTabBar::tab:hover:!selected {
     background-color: #313150;
     color: #C0C0D8;
+}
+
+QWidget#pipelineTabBar {
+    background-color: #1E1E2E;
+    border-bottom: 1px solid #3A3A5C;
+}
+
+QPushButton#pipelineTabButton {
+    background-color: #2A2A42;
+    color: #C0C0D8;
+    border: 1px solid #3A3A5C;
+    border-radius: 8px;
+    min-width: 118px;
+    min-height: 38px;
+    padding: 8px 14px;
+    font-weight: 600;
+}
+
+QPushButton#pipelineTabButton:hover {
+    background-color: #313150;
+    color: #E0E0E0;
+    border-color: #6060A0;
+}
+
+QPushButton#pipelineTabButton:checked,
+QPushButton#pipelineTabButton[active="true"] {
+    background-color: #252535;
+    color: #CBA6F7;
+    border: 2px solid #CBA6F7;
 }
 
 /* ─── 버튼 ──────────────────────────────────────────────── */
@@ -84,6 +114,26 @@ QPushButton#primaryButton:hover {
 
 QPushButton#primaryButton:pressed {
     background-color: #5A4CA0;
+}
+
+QPushButton#modelActionButton {
+    background-color: #303A54;
+    color: #DCE4FF;
+    border: 1px solid #566282;
+    border-radius: 4px;
+    padding: 6px 14px;
+    min-width: 110px;
+    font-weight: 600;
+}
+
+QPushButton#modelActionButton:hover {
+    background-color: #394768;
+    border-color: #7D8CB8;
+}
+
+QPushButton#modelActionButton:pressed {
+    background-color: #263047;
+    border-color: #CBA6F7;
 }
 
 QPushButton#dangerButton {

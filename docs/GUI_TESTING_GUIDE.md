@@ -38,7 +38,7 @@ naviertwin --gui
 |------|------|------|
 | 1 | **`파일 선택`** → `/tmp/naviertwin_demo/cavity.vtu` | 경로 표시 |
 | 2 | **`Readiness 점검`** | "OK: VTKReader" |
-| 3 | **`데이터 로드`** | 우측 mesh 정보 + 3D 뷰어 (PyVista 있으면) |
+| 3 | **`데이터 로드`** | Analyze 탭 3D 뷰어에 mesh/field 표시 |
 
 **기대 출력**: n_points=400, fields=`T`, `U`, `p`, `wallShearStress`.
 
@@ -234,7 +234,8 @@ QT_QPA_PLATFORM=offscreen pytest \
 
 | 증상 | 해결 |
 |------|------|
-| 3D 뷰어 비어있음 | `pip install pyvistaqt pyvista` |
+| 3D 뷰어가 정적 이미지로 보임 | headless/offscreen fallback 상태. 실제 마우스 회전은 display 환경 + `pyvistaqt` 필요 |
+| 3D 뷰어 비어있음 | `pip install pyvista pyvistaqt vtk` 후 실제 display에서 실행 |
 | AE/VAE 비활성 | `pip install torch` |
 | FNO/DeepONet 학습 안 됨 | PyTorch CUDA 없으면 CPU (시간 걸림) |
 | Post-Tools 차트 안 보임 | `pip install matplotlib` |

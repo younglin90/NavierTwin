@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import zipfile
 from pathlib import Path
@@ -378,6 +379,32 @@ def _build_parser() -> argparse.ArgumentParser:
         help="다운로드한 설치 파일을 릴리스 메타데이터 SHA256으로 검증",
     )
 
+    # feature-pack
+    p_feature = sub.add_parser(
+        "feature-pack",
+        help="대형 선택 기능 팩 다운로드/설치/상태 조회",
+    )
+    feature_sub = p_feature.add_subparsers(dest="feature_pack_command", metavar="<action>")
+    p_feature_list = feature_sub.add_parser("list", help="Feature Pack 상태 조회")
+    p_feature_list.add_argument("--json", dest="as_json", action="store_true", help="JSON으로 출력")
+    p_feature_install = feature_sub.add_parser("install", help="다운로드한 Feature Pack ZIP 설치")
+    p_feature_install.add_argument("--archive", required=True, help="설치할 Feature Pack ZIP 경로")
+    p_feature_install.add_argument("--pack", default=None, help="예상 pack id 검증")
+    p_feature_install.add_argument("--sha256", default=None, help="선택적 ZIP SHA256 검증값")
+    p_feature_install.add_argument("--json", dest="as_json", action="store_true", help="JSON으로 출력")
+    p_feature_download = feature_sub.add_parser("download", help="Feature Pack ZIP 다운로드")
+    p_feature_download.add_argument("--pack", required=True, help="다운로드할 pack id")
+    p_feature_download.add_argument("--url", default=None, help="기본 GitHub Release URL 대신 사용할 URL")
+    p_feature_download.add_argument("--sha256", default=None, help="선택적 ZIP SHA256 검증값")
+    p_feature_download.add_argument("--output-dir", default=None, help="다운로드 출력 디렉토리")
+    p_feature_download.add_argument(
+        "--install",
+        action="store_true",
+        default=False,
+        help="다운로드 후 즉시 설치",
+    )
+    p_feature_download.add_argument("--json", dest="as_json", action="store_true", help="JSON으로 출력")
+
     # doctor
     p_doctor = sub.add_parser("doctor", help="설치/런타임 환경 진단 리포트 출력")
     p_doctor.add_argument("--json", dest="as_json", action="store_true", help="JSON으로 출력")
@@ -392,6 +419,15 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _setup_qt_runtime_defaults() -> None:
+    """QApplication 생성 전 Qt/VTK viewer 플랫폼 기본값을 잡는다."""
+    is_wsl = "WSL_DISTRO_NAME" in os.environ or Path("/usr/lib/wsl").exists()
+    has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    if is_wsl and has_display and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+        os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
+    os.environ.setdefault("QT_X11_NO_MITSHM", "1")
+
+
 def _run_gui(config_path: str | None) -> int:
     """PySide6 GUI 애플리케이션을 실행한다.
 
@@ -401,6 +437,8 @@ def _run_gui(config_path: str | None) -> int:
     Returns:
         프로세스 종료 코드.
     """
+    _setup_qt_runtime_defaults()
+
     try:
         from PySide6.QtWidgets import QApplication  # noqa: PLC0415
     except ImportError:
@@ -416,9 +454,41 @@ def _run_gui(config_path: str | None) -> int:
     app.setApplicationVersion(__version__)
     app.setOrganizationName("NavierTwin")
 
+    # 터미널에서 Ctrl+C (SIGINT) 로 즉시 종료 가능하도록 핸들러 복원.
+    # PyQt/PySide 는 기본적으로 Python signal 핸들러가 GUI 이벤트 루프에
+    # 진입하는 동안 호출되지 않으므로, 명시적으로 SIG_DFL 로 되돌리고 0.5s
+    # 주기 더미 타이머로 인터프리터에 제어권을 넘긴다.
+    import signal as _signal  # noqa: PLC0415
+
+    _signal.signal(_signal.SIGINT, _signal.SIG_DFL)
+    try:
+        _signal.signal(_signal.SIGTERM, _signal.SIG_DFL)
+    except (ValueError, OSError):
+        pass
+
+    from PySide6.QtCore import QTimer  # noqa: PLC0415
+
+    _sigint_pump = QTimer()
+    _sigint_pump.setInterval(500)
+    _sigint_pump.timeout.connect(lambda: None)
+    _sigint_pump.start()
+    app._naviertwin_sigint_pump = _sigint_pump  # GC 방지로 보관
+
+    # QSS 가 QComboBox QAbstractItemView 를 스타일링하면 popup 닫힘 핸들러가
+    # 누락되는 Qt6 버그를 글로벌 이벤트 필터로 보정한다.
+    from naviertwin.gui.utils.combo_fix import install_combo_close_filter  # noqa: PLC0415
+
+    install_combo_close_filter(app)
+
     from naviertwin.gui.main_window import MainWindow  # noqa: PLC0415
 
     window = MainWindow(config_path=config_path)
+
+    # MainWindow 생성 시점에 만들어진 모든 콤보박스에도 닫힘 보정 일괄 적용.
+    from naviertwin.gui.utils.combo_fix import apply_to_widget_tree  # noqa: PLC0415
+
+    apply_to_widget_tree(window)
+
     window.show()
 
     return app.exec()
@@ -429,6 +499,10 @@ def main() -> None:
 
     ``--gui`` 플래그가 없으면 도움말을 출력하고 종료한다.
     """
+    from naviertwin.utils.feature_packs import activate_installed_feature_packs  # noqa: PLC0415
+
+    activate_installed_feature_packs()
+
     parser = _build_parser()
     args = parser.parse_args()
 
@@ -610,6 +684,8 @@ def main() -> None:
                 verify_artifact=args.verify_artifact,
             )
         )
+    elif args.command == "feature-pack":
+        sys.exit(_run_feature_pack(args))
     elif args.command == "doctor":
         sys.exit(
             _run_doctor(
@@ -3114,6 +3190,68 @@ def _run_update_check(
         return 2
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
     return exit_code
+
+
+def _run_feature_pack(args: argparse.Namespace) -> int:
+    """Feature Pack 상태 조회, 다운로드, 설치를 처리한다."""
+    from pathlib import Path
+
+    from naviertwin.utils.feature_packs import (
+        all_feature_pack_statuses,
+        download_feature_pack,
+        install_feature_pack_archive,
+    )
+
+    action = getattr(args, "feature_pack_command", None)
+    if action in (None, "list"):
+        payload = {
+            "status": "ok",
+            "feature_packs": all_feature_pack_statuses(),
+        }
+        if getattr(args, "as_json", False):
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        else:
+            for item in payload["feature_packs"]:
+                state = "installed" if item["installed"] else "missing"
+                missing = ",".join(item["missing_modules"]) or "-"
+                print(f"{item['id']}: {state} | missing={missing} | {item['download_url']}")
+        return 0
+
+    try:
+        if action == "install":
+            payload = install_feature_pack_archive(
+                args.archive,
+                expected_pack_id=args.pack,
+                expected_sha256=args.sha256,
+            )
+        elif action == "download":
+            archive = download_feature_pack(
+                args.pack,
+                url=args.url,
+                output_dir=Path(args.output_dir) if args.output_dir else None,
+                expected_sha256=args.sha256,
+            )
+            payload = {
+                "status": "ok",
+                "archive": str(archive),
+            }
+            if args.install:
+                payload["install"] = install_feature_pack_archive(
+                    archive,
+                    expected_pack_id=args.pack,
+                    expected_sha256=args.sha256,
+                )
+        else:
+            raise ValueError(f"unknown feature-pack action: {action}")
+    except (OSError, ValueError, KeyError) as exc:
+        print(f"feature-pack error: {exc}", file=sys.stderr)
+        return 2
+
+    if getattr(args, "as_json", False):
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    else:
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
 
 
 def _run_doctor(*, as_json: bool, include_optional: bool, output: str | None = None) -> int:

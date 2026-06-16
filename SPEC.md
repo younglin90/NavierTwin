@@ -8,7 +8,7 @@
 ## 1. 개요
 
 CFD 후처리 결과 데이터 → AI/ROM/Operator Learning → 디지털 트윈 변환 Windows 데스크톱 툴.
-MIT 오픈소스 core. PySide6 GUI + PyVista 3D + 로컬 GPU 학습. 타겟: 엔지니어 일반 사용자.
+MIT 오픈소스 core. PySide6 GUI + PyVista/pyvistaqt 3D + 로컬 GPU 학습. 타겟: 엔지니어 일반 사용자.
 
 ---
 
@@ -17,7 +17,7 @@ MIT 오픈소스 core. PySide6 GUI + PyVista 3D + 로컬 GPU 학습. 타겟: 엔
 | 레이어 | 기술 |
 |--------|------|
 | GUI | PySide6 (Qt6), QSS 다크테마, i18n(한/영) |
-| 3D 시각화 | PyVista + pyvistaqt, pvpython(ParaView 배치 렌더링) |
+| 3D 시각화 | PyVista + pyvistaqt QtInteractor, headless/offscreen 정적 PNG fallback |
 | CFD I/O | meshio, foamlib(GPL-3.0, OpenFOAM 현대적 래퍼), ofpp(MIT, 경량 OpenFOAM 파서), fluidfoam, pyCGNS, h5py, SU2 Python Wrapper(LGPL-2.1) |
 | OpenFOAM 자동화 | fluidsimfoam(GPL-3.0, 케이스 생성·실행·후처리 자동화) |
 | CFD 메쉬 생성 | Gmsh Python API (GPL-2.0+, OCC 기반 파라미터화 메쉬 생성) |
@@ -603,46 +603,15 @@ project.ntwin  (HDF5)
 
 ### 9.7 PySide6 + pyvistaqt Qt 뷰어 패턴
 
-```python
-# widgets/vtk_viewer.py
-import os
-os.environ["QT_API"] = "pyside6"
-from pyvistaqt import QtInteractor
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QSlider, QComboBox
-from PySide6.QtCore import Qt, Signal
+`widgets/vtk_viewer.py`는 AutoTessell에서 검증된 `QtInteractor` 직접 임베드
+패턴을 따른다. 데스크톱 환경에서는 VTK 기본 trackball interactor가 마우스
+회전/줌/팬을 처리하고, `QT_QPA_PLATFORM=offscreen` 또는 headless 환경에서는
+PyVista offscreen screenshot을 QLabel에 표시하는 정적 fallback으로 전환한다.
 
-class VtkViewer(QWidget):
-    timestep_changed = Signal(int)
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        layout = QVBoxLayout(self)
-
-        self.plotter = QtInteractor(self)
-        layout.addWidget(self.plotter, stretch=9)
-
-        # 타임스텝 슬라이더
-        self.slider = QSlider(Qt.Horizontal)
-        self.slider.valueChanged.connect(self.timestep_changed)
-        layout.addWidget(self.slider, stretch=1)
-
-        # 컬러맵 선택기
-        self.cmap_box = QComboBox()
-        self.cmap_box.addItems(["coolwarm", "viridis", "jet", "rainbow"])
-        self.cmap_box.currentTextChanged.connect(self._rerender)
-        layout.addWidget(self.cmap_box)
-
-    def show_mesh(self, mesh, scalars: str):
-        self.plotter.clear()
-        self.plotter.add_mesh(mesh, scalars=scalars, cmap=self.cmap_box.currentText())
-        self.plotter.reset_camera()
-
-    def _rerender(self, _):
-        self.plotter.render()
-```
-
-- `QtInteractor`를 `QVBoxLayout`에 직접 임베드 (독립 창 모드는 `BackgroundPlotter` 사용)
-- VTK 내장 위젯(`add_slider_widget`)과 Qt 위젯을 혼용하지 말 것 — UI 일관성 저하
+- `QtInteractor` 위에 별도 mouse event filter를 얹지 않는다.
+- UnstructuredGrid는 렌더 직전에 surface를 추출해 VTK dangling reference 위험을 낮춘다.
+- 벡터 필드는 `<field>__mag` magnitude scalar로 컬러링한다.
+- Reset View는 항상 isometric + reset_camera 한 가지 동작만 수행한다.
 
 ### 9.8 PyInstaller + PyTorch/CUDA 패키징 전략
 

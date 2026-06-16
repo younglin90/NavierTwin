@@ -13,23 +13,22 @@ class TestMainWindowIntegration:
 
         win = MainWindow(confirm_on_close=False)
         qtbot.addWidget(win)
-        # Post-Tools 탭이 추가됨
+        # Post-Tools는 Analyze 내부 하위 탭으로 제공됨
         assert win._postproc_panel is not None
-        # 탭 텍스트에 "Post-Tools" 포함
         tab_texts = [
             win._tabs.tabText(i) for i in range(win._tabs.count())
         ]
-        assert any("Post-Tools" in t for t in tab_texts)
+        assert not any("Post-Tools" in t or "후처리" in t for t in tab_texts)
+        assert win._analyze_workbench.indexOf(win._postproc_panel) >= 0
 
-    def test_switch_to_postproc_tab(self, qtbot) -> None:
+    def test_switch_to_postproc_subtab(self, qtbot) -> None:
         from naviertwin.gui.main_window import MainWindow
 
         win = MainWindow(confirm_on_close=False)
         qtbot.addWidget(win)
-        # 마지막 탭으로 전환
-        last_idx = win._tabs.count() - 1
-        win._tabs.setCurrentIndex(last_idx)
-        assert win._tabs.currentWidget() is win._postproc_panel
+        win._switch_to_analyze_workbench(win._postproc_panel)
+        assert win._tabs.currentWidget() is win._analyze_workbench
+        assert win._analyze_workbench.currentWidget() is win._postproc_panel
 
     def test_view_menu_exposes_every_tab(self, qtbot) -> None:
         from naviertwin.gui.main_window import MainWindow
@@ -44,19 +43,18 @@ class TestMainWindowIntegration:
         ]
         assert len(actions) == win._tabs.count()
         assert actions[-1].data() == win._tabs.count() - 1
-        assert "Post-Tools" in actions[-1].text()
+        assert "Export" in actions[-1].text() or "내보내기" in actions[-1].text()
 
-    def test_view_menu_switches_to_postproc_tab(self, qtbot) -> None:
+    def test_library_route_switches_to_postproc_subtab(self, qtbot) -> None:
         from naviertwin.gui.main_window import MainWindow
 
         win = MainWindow(confirm_on_close=False)
         qtbot.addWidget(win)
 
-        last_action = [
-            action for action in win._view_menu.actions() if action.data() == win._tabs.count() - 1
-        ][0]
-        last_action.trigger()
-        assert win._tabs.currentWidget() is win._postproc_panel
+        win._on_library_navigate("Post-Tools")
+
+        assert win._tabs.currentWidget() is win._analyze_workbench
+        assert win._analyze_workbench.currentWidget() is win._postproc_panel
 
     def test_dataset_loaded_connects_postproc_panel(
         self, qtbot, monkeypatch: pytest.MonkeyPatch

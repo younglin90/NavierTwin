@@ -9,6 +9,7 @@ _EXPORT_MODULES = {
     "TwinEngine": "naviertwin.core.digital_twin.twin_engine",
     "NavierTwinPipeline": "naviertwin.core.digital_twin.pipeline",
     "PipelineState": "naviertwin.core.digital_twin.pipeline",
+    "PhysicsAITwinEngine": "naviertwin.core.digital_twin.physics_ai_engine",
     "StreamingDigitalTwin": "naviertwin.core.digital_twin.streaming_twin",
     "batch_predict_fields": "naviertwin.core.digital_twin.batch_predict",
     "build_manifest": "naviertwin.core.digital_twin.manifest",

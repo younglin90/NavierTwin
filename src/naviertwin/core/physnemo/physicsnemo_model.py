@@ -30,7 +30,8 @@ def _require_physicsnemo() -> Any:
         return physicsnemo
     except ImportError as exc:
         raise RuntimeError(
-            "physicsnemo 필요: pip install nvidia-physicsnemo"
+            "physicsnemo 필요: pip install nvidia-physicsnemo  "
+            "(또는 GUI Library 탭에서 PhysicsNeMo 패키지 설치)"
         ) from exc
 
 

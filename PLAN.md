@@ -127,7 +127,7 @@ v5.x  연구 플랫폼     ████████
 | GUI | `panels/model_panel.py` | PySide6 |
 | GUI | `panels/twin_panel.py` | PySide6 |
 | GUI | `panels/export_panel.py` | PySide6 |
-| GUI | `widgets/vtk_viewer.py` — `QtInteractor` 임베드, 타임스텝 슬라이더 | pyvistaqt |
+| GUI | `widgets/vtk_viewer.py` — AutoTessell식 `QtInteractor` 3D viewer + 정적 fallback | pyvistaqt |
 | GUI | `styles/dark_theme.qss` | — |
 | 내보내기 | `.ntwin` 프로젝트 저장/복원 | h5py |
 | 패키징 | PyInstaller `--onedir` + `naviertwin.spec` | pyinstaller-hooks-contrib |
@@ -409,7 +409,7 @@ v5.x  연구 플랫폼     ████████
 | 선택 | 이유 | 대안 검토 |
 |------|------|-----------|
 | PySide6 (Qt6) | 크로스플랫폼, Python 바인딩 성숙도, 상업 무료 | wxPython (생태계 작음), tkinter (3D 통합 어려움) |
-| PyVista | VTK Python 래퍼 최고 성숙도, pyvistaqt로 Qt 통합 용이 | Mayavi (유지보수 약화), vedo |
+| PyVista + pyvistaqt | VTK는 CFD/과학 시각화 표준 렌더러, pyvistaqt는 QtInteractor 임베딩으로 마우스 회전/줌/팬을 직접 제공 | Mayavi (유지보수 약화), vedo |
 | HDF5 (.ntwin) | 메쉬+필드+가중치를 단일 파일에, VTKHDF 기반 ParaView 호환 | NetCDF (CFD 표준 아님), SQLite (바이너리 배열 비효율) |
 | foamlib | 2025 JOSS, 비동기 지원, 타입힌트 완비 | fluidfoam (바이너리 미지원), PyFoam (구식 API) |
 | neuraloperator v2.0+ | FNO 원저자 라이브러리, GINO/UQNO 포함, 활발한 개발 | 자체 구현 (유지보수 부담) |

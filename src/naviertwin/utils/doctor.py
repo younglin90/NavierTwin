@@ -20,8 +20,8 @@ CORE_DEPENDENCIES = {
 }
 OPTIONAL_DEPENDENCIES = {
     "PySide6": "PySide6",
+    "vtk": "VTK",
     "pyvista": "PyVista",
-    "pyvistaqt": "pyvistaqt",
     "torch": "PyTorch",
     "fastapi": "FastAPI",
     "uvicorn": "uvicorn",

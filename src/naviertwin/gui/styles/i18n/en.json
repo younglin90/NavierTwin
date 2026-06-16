@@ -9,6 +9,7 @@
   "panel.compare": "Compare",
   "panel.simulation": "Simulation",
   "panel.explain": "Explain",
+  "panel.library": "Library",
   "panel.post_tools": "Post-Tools",
   "menu.view": "View(&V)",
   "view.tab_action": "{title} Tab",

@@ -39,6 +39,9 @@ class PhysicsNEMOWrapper:
         self.lr = lr
         self._pinn: PINNSolver | None = None
         self._nemo: Any = None
+        self.input_dim: int = 1
+        self.output_dim: int = 1
+        self.is_fitted: bool = False
 
         try:
             import physicsnemo  # noqa: F401
@@ -61,6 +64,7 @@ class PhysicsNEMOWrapper:
             )
         if residual_fn is None or collocation is None:
             raise ValueError("residual_fn + collocation 필요 (폴백 경로)")
+        self.input_dim = int(collocation.shape[1])
         pinn = PINNSolver(
             in_dim=collocation.shape[1],
             out_dim=1,
@@ -71,6 +75,7 @@ class PhysicsNEMOWrapper:
         )
         pinn.fit(residual_fn, collocation, boundary)
         self._pinn = pinn
+        self.is_fitted = True
 
     def predict(self, x: NDArray[np.float64]) -> NDArray[np.float64]:
         if self._pinn is None:

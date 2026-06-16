@@ -158,6 +158,26 @@ def _base_report(path: Path) -> dict[str, Any]:
     }
 
 
+def _json_safe(value: Any) -> Any:
+    """Convert arrays and paths in reader metadata to compact JSON-safe values."""
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, Path):
+        return str(value)
+    if hasattr(value, "shape") and hasattr(value, "dtype"):
+        return {
+            "shape": list(value.shape),
+            "dtype": str(value.dtype),
+        }
+    try:
+        json.dumps(value)
+    except TypeError:
+        return str(value)
+    return value
+
+
 def _finalize(report: dict[str, Any]) -> dict[str, Any]:
     checks = report["checks"]
     report["status"] = _final_status(checks)
@@ -258,7 +278,7 @@ def build_dataset_preflight_report(path: str | Path) -> dict[str, Any]:
         "n_cells": dataset.n_cells,
         "n_time_steps": dataset.n_time_steps,
         "field_names": list(dataset.field_names),
-        "metadata": dict(dataset.metadata),
+        "metadata": _json_safe(dataset.metadata),
     }
     report["fields"] = _field_reports(dataset, checks)
     return _finalize(report)

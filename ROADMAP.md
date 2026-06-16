@@ -51,7 +51,7 @@
 - [x] `gui/panels/model_panel.py`
 - [x] `gui/panels/twin_panel.py`
 - [x] `gui/panels/export_panel.py`
-- [x] `gui/widgets/vtk_viewer.py` — `QtInteractor` 임베드, 타임스텝 슬라이더, 컬러맵 선택기
+- [x] `gui/widgets/vtk_viewer.py` — AutoTessell식 `QtInteractor` viewer + headless 정적 fallback
 - [x] `gui/styles/dark_theme.qss`
 - [x] `.ntwin` 프로젝트 저장/복원 연동
 - [x] `installer/naviertwin.spec` — PyInstaller `--onedir` 설정
@@ -505,4 +505,3 @@ AI/ROM/차원축소로 **의미 있는 데이터를 추출**하는 후처리 도
 - ruff 0 errors / coverage 85%+ gate
 - 후처리 능력: **상용 툴 (Tecplot 360 / CFD-Post / EnSight) 핵심 기능 동등 수준 도달**
 - 차세대 차별화 포인트: AI/ROM 통합 (이미 보유) + 검증 인프라 (R561–590)
-

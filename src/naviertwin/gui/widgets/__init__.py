@@ -1,6 +1,6 @@
 """GUI 위젯 모듈.
 
-    - VtkViewer: PyVista QtInteractor 임베드 위젯 (타임스텝 슬라이더, 컬러맵 선택기)
+    - VtkViewer: PyVista/pyvistaqt 기반 CFD 3D viewer
     - ModelCompareWidget: 모델 메트릭 비교 대시보드
     - LossCurveWidget: 학습 loss curve 시각화
 """

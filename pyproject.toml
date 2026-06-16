@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77", "wheel"]
+requires = ["setuptools>=77", "wheel", "pybind11>=2.12", "numpy>=1.26"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -33,6 +33,9 @@ desktop = [
     "numpy>=1.26",
     "scipy>=1.12",
     "scikit-learn>=1.4",
+    "smt>=2.3",
+    "pydmd>=1.0",
+    "SALib>=1.5",
     "pandas>=2.2",
     "matplotlib>=3.8",
     "jinja2>=3.1",

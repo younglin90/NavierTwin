@@ -21,7 +21,8 @@ def test_inno_setup_version_matches_pyproject() -> None:
     root = Path(__file__).resolve().parents[1]
     iss = (root / "installer" / "naviertwin.iss").read_text(encoding="utf-8")
 
-    assert f"AppVersion={_project_version()}" in iss
+    assert f'#define NavierTwinVersion "{_project_version()}"' in iss
+    assert "AppVersion={#NavierTwinVersion}" in iss
     assert "AppVersion=4.2.0" not in iss
 
 
@@ -40,6 +41,9 @@ def test_inno_setup_matches_pyinstaller_output_layout() -> None:
     assert "LicenseFile=..\\LICENSE" in iss
     assert "UninstallDisplayIcon={app}\\NavierTwin.exe" in iss
     assert "SetupIconFile=" in iss
+    assert "--install-feature-pack" in iss
+    assert "featurepacks\\mlcpu" in iss
+    assert "{commonappdata}\\NavierTwin\\feature-packs" in iss
 
 
 def test_pyinstaller_spec_uses_project_root_and_runtime_assets() -> None:
@@ -53,12 +57,37 @@ def test_pyinstaller_spec_uses_project_root_and_runtime_assets() -> None:
     assert "gui/styles/i18n" in spec
     assert "NAVIER_TWIN_BUILD_PROFILE" in spec
     assert '"torch"' in spec
+    assert '"smt"' in spec
+    assert '"pydmd"' in spec
     assert "PySide6.QtWebEngineCore" in spec
     assert "_drop_desktop_bundle_item" in spec
     assert "trame_vtk" in spec
     assert "PySide6/Qt6Qml.dll" in spec
     assert "matplotlib.backends.backend_qtagg" in spec
     assert "resources_dir.exists()" in spec
+
+
+def test_windows_build_script_supports_nuitka_and_feature_packs() -> None:
+    """Release packaging supports fast-start Nuitka and downloadable packs."""
+    root = Path(__file__).resolve().parents[1]
+    build_script = (root / "scripts" / "build_windows_installer.ps1").read_text(
+        encoding="utf-8"
+    )
+    spec = (root / "installer" / "naviertwin.spec").read_text(encoding="utf-8")
+    pack_script = (root / "scripts" / "build_feature_pack.py").read_text(encoding="utf-8")
+    gui_entry = (root / "src" / "naviertwin" / "gui_entry.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert '[ValidateSet("nuitka", "pyinstaller")]' in build_script
+    assert '[string]$Backend = "nuitka"' in build_script
+    assert '"-m", "nuitka"' in build_script
+    assert "--include-package=pip" in build_script
+    assert "collect_all(\"pip\", include_py_files=True)" in spec
+    assert "pip_datas" in spec
+    assert "pip._internal.cli.main" in spec
+    assert "NavierTwinFeaturePack" in pack_script
+    assert "--install-feature-pack" in gui_entry
 
 
 def test_inno_publisher_fields_are_present_and_non_empty() -> None:

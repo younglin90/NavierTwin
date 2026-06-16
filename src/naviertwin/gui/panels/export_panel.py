@@ -188,8 +188,19 @@ class ExportPanel(QWidget):
                     engine = TwinEngine.load(model_path)
                     self._log(f"✓ TwinEngine 로드: {model_path}")
                 except Exception as exc:  # noqa: BLE001
-                    self._last_project_load_warning = f"TwinEngine 로드 실패: {exc}"
-                    self._log(f"[WARN] {self._last_project_load_warning}")
+                    try:
+                        from naviertwin.core.digital_twin.physics_ai_engine import (
+                            PhysicsAITwinEngine,
+                        )
+
+                        engine = PhysicsAITwinEngine.load(model_path)
+                        self._log(f"✓ Physics AI TwinEngine 로드: {model_path}")
+                    except Exception as physics_exc:  # noqa: BLE001
+                        self._last_project_load_warning = (
+                            "TwinEngine 로드 실패: "
+                            f"{exc}; Physics AI 엔진 로드 실패: {physics_exc}"
+                        )
+                        self._log(f"[WARN] {self._last_project_load_warning}")
             else:
                 self._log("ℹ TwinEngine 파일 없음 (.engine.pkl)")
 

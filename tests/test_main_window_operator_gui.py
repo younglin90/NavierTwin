@@ -49,7 +49,7 @@ def test_operator_training_does_not_build_twin_engine(
     assert win._latest_operator is operator
     assert win._latest_engine is None
     assert export_models == [operator]
-    assert win._tabs.currentWidget() is win._model_panel
+    assert win._tabs.currentWidget() is win._model_workbench
     assert "TwinEngine 자동 연결 생략" in win._status_label.text()
 
 

@@ -72,7 +72,15 @@ class ReducePanel(QWidget):
 
         self._method_combo = QComboBox()
         self._method_combo.addItems(
-            ["Snapshot POD", "Randomized POD", "Incremental POD", "MRPOD", "DMD"]
+            [
+                "Snapshot POD",
+                "Randomized POD",
+                "Incremental POD",
+                "MRPOD",
+                "DMD",
+                "Autoencoder",
+                "VAE",
+            ]
         )
         self._method_combo.currentIndexChanged.connect(self._on_method_changed)
         method_layout.addRow("방법:", self._method_combo)
@@ -91,6 +99,8 @@ class ReducePanel(QWidget):
         self._param_stack.addWidget(self._build_incremental_pod_params())  # Incremental POD
         self._param_stack.addWidget(self._build_mrpod_params())            # MRPOD
         self._param_stack.addWidget(self._build_dmd_params())              # DMD
+        self._param_stack.addWidget(self._build_autoencoder_params())      # Autoencoder
+        self._param_stack.addWidget(self._build_vae_params())              # VAE
         param_layout.addWidget(self._param_stack)
         left_layout.addWidget(param_group)
 
@@ -225,6 +235,54 @@ class ReducePanel(QWidget):
         form.addRow("스케일당 모드:", n_modes)
         return w
 
+    def _build_autoencoder_params(self) -> QWidget:
+        w = QWidget()
+        form = QFormLayout(w)
+        form.setContentsMargins(4, 4, 4, 4)
+        latent = QSpinBox()
+        latent.setRange(1, 256)
+        latent.setValue(4)
+        latent.setObjectName("latent_dim")
+        form.addRow("Latent dim:", latent)
+        hidden = QSpinBox()
+        hidden.setRange(4, 4096)
+        hidden.setValue(32)
+        hidden.setObjectName("hidden_dim")
+        form.addRow("Hidden dim:", hidden)
+        epochs = QSpinBox()
+        epochs.setRange(1, 2000)
+        epochs.setValue(20)
+        epochs.setObjectName("max_epochs")
+        form.addRow("Epoch:", epochs)
+        return w
+
+    def _build_vae_params(self) -> QWidget:
+        w = QWidget()
+        form = QFormLayout(w)
+        form.setContentsMargins(4, 4, 4, 4)
+        latent = QSpinBox()
+        latent.setRange(1, 256)
+        latent.setValue(4)
+        latent.setObjectName("latent_dim")
+        form.addRow("Latent dim:", latent)
+        hidden = QSpinBox()
+        hidden.setRange(4, 4096)
+        hidden.setValue(32)
+        hidden.setObjectName("hidden_dim")
+        form.addRow("Hidden dim:", hidden)
+        epochs = QSpinBox()
+        epochs.setRange(1, 2000)
+        epochs.setValue(20)
+        epochs.setObjectName("max_epochs")
+        form.addRow("Epoch:", epochs)
+        beta = QDoubleSpinBox()
+        beta.setRange(0.0, 100.0)
+        beta.setValue(1.0)
+        beta.setDecimals(3)
+        beta.setObjectName("beta")
+        form.addRow("β:", beta)
+        return w
+
     # ──────────────────────────────────────────────────────────────────
     # 공개 API
     # ──────────────────────────────────────────────────────────────────
@@ -265,8 +323,12 @@ class ReducePanel(QWidget):
                 self._run_incremental_pod(snapshots)
             elif method_idx == 3:
                 self._run_mrpod(snapshots)
-            else:
+            elif method_idx == 4:
                 self._run_dmd(snapshots)
+            elif method_idx == 5:
+                self._run_autoencoder(snapshots)
+            else:
+                self._run_vae(snapshots)
         except Exception as exc:
             self._result_text.append(f"[ERROR] {exc}\n")
 
@@ -317,11 +379,21 @@ class ReducePanel(QWidget):
         msg = (
             f"Snapshot POD 완료\n"
             f"  modes: {n_modes}, energy: {energy[-1]*100:.2f}%\n"
-            f"  singular values: {reducer.singular_values[:5]}\n"
+            f"  singular values: {self._singular_values_preview(reducer)}\n"
         )
         self._result_text.append(msg)
         self._update_energy_plot(energy)
         self.reduction_done.emit("pod", reducer)
+
+    @staticmethod
+    def _singular_values_preview(reducer: object, limit: int = 5) -> np.ndarray:
+        """Reducer 구현별 특이값 속성명을 흡수해 로그용 preview를 반환한다."""
+        values = getattr(reducer, "singular_values_", None)
+        if values is None:
+            values = getattr(reducer, "singular_values", None)
+        if values is None:
+            return np.array([], dtype=float)
+        return np.asarray(values, dtype=float)[:limit]
 
     def _run_rand_pod(self, snapshots: np.ndarray) -> None:
         from naviertwin.core.dimensionality_reduction.linear.randomized_svd import RandomizedPOD
@@ -487,6 +559,118 @@ class ReducePanel(QWidget):
         self._result_text.append(msg)
         self._update_energy_plot(np.asarray(energy, dtype=float))
         self.reduction_done.emit("mrpod", reducer)
+
+    def _run_autoencoder(self, snapshots: np.ndarray) -> None:
+        from naviertwin.core.dimensionality_reduction.nonlinear.autoencoder import (
+            Autoencoder,
+        )
+
+        page = self._param_stack.widget(5)
+        latent = self._spin_value(page, "latent_dim", 4)
+        hidden = self._spin_value(page, "hidden_dim", 32)
+        epochs = self._spin_value(page, "max_epochs", 20)
+        latent = min(latent, max(1, min(snapshots.shape)))
+
+        reducer = Autoencoder(
+            latent_dim=latent,
+            hidden_dims=[hidden],
+            max_epochs=epochs,
+        )
+        reducer.fit(snapshots)
+        self._finish_nonlinear_reduction(
+            method="autoencoder",
+            reducer=reducer,
+            snapshots=snapshots,
+            extra=f"hidden={hidden}, epochs={epochs}",
+        )
+
+    def _run_vae(self, snapshots: np.ndarray) -> None:
+        from naviertwin.core.dimensionality_reduction.nonlinear.vae import VAE
+
+        page = self._param_stack.widget(6)
+        latent = self._spin_value(page, "latent_dim", 4)
+        hidden = self._spin_value(page, "hidden_dim", 32)
+        epochs = self._spin_value(page, "max_epochs", 20)
+        beta_widget = page.findChild(QDoubleSpinBox, "beta")
+        beta = beta_widget.value() if beta_widget else 1.0
+        latent = min(latent, max(1, min(snapshots.shape)))
+
+        reducer = VAE(
+            latent_dim=latent,
+            hidden_dims=[hidden],
+            max_epochs=epochs,
+            beta=beta,
+        )
+        reducer.fit(snapshots)
+        self._finish_nonlinear_reduction(
+            method="vae",
+            reducer=reducer,
+            snapshots=snapshots,
+            extra=f"hidden={hidden}, epochs={epochs}, beta={beta:g}",
+        )
+
+    def _finish_nonlinear_reduction(
+        self,
+        *,
+        method: str,
+        reducer: object,
+        snapshots: np.ndarray,
+        extra: str,
+    ) -> None:
+        self._reducer = reducer
+        n_modes = int(getattr(reducer, "n_components", 0))
+        setattr(
+            reducer,
+            "training_metadata",
+            {
+                "dataset_id": id(self._dataset) if self._dataset is not None else None,
+                "field_name": self._active_field,
+                "n_modes": n_modes,
+                "method": method,
+            },
+        )
+        coeffs = reducer.encode(snapshots)  # type: ignore[attr-defined]
+        recon = reducer.decode(coeffs)  # type: ignore[attr-defined]
+        rmse = float(np.sqrt(np.mean((np.asarray(recon) - snapshots) ** 2)))
+        params = (
+            np.asarray(self._dataset.time_steps[: coeffs.shape[0]], dtype=float)
+            if self._dataset is not None and len(self._dataset.time_steps) >= coeffs.shape[0]
+            else np.arange(coeffs.shape[0], dtype=float)
+        )
+        self._reduction_artifact = {
+            "method": method,
+            "field_name": self._active_field,
+            "snapshots": snapshots,
+            "coeffs": coeffs,
+            "params": params.reshape(-1, 1),
+            "dataset_id": id(self._dataset) if self._dataset is not None else None,
+        }
+        losses = getattr(reducer, "train_losses_", [])
+        loss_tail = float(losses[-1]) if losses else float("nan")
+        self._result_text.append(
+            f"{method.upper()} 완료\n"
+            f"  latent: {n_modes}, recon_rmse: {rmse:.6g}, final_loss: {loss_tail:.6g}\n"
+            f"  {extra}\n"
+        )
+        self._update_energy_plot(self._loss_to_progress(losses))
+        self.reduction_done.emit(method, reducer)
+
+    @staticmethod
+    def _spin_value(page: QWidget, object_name: str, default: int) -> int:
+        widget = page.findChild(QSpinBox, object_name)
+        return int(widget.value()) if widget is not None else default
+
+    @staticmethod
+    def _loss_to_progress(losses: object) -> np.ndarray:
+        values = np.asarray(losses, dtype=float)
+        values = values[np.isfinite(values)]
+        if values.size == 0:
+            return np.array([1.0], dtype=float)
+        first = max(float(values[0]), 1e-12)
+        progress = 1.0 - np.clip(values[:10] / first, 0.0, 1.0)
+        if progress.size > 0:
+            progress[-1] = max(progress[-1], 1e-6)
+        return progress
 
     def _update_energy_plot(self, energy: np.ndarray) -> None:
         """에너지 누적 곡선을 텍스트로 표시한다."""

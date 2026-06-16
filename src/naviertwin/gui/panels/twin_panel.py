@@ -5,6 +5,8 @@ Signals:
     optimization_done(object): 최적화 완료 시 최적 파라미터/목적값 dict 발생.
     assimilation_done(object): 데이터 동화 quick-check 완료 시 결과 dict 발생.
     design_optimization_done(object): 설계 최적화 quick-check 결과 dict 발생.
+    uq_done(object): Monte Carlo UQ quick-check 결과 dict 발생.
+    applied_done(object): 현장 계산기 quick-check 결과 dict 발생.
 """
 
 from __future__ import annotations
@@ -43,6 +45,8 @@ class TwinPanel(QWidget):
     optimization_done = Signal(object)
     assimilation_done = Signal(object)
     design_optimization_done = Signal(object)
+    uq_done = Signal(object)
+    applied_done = Signal(object)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -50,6 +54,7 @@ class TwinPanel(QWidget):
         self._external_engine_mode: bool = False
         self._n_params: int = 2
         self._param_spins: list[QDoubleSpinBox] = []
+        self._param_names: list[str] = []
         self._setup_ui()
 
     # ──────────────────────────────────────────────────────────────────
@@ -83,7 +88,7 @@ class TwinPanel(QWidget):
         engine_layout.addRow("Reducer:", self._reducer_combo)
 
         self._surrogate_combo = QComboBox()
-        self._surrogate_combo.addItems(["kriging", "rbf"])
+        self._surrogate_combo.addItems(["kriging", "rbf", "physicsnemo_cfd"])
         engine_layout.addRow("Surrogate:", self._surrogate_combo)
 
         self._n_modes_spin = QSpinBox()
@@ -188,11 +193,25 @@ class TwinPanel(QWidget):
 
         left_layout.addWidget(opt_group)
 
+        uq_group = QGroupBox("Uncertainty Quantification")
+        uq_form = QFormLayout(uq_group)
+
+        self._uq_samples_spin = QSpinBox()
+        self._uq_samples_spin.setRange(32, 20000)
+        self._uq_samples_spin.setValue(512)
+        uq_form.addRow("MC samples:", self._uq_samples_spin)
+
+        self._uq_btn = QPushButton("Monte Carlo UQ 실행")
+        self._uq_btn.clicked.connect(self._run_monte_carlo_uq)
+        uq_form.addRow(self._uq_btn)
+
+        left_layout.addWidget(uq_group)
+
         assim_group = QGroupBox("Assimilation Quick Check")
         assim_form = QFormLayout(assim_group)
 
         self._assim_method_combo = QComboBox()
-        self._assim_method_combo.addItems(["4D-Var", "Particle Filter", "UKF"])
+        self._assim_method_combo.addItems(["EnKF", "4D-Var", "Particle Filter", "UKF"])
         assim_form.addRow("Method:", self._assim_method_combo)
 
         self._assim_state_dim_spin = QSpinBox()
@@ -251,6 +270,23 @@ class TwinPanel(QWidget):
 
         left_layout.addWidget(design_group)
 
+        applied_group = QGroupBox("Applied Calculators")
+        applied_form = QFormLayout(applied_group)
+
+        self._applied_combo = QComboBox()
+        self._applied_combo.addItems([
+            "Fan affinity",
+            "HVAC duct loss",
+            "Pump operating point",
+        ])
+        applied_form.addRow("Calculator:", self._applied_combo)
+
+        self._applied_btn = QPushButton("계산 실행")
+        self._applied_btn.clicked.connect(self._run_applied_calculator)
+        applied_form.addRow(self._applied_btn)
+
+        left_layout.addWidget(applied_group)
+
         # 데모 학습 버튼
         self._demo_btn = QPushButton("데모 학습 & 예측")
         self._demo_btn.clicked.connect(self._run_demo)
@@ -298,7 +334,8 @@ class TwinPanel(QWidget):
             spin.setValue(0.5)
             spin.setDecimals(4)
             spin.setSingleStep(0.1)
-            self._param_layout.addRow(f"param_{i}:", spin)
+            label = self._param_names[i] if i < len(self._param_names) else f"param_{i}"
+            self._param_layout.addRow(f"{label}:", spin)
             self._param_spins.append(spin)
 
     # ──────────────────────────────────────────────────────────────────
@@ -312,15 +349,34 @@ class TwinPanel(QWidget):
         self._save_btn.setEnabled(True)
         self._status_label.setText("TwinEngine 준비 완료.")
         self._sync_engine_settings(engine)
+        self._sync_parameter_names(engine)
         # 학습된 surrogate 입력 차원에 맞춰 파라미터 입력 UI를 자동 동기화한다.
         try:
             surrogate = getattr(engine, "surrogate", None)
-            n_params = int(getattr(surrogate, "input_dim", 0))
+            n_params = int(
+                getattr(engine, "input_dim", 0)
+                or getattr(surrogate, "input_dim", 0)
+                or getattr(surrogate, "in_dim", 0)
+            )
             if n_params > 0 and n_params != self._n_params_spin.value():
                 self._n_params_spin.setValue(n_params)
+            elif n_params > 0:
+                self._rebuild_param_inputs(n_params)
         except Exception:
             pass
         self._log(f"TwinEngine 설정: {type(engine).__name__}")
+
+    def _sync_parameter_names(self, engine: object) -> None:
+        """Use model metadata to label Twin input controls."""
+        names: list[str] = []
+        for source in (engine, getattr(engine, "surrogate", None)):
+            meta = getattr(source, "training_metadata", None)
+            if isinstance(meta, dict):
+                raw = meta.get("parameter_names")
+                if isinstance(raw, list):
+                    names = [str(item) for item in raw]
+                    break
+        self._param_names = names
 
     def _set_external_engine_mode(self, enabled: bool) -> None:
         """외부에서 주입된 엔진 모드 여부를 설정한다."""
@@ -419,7 +475,9 @@ class TwinPanel(QWidget):
         obs_noise = float(self._assim_noise_spin.value())
 
         try:
-            if method == "4D-Var":
+            if method == "EnKF":
+                result = self._run_enkf_demo(n_state, n_steps, obs_noise)
+            elif method == "4D-Var":
                 result = self._run_four_dvar_demo(n_state, n_steps, obs_noise)
             elif method == "Particle Filter":
                 result = self._run_particle_filter_demo(n_state, n_steps, obs_noise)
@@ -553,6 +611,96 @@ class TwinPanel(QWidget):
         result["n_particles"] = n_particles
         return result
 
+    def _run_monte_carlo_uq(self) -> None:
+        from naviertwin.core.optimization.mc_propagation import propagate_mc
+
+        n = int(self._uq_samples_spin.value())
+        d = max(1, int(self._n_params_spin.value()))
+        rng = np.random.default_rng(0)
+        samples = rng.normal(loc=0.5, scale=0.15, size=(n, d))
+
+        def response(X: np.ndarray) -> np.ndarray:
+            if self._engine is None:
+                return np.sin(X[:, 0]) + 0.1 * np.sum(X**2, axis=1)
+            values = []
+            for row in X:
+                field = np.asarray(self._engine.predict(row.reshape(1, -1)), dtype=float)
+                values.append(float(np.mean(field)))
+            return np.asarray(values, dtype=float)
+
+        try:
+            stats = propagate_mc(response, samples)
+            mean = np.asarray(stats["mean"], dtype=float)
+            std = np.asarray(stats["std"], dtype=float)
+            result = {
+                "method": "Monte Carlo UQ",
+                "n_samples": n,
+                "n_params": d,
+                "mean": mean,
+                "std": std,
+                "percentiles": stats["percentiles"],
+            }
+            self._log(
+                "Monte Carlo UQ 완료: "
+                f"N={n}, mean={np.array2string(mean, precision=4)}, "
+                f"std={np.array2string(std, precision=4)}"
+            )
+            self.uq_done.emit(result)
+        except Exception as exc:
+            self._log(f"[ERROR] Monte Carlo UQ 실패: {exc}")
+
+    def _run_applied_calculator(self) -> None:
+        name = self._applied_combo.currentText()
+        try:
+            if name == "Fan affinity":
+                from naviertwin.core.applied.fan_affinity import scale_Q_H_P
+
+                result = {
+                    "calculator": name,
+                    "scaled_Q_H_P": scale_Q_H_P(
+                        Q1=10.0,
+                        H1=20.0,
+                        P1=300.0,
+                        N1=1000.0,
+                        N2=1500.0,
+                    ),
+                }
+            elif name == "HVAC duct loss":
+                from naviertwin.core.applied.hvac_duct import (
+                    duct_velocity,
+                    total_pressure_loss,
+                )
+
+                velocity = duct_velocity(mdot=2.0, rho=1.2, A=0.4)
+                result = {
+                    "calculator": name,
+                    "velocity": velocity,
+                    "pressure_loss": total_pressure_loss(
+                        L=10.0,
+                        D=0.3,
+                        rho=1.2,
+                        U=velocity,
+                        K_total=2.0,
+                    ),
+                }
+            else:
+                from naviertwin.core.applied.centrifugal_pump import operating_point
+
+                result = {
+                    "calculator": name,
+                    "operating_point": operating_point(
+                        sys_a=5.0,
+                        sys_b=1.5,
+                        pump_a=30.0,
+                        pump_b=2.0,
+                    ),
+                }
+
+            self._log(f"Applied calculator 완료: {name} — {result}")
+            self.applied_done.emit(result)
+        except Exception as exc:
+            self._log(f"[ERROR] Applied calculator 실패: {exc}")
+
     def _run_ukf_demo(
         self, n_state: int, n_steps: int, obs_noise: float
     ) -> dict[str, object]:
@@ -576,6 +724,26 @@ class TwinPanel(QWidget):
         truth = np.linalg.matrix_power(M, n_steps) @ x_true
         result = self._assimilation_result("UKF", x, truth, n_steps)
         result["cov_trace"] = float(np.trace(P))
+        return result
+
+    def _run_enkf_demo(
+        self, n_state: int, n_steps: int, obs_noise: float
+    ) -> dict[str, object]:
+        from naviertwin.core.data_assimilation.enkf import EnKF
+
+        x_true, M, H, Y = self._assimilation_scenario(n_state, n_steps, obs_noise)
+        n_particles = int(self._assim_particles_spin.value())
+        rng = np.random.default_rng(0)
+        ensemble = rng.normal(loc=x_true, scale=0.25, size=(n_particles, n_state))
+        R = (obs_noise**2 + 1e-9) * np.eye(n_state, dtype=float)
+        enkf = EnKF(H=H, R=R)
+        for obs in Y:
+            ensemble = ensemble @ M.T
+            ensemble = enkf.analysis(ensemble, obs, rng=rng)
+        estimate = ensemble.mean(axis=0)
+        truth = np.linalg.matrix_power(M, n_steps) @ x_true
+        result = self._assimilation_result("EnKF", estimate, truth, n_steps)
+        result["n_ensemble"] = n_particles
         return result
 
     @staticmethod

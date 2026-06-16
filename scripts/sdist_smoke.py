@@ -234,10 +234,11 @@ def _validate_sdist(sdist: Path) -> None:
         if "LICENSE" not in license_files:
             raise RuntimeError(f"sdist License-File missing LICENSE: {license_files}")
         extras = set(message.get_all("Provides-Extra", []))
-        if extras != {"core", "full", "dev"}:
+        if extras != {"desktop", "core", "full", "dev"}:
             raise RuntimeError(f"sdist Provides-Extra mismatch: {extras}")
         requires_dist = message.get_all("Requires-Dist", [])
         required_requires_dist_snippets = [
+            "PySide6>=6.6; extra == \"desktop\"",
             "PySide6>=6.6; extra == \"core\"",
             "naviertwin[core]; extra == \"full\"",
             "pytest>=8.1; extra == \"dev\"",
@@ -280,7 +281,7 @@ def _validate_sdist(sdist: Path) -> None:
         if requires_file is None:
             raise RuntimeError("unable to read egg-info requires.txt from sdist")
         requires_text = requires_file.read().decode("utf-8")
-        for section in ["[core]", "[full]", "[dev]", "[dev:python_version < \"3.11\"]"]:
+        for section in ["[desktop]", "[core]", "[full]", "[dev]", "[dev:python_version < \"3.11\"]"]:
             if section not in requires_text:
                 raise RuntimeError(f"sdist requires.txt missing section {section}")
         if "tomli>=2.0" not in requires_text:

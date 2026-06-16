@@ -7,6 +7,8 @@ import os
 import sys
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_all
+
 def _resolve_project_root():
     """Resolve the project root robustly across relative/absolute PyInstaller calls."""
     candidates = [
@@ -70,6 +72,14 @@ hidden_imports = [
     "sklearn.gaussian_process",
     "sklearn.decomposition",
     "pandas",
+    "pip",
+    "pip._internal",
+    "pip._internal.cli.main",
+    "pydmd",
+    "SALib",
+    "smt",
+    "smt.sampling_methods",
+    "smt.surrogate_models",
     # HDF5
     "h5py",
     # Matplotlib Qt backend is optional at runtime but should be bundled
@@ -96,10 +106,17 @@ if BUILD_PROFILE == "full":
         "weasyprint",
     ]
 
+# The installer can install selected optional feature packs during Setup by
+# running ``NavierTwin.exe --install-feature-pack``.  That code path needs a
+# complete pip runtime, including vendored distlib wrapper resources.
+pip_datas, pip_binaries, pip_hidden_imports = collect_all("pip", include_py_files=True)
+hidden_imports += pip_hidden_imports
+
 # ──────────────────────────────────────────────────────────────────────
 # 데이터 파일 (QSS, 설정, 리소스)
 # ──────────────────────────────────────────────────────────────────────
-datas = []
+datas = list(pip_datas)
+binaries = list(pip_binaries)
 
 for qss_file in (SRC / "naviertwin" / "gui" / "styles").glob("*.qss"):
     datas.append((str(qss_file), "naviertwin/gui/styles"))
@@ -158,6 +175,9 @@ excludes = [
     "pydantic",
     "pydantic_core",
     "rpds",
+    "shap",
+    "captum",
+    "pywt",
     # Heavy optional scientific backends. They can be enabled via full profile.
     "botorch",
     "gmsh",
@@ -167,10 +187,8 @@ excludes = [
     "numba",
     "onnx",
     "openmdao",
-    "pydmd",
     "pymeshlab",
     "pyspod",
-    "smt",
     "torch",
     "torch_geometric",
     "torchdiffeq",
@@ -223,6 +241,9 @@ if BUILD_PROFILE == "full":
             "pydantic",
             "pydantic_core",
             "rpds",
+            "shap",
+            "captum",
+            "pywt",
         }
     ]
 
@@ -232,7 +253,7 @@ if BUILD_PROFILE == "full":
 a = Analysis(
     [str(SRC / "naviertwin" / "gui_entry.py")],
     pathex=[str(SRC)],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hidden_imports,
     hookspath=[],
@@ -261,6 +282,9 @@ def _drop_desktop_bundle_item(item):
         "pydantic",
         "pydantic_core",
         "rpds",
+        "shap",
+        "captum",
+        "pywt",
         "attrs",
         "multidict",
         "propcache",

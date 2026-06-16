@@ -116,6 +116,10 @@ python scripts/wheel_smoke.py --install-smoke
 # sdist artifact 검증
 python scripts/sdist_smoke.py --install-smoke
 
+# Windows 설치파일 생성
+powershell -ExecutionPolicy Bypass -File scripts\build_windows_installer.ps1 -Clean
+# 상세 절차: docs/WINDOWS_INSTALLER.md
+
 # 로컬 릴리스 메타데이터 기반 업데이트 확인
 naviertwin --version
 naviertwin update-check --metadata examples/release-metadata.example.json

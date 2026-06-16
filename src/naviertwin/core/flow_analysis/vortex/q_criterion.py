@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from naviertwin._native import _kernels
 from naviertwin.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -99,14 +100,13 @@ def compute_q_criterion(
     if grad.ndim == 2 and grad.shape[1] == 9:
         grad = grad.reshape(-1, 3, 3)
 
-    # S = (J + J^T) / 2, Omega = (J - J^T) / 2
-    S = (grad + grad.transpose(0, 2, 1)) / 2.0
-    Omega = (grad - grad.transpose(0, 2, 1)) / 2.0
-
-    # Q = (||Omega||_F^2 - ||S||_F^2) / 2
-    q_vals = 0.5 * (
-        np.sum(Omega**2, axis=(1, 2)) - np.sum(S**2, axis=(1, 2))
-    )
+    if _kernels is not None:
+        try:
+            q_vals, vort = _kernels.q_criterion_from_grad_3d(grad)
+        except Exception:
+            q_vals, vort = _compute_q_from_gradient_numpy(grad)
+    else:
+        q_vals, vort = _compute_q_from_gradient_numpy(grad)
 
     mesh.point_data["Q-criterion"] = q_vals.astype(np.float32)
 
@@ -116,15 +116,6 @@ def compute_q_criterion(
             grad_mesh.point_data["vorticity"], dtype=np.float32
         )
     else:
-        # Omega 에서 직접 추출: omega_x = dw/dy - dv/dz 등
-        vort = np.stack(
-            [
-                Omega[:, 2, 1] - Omega[:, 1, 2],
-                Omega[:, 0, 2] - Omega[:, 2, 0],
-                Omega[:, 1, 0] - Omega[:, 0, 1],
-            ],
-            axis=-1,
-        )
         mesh.point_data["vorticity"] = vort.astype(np.float32)
 
     logger.info(
@@ -176,14 +167,13 @@ def compute_lambda2(
     logger.debug("λ₂ 계산 시작: velocity_name='%s'", velocity_name)
 
     grad = _get_velocity_gradient(mesh, velocity_name)  # (N, 3, 3)
-    S = (grad + grad.transpose(0, 2, 1)) / 2.0
-    Omega = (grad - grad.transpose(0, 2, 1)) / 2.0
-
-    M = S @ S + Omega @ Omega  # (N, 3, 3), 대칭 행렬
-
-    # 고유값 계산 (오름차순 반환)
-    eigenvalues = np.linalg.eigvalsh(M)  # (N, 3)
-    lambda2 = eigenvalues[:, 1]  # 두 번째 (중간) 고유값
+    if _kernels is not None:
+        try:
+            lambda2 = _kernels.lambda2_from_grad_3d(grad)
+        except Exception:
+            lambda2 = _compute_lambda2_from_gradient_numpy(grad)
+    else:
+        lambda2 = _compute_lambda2_from_gradient_numpy(grad)
 
     mesh.point_data["lambda2"] = lambda2.astype(np.float32)
 
@@ -193,6 +183,41 @@ def compute_lambda2(
         float(lambda2.max()),
     )
     return mesh
+
+
+def _compute_q_from_gradient_numpy(grad: Any) -> tuple[Any, Any]:
+    """NumPy fallback for Q-criterion and vorticity from a 3D gradient tensor."""
+    import numpy as np
+
+    grad = np.asarray(grad)
+    if grad.ndim == 2 and grad.shape[1] == 9:
+        grad = grad.reshape(-1, 3, 3)
+    S = (grad + grad.transpose(0, 2, 1)) / 2.0
+    Omega = (grad - grad.transpose(0, 2, 1)) / 2.0
+    q_vals = 0.5 * (np.sum(Omega**2, axis=(1, 2)) - np.sum(S**2, axis=(1, 2)))
+    vort = np.stack(
+        [
+            Omega[:, 2, 1] - Omega[:, 1, 2],
+            Omega[:, 0, 2] - Omega[:, 2, 0],
+            Omega[:, 1, 0] - Omega[:, 0, 1],
+        ],
+        axis=-1,
+    )
+    return q_vals, vort
+
+
+def _compute_lambda2_from_gradient_numpy(grad: Any) -> Any:
+    """NumPy fallback for λ₂ from a 3D gradient tensor."""
+    import numpy as np
+
+    grad = np.asarray(grad)
+    if grad.ndim == 2 and grad.shape[1] == 9:
+        grad = grad.reshape(-1, 3, 3)
+    S = (grad + grad.transpose(0, 2, 1)) / 2.0
+    Omega = (grad - grad.transpose(0, 2, 1)) / 2.0
+    M = S @ S + Omega @ Omega
+    eigenvalues = np.linalg.eigvalsh(M)
+    return eigenvalues[:, 1]
 
 
 def _get_velocity_gradient(

@@ -52,6 +52,34 @@ def test_full_extra_includes_core_runtime_optional_stack() -> None:
         )
 
 
+def test_desktop_extra_includes_customer_installer_essentials() -> None:
+    """desktop extra는 설치 파일 기본 기능에 필요한 런타임을 포함해야 한다."""
+    optional_deps = _project_optional_deps()
+    desktop = optional_deps.get("desktop", [])
+
+    required_prefixes = [
+        "PySide6",
+        "vtk",
+        "pyvista",
+        "pyvistaqt",
+        "meshio",
+        "h5py",
+        "numpy",
+        "scipy",
+        "scikit-learn",
+        "smt",
+        "pydmd",
+        "SALib",
+        "pandas",
+        "matplotlib",
+    ]
+
+    for prefix in required_prefixes:
+        assert any(dep.startswith(prefix) for dep in desktop), (
+            f"desktop extra에 '{prefix}' 의존성이 없습니다."
+        )
+
+
 def test_dev_extra_includes_release_validation_tooling() -> None:
     """dev extra가 릴리스 검증 도구를 포함해야 한다."""
     optional_deps = _project_optional_deps()
@@ -228,7 +256,7 @@ def test_smoke_scripts_enforce_active_metadata_contract_checks() -> None:
         assert "configparser.ConfigParser()" in script_text
         assert "naviertwin.main:main" in script_text
         assert "tomli>=2.0; python_version < \\\"3.11\\\" and extra == \\\"dev\\\"" in script_text
-        assert '{"core", "full", "dev"}' in script_text
+        assert '{"desktop", "core", "full", "dev"}' in script_text
 
     assert "src/naviertwin.egg-info/entry_points.txt" in sdist_smoke
     assert "src/naviertwin.egg-info/requires.txt" in sdist_smoke

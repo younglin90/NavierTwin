@@ -101,7 +101,13 @@ class CFDDataset:
             and field_name in time_series_fields
         ):
             arr = np.asarray(time_series_fields[field_name], dtype=float)
-            expected_per_step = self.n_points
+            locations = self.metadata.get("time_series_locations", {})
+            location = (
+                locations.get(field_name, "point")
+                if isinstance(locations, dict)
+                else "point"
+            )
+            expected_per_step = self.n_cells if location == "cell" else self.n_points
         elif field_name in mesh.point_data:
             arr = np.asarray(mesh.point_data[field_name], dtype=float)
             expected_per_step = self.n_points
@@ -129,6 +135,17 @@ class CFDDataset:
             return arr.reshape(-1, 1)
 
         if arr.ndim == 2:
+            if (
+                arr.shape[0] == n_steps
+                and expected_per_step > 0
+                and arr.shape[1] == expected_per_step
+            ):
+                return arr.T
+            if (
+                arr.shape[0] == expected_per_step
+                and arr.shape[1] == n_steps
+            ):
+                return arr
             if expected_per_step > 0 and arr.shape[0] == expected_per_step * n_steps:
                 reshaped = arr.reshape(n_steps, expected_per_step, arr.shape[1])
                 return np.linalg.norm(reshaped, axis=-1).T

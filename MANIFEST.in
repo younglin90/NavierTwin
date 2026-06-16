@@ -1,5 +1,6 @@
-include README.md LICENSE pyproject.toml MANIFEST.in
+include README.md LICENSE pyproject.toml MANIFEST.in setup.py
 include scripts/release_smoke.py scripts/wheel_smoke.py scripts/sdist_smoke.py scripts/license_report.py scripts/release_versions.py scripts/sign_release_metadata.py
 include scripts/installer_smoke.py
 include examples/release-metadata.example.json
+recursive-include src/naviertwin/_native *.cpp *.h *.hpp
 recursive-include src/naviertwin/gui/styles *.qss *.json

@@ -23,7 +23,7 @@ class _DummySurrogate:
     }
 
 
-def test_main_window_explainability_tab_present(qtbot) -> None:
+def test_main_window_explainability_lives_under_model_workbench(qtbot) -> None:
     from naviertwin.gui.main_window import MainWindow
 
     win = MainWindow(confirm_on_close=False)
@@ -31,23 +31,20 @@ def test_main_window_explainability_tab_present(qtbot) -> None:
 
     assert win._explain_panel is not None
     tab_texts = [win._tabs.tabText(i) for i in range(win._tabs.count())]
-    assert any("Explain" in text for text in tab_texts)
-    assert win._tabs.widget(win._tabs.count() - 1) is win._postproc_panel
+    assert not any("Explain" in text or "설명" in text for text in tab_texts)
+    assert win._model_workbench.indexOf(win._explain_panel) >= 0
 
 
-def test_view_menu_switches_to_explainability_tab(qtbot) -> None:
+def test_library_navigation_switches_to_model_explainability_subtab(qtbot) -> None:
     from naviertwin.gui.main_window import MainWindow
 
     win = MainWindow(confirm_on_close=False)
     qtbot.addWidget(win)
-    explain_idx = win._tabs.indexOf(win._explain_panel)
-    action = [
-        item for item in win._view_menu.actions() if item.data() == explain_idx
-    ][0]
 
-    action.trigger()
+    win._on_library_navigate("Explain")
 
-    assert win._tabs.currentWidget() is win._explain_panel
+    assert win._tabs.currentWidget() is win._model_workbench
+    assert win._model_workbench.currentWidget() is win._explain_panel
 
 
 def test_model_trained_forwards_surrogate_to_explainability(

@@ -5,6 +5,8 @@ param(
     [switch]$ValidateOnly,
     [ValidateSet("desktop", "full")]
     [string]$Profile = "desktop",
+    [ValidateSet("nuitka", "pyinstaller")]
+    [string]$Backend = "nuitka",
     [string]$Python = "python",
     [string]$Iscc = "",
     [string]$SignTool = ""
@@ -35,6 +37,7 @@ function Resolve-Iscc {
 Write-Host "== NavierTwin Windows installer build =="
 Write-Host "Repo: $RepoRoot"
 Write-Host "Profile: $Profile"
+Write-Host "Backend: $Backend"
 
 & $Python --version
 
@@ -47,14 +50,19 @@ if ((-not $SkipDependencyInstall) -and (-not $ValidateOnly)) {
     Write-Host "== Installing build/runtime dependencies =="
     & $Python -m pip install --upgrade pip
     $extra = if ($Profile -eq "full") { ".[core]" } else { ".[desktop]" }
-    & $Python -m pip install -e $extra pyinstaller pyinstaller-hooks-contrib
+    if ($Backend -eq "nuitka") {
+        & $Python -m pip install -e $extra nuitka ordered-set zstandard
+    }
+    else {
+        & $Python -m pip install -e $extra pyinstaller pyinstaller-hooks-contrib
+    }
 }
 
 Write-Host "== Validating installer metadata =="
 & $Python scripts/installer_smoke.py
 
 if ($ValidateOnly) {
-    Write-Host "ValidateOnly complete. Windows-only PyInstaller/Inno build steps were skipped."
+    Write-Host "ValidateOnly complete. Windows-only packager/Inno build steps were skipped."
     exit 0
 }
 
@@ -71,16 +79,96 @@ if ($Clean) {
     }
 }
 
-Write-Host "== Building PyInstaller onedir app =="
-$SpecPath = Join-Path $RepoRoot "installer\naviertwin.spec"
 $env:NAVIER_TWIN_BUILD_PROFILE = $Profile
-& $Python -m PyInstaller --noconfirm --clean $SpecPath
+if ($Backend -eq "nuitka") {
+    Write-Host "== Building Nuitka standalone app =="
+    $NuitkaBuild = Join-Path $RepoRoot "build\nuitka"
+    $NuitkaDist = Join-Path $NuitkaBuild "gui_entry.dist"
+    $DistDir = Join-Path $RepoRoot "dist\NavierTwin"
+    if (Test-Path $NuitkaBuild) {
+        Remove-Item -Recurse -Force $NuitkaBuild
+    }
+    if (Test-Path $DistDir) {
+        Remove-Item -Recurse -Force $DistDir
+    }
+    $NuitkaArgs = @(
+        "-m", "nuitka",
+        "--standalone",
+        "--assume-yes-for-downloads",
+        "--windows-console-mode=disable",
+        "--enable-plugin=pyside6",
+        "--include-qt-plugins=platforms,styles,imageformats,iconengines,tls,generic",
+        "--include-package=naviertwin",
+        "--include-package=pyvista",
+        "--include-package=pyvistaqt",
+        "--include-package=vtkmodules",
+        "--include-package=meshio",
+        "--include-package=h5py",
+        "--include-package=numpy",
+        "--include-package=scipy",
+        "--include-package=pandas",
+        "--include-package=matplotlib",
+        "--include-package=sklearn",
+        "--include-package=smt",
+        "--include-package=pydmd",
+        "--include-package=SALib",
+        "--include-package=pip",
+        "--output-filename=NavierTwin.exe",
+        "--output-dir=$NuitkaBuild",
+        "--include-data-dir=src\naviertwin\gui\styles=naviertwin\gui\styles",
+        "--noinclude-pytest-mode=nofollow",
+        "--noinclude-unittest-mode=nofollow",
+        "--noinclude-pydoc-mode=nofollow",
+        "--noinclude-IPython-mode=nofollow",
+        "--noinclude-numba-mode=nofollow",
+        "--noinclude-setuptools-mode=nofollow",
+        "--nofollow-import-to=*.tests",
+        "--nofollow-import-to=*.tests.*",
+        "--nofollow-import-to=*.test",
+        "--nofollow-import-to=*.test.*",
+        "--nofollow-import-to=tests",
+        "--nofollow-import-to=tests.*",
+        "--nofollow-import-to=test",
+        "--nofollow-import-to=test.*",
+        "--nofollow-import-to=sklearn.conftest",
+        "--nofollow-import-to=smt.utils.test",
+        "--nofollow-import-to=smt.utils.test.*"
+    )
+    if ($Profile -eq "desktop") {
+        $NuitkaArgs += "--nofollow-import-to=torch,torch_geometric,torchdiffeq,physicsnemo,onnx,fastapi,uvicorn,weasyprint,shap,captum,trame,trame_client,trame_vtk,trame_vuetify"
+    }
+    else {
+        $NuitkaArgs += @(
+            "--include-package=torch",
+            "--include-package=onnx",
+            "--include-package=fastapi",
+            "--include-package=uvicorn",
+            "--include-package=weasyprint",
+            "--include-package=shap"
+        )
+    }
+    if (Test-Path "resources") {
+        $NuitkaArgs += "--include-data-dir=resources=resources"
+    }
+    $NuitkaArgs += "src\naviertwin\gui_entry.py"
+    & $Python @NuitkaArgs
+    if (-not (Test-Path $NuitkaDist)) {
+        throw "Nuitka output missing: $NuitkaDist"
+    }
+    New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
+    Copy-Item -Recurse -Force (Join-Path $NuitkaDist "*") $DistDir
+}
+else {
+    Write-Host "== Building PyInstaller onedir app =="
+    $SpecPath = Join-Path $RepoRoot "installer\naviertwin.spec"
+    & $Python -m PyInstaller --noconfirm --clean $SpecPath
+}
 
 $Exe = Join-Path $RepoRoot "dist\NavierTwin\NavierTwin.exe"
 if (-not (Test-Path $Exe)) {
-    throw "PyInstaller output missing: $Exe"
+    throw "Packager output missing: $Exe"
 }
-Write-Host "PyInstaller output: $Exe"
+Write-Host "Packager output: $Exe"
 
 Write-Host "== Re-validating installer metadata =="
 & $Python scripts/installer_smoke.py

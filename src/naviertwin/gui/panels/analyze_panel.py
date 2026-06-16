@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -17,10 +17,12 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QListWidget,
+    QListWidgetItem,
     QPushButton,
     QSpinBox,
     QSplitter,
     QStackedWidget,
+    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -30,26 +32,48 @@ if TYPE_CHECKING:
     from naviertwin.core.cfd_reader.base import CFDDataset
 
 
+# 정적 분석(단일 스냅샷에서도 동작) → 그 후 시계열 분석.
+# 시계열 분석은 단일 스냅샷일 때 비활성화되며, 사용자가 한눈에 구분할 수
+# 있도록 명단 하단에 모아둔다.
 _ANALYSIS_METHODS: list[tuple[str, str]] = [
+    # ── 정적 분석(단일 스냅샷 OK) ──
     ("Q-criterion", "q_criterion"),
     ("λ₂ Criterion", "lambda2"),
-    ("FFT / PSD", "fft_psd"),
     ("y+ (Wall Units)", "yplus"),
     ("해석해 비교 (Analytic)", "analytic"),
-    ("SPOD (Modal)", "spod"),
-    ("SINDy (Equation Discovery)", "sindy"),
-    ("Wavelet / STFT", "wavelet"),
     ("Boundary Layer Thickness", "boundary_layer"),
     ("Nondimensional Numbers", "nondim"),
     ("FTLE / LCS Quick Check", "ftle"),
     ("PGD 3D Quick Decomposition", "pgd"),
     ("Entropy Generation 2D", "entropy_generation"),
+    # ── 시계열 분석(스냅샷 ≥ 2 필요) ──
+    ("FFT / PSD", "fft_psd"),
+    ("SPOD (Modal)", "spod"),
+    ("SINDy (Equation Discovery)", "sindy"),
+    ("Wavelet / STFT", "wavelet"),
 ]
+
+# 시간 스냅샷이 ≥2 일 때만 의미 있는 분석 (단일 스냅샷이면 비활성화).
+_TIME_SERIES_METHODS: frozenset[str] = frozenset(
+    {"fft_psd", "spod", "sindy", "wavelet"}
+)
+
+# 분석 결과를 3D viewer 에 노출할 필드 매핑 (mesh.point_data 키).
+_METHOD_RESULT_FIELDS: dict[str, str] = {
+    "q_criterion": "Q-criterion",
+    "lambda2": "lambda2",
+    "yplus": "yplus",
+}
 
 
 def analysis_method_labels() -> list[str]:
     """Analyze 탭에 표시되는 분석 방법 이름 목록을 반환한다."""
     return [label for label, _ in _ANALYSIS_METHODS]
+
+
+def analysis_result_field(method: str) -> str | None:
+    """분석 method가 mesh에 추가하는 viewer field 이름을 반환한다."""
+    return _METHOD_RESULT_FIELDS.get(method)
 
 
 class AnalyzePanel(QWidget):
@@ -63,9 +87,16 @@ class AnalyzePanel(QWidget):
 
     analysis_done = Signal(str, object)
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        parent: Optional[QWidget] = None,
+        *,
+        use_embedded_viewer: bool = True,
+    ) -> None:
         super().__init__(parent)
         self._dataset: Optional[CFDDataset] = None
+        self._use_embedded_viewer = use_embedded_viewer
+        self._vtk_viewer: object | None = None
         self._setup_ui()
 
     # ──────────────────────────────────────────────────────────────────
@@ -102,25 +133,29 @@ class AnalyzePanel(QWidget):
         param_layout = QVBoxLayout(param_group)
         self._param_stack = QStackedWidget()
 
-        # Q-criterion 파라미터
-        self._param_stack.addWidget(self._build_qcrit_params())
-        # λ₂ 파라미터 (동일)
-        self._param_stack.addWidget(self._build_qcrit_params())
-        # FFT 파라미터
-        self._param_stack.addWidget(self._build_fft_params())
-        # y+ 파라미터
-        self._param_stack.addWidget(self._build_yplus_params())
-        # 해석해 비교 파라미터
-        self._param_stack.addWidget(self._build_analytic_params())
-        # 고급 분석 quick diagnostics
-        self._param_stack.addWidget(self._build_info_params("SPOD는 첫 번째 시계열 필드로 실행합니다."))
-        self._param_stack.addWidget(self._build_sindy_params())
-        self._param_stack.addWidget(self._build_info_params("Wavelet/STFT는 대표 신호를 시간-주파수로 분석합니다."))
-        self._param_stack.addWidget(self._build_info_params("경계층 두께는 y 좌표와 첫 번째 속도 필드 프로파일을 사용합니다."))
-        self._param_stack.addWidget(self._build_info_params("무차원수는 표준 공기/길이 기본값으로 계산합니다."))
-        self._param_stack.addWidget(self._build_info_params("FTLE는 내장 2D 비정상 유동 quick check를 실행합니다."))
-        self._param_stack.addWidget(self._build_info_params("PGD는 대표 3D 텐서 quick decomposition을 실행합니다."))
-        self._param_stack.addWidget(self._build_info_params("엔트로피 생성률은 2D 열유동 quick check를 실행합니다."))
+        # _ANALYSIS_METHODS 의 row 순서와 1:1 정합되어야 한다.
+        # ── 정적 분석 ──
+        self._param_stack.addWidget(self._build_qcrit_params())   # 0 q_criterion
+        self._param_stack.addWidget(self._build_qcrit_params())   # 1 lambda2
+        self._param_stack.addWidget(self._build_yplus_params())   # 2 yplus
+        self._param_stack.addWidget(self._build_analytic_params())  # 3 analytic
+        self._param_stack.addWidget(self._build_info_params(      # 4 boundary_layer
+            "경계층 두께는 y 좌표와 첫 번째 속도 필드 프로파일을 사용합니다."))
+        self._param_stack.addWidget(self._build_info_params(      # 5 nondim
+            "무차원수는 표준 공기/길이 기본값으로 계산합니다."))
+        self._param_stack.addWidget(self._build_info_params(      # 6 ftle
+            "FTLE는 내장 2D 비정상 유동 quick check를 실행합니다."))
+        self._param_stack.addWidget(self._build_info_params(      # 7 pgd
+            "PGD는 대표 3D 텐서 quick decomposition을 실행합니다."))
+        self._param_stack.addWidget(self._build_info_params(      # 8 entropy_generation
+            "엔트로피 생성률은 2D 열유동 quick check를 실행합니다."))
+        # ── 시계열 분석 ──
+        self._param_stack.addWidget(self._build_fft_params())     # 9 fft_psd
+        self._param_stack.addWidget(self._build_info_params(      # 10 spod
+            "SPOD는 첫 번째 시계열 필드로 실행합니다."))
+        self._param_stack.addWidget(self._build_sindy_params())   # 11 sindy
+        self._param_stack.addWidget(self._build_info_params(      # 12 wavelet
+            "Wavelet/STFT는 대표 신호를 시간-주파수로 분석합니다."))
 
         param_layout.addWidget(self._param_stack)
         left_layout.addWidget(param_group)
@@ -135,9 +170,31 @@ class AnalyzePanel(QWidget):
         left_layout.addStretch()
         layout.addWidget(left)
 
-        # 우측: 결과
+        # 우측: 3D viewer + 결과 로그 + 해석해 비교 (탭으로 분리)
         right_splitter = QSplitter()
-        right_splitter.setOrientation(__import__("PySide6.QtCore", fromlist=["Qt"]).Qt.Orientation.Vertical)
+        right_splitter.setOrientation(Qt.Orientation.Vertical)
+
+        # 시각화 탭 — CFDDataset mesh/field를 PyVista viewer에 직접 표시한다.
+        from naviertwin.gui.widgets.analytic_compare_widget import (
+            AnalyticCompareWidget,
+        )
+        self._viewer_tabs = QTabWidget()
+        self._compare_widget = AnalyticCompareWidget()
+        if self._use_embedded_viewer:
+            from naviertwin.gui.widgets.vtk_viewer import VtkViewer
+
+            self._vtk_viewer = VtkViewer()
+            self._viewer_tabs.addTab(self._vtk_viewer, "3D 뷰어")
+        else:
+            viewer_hint = QLabel(
+                "3D 뷰어는 오른쪽 전역 패널에 항상 표시됩니다.\n"
+                "탭을 이동해도 현재 mesh/field와 예측 결과가 유지됩니다."
+            )
+            viewer_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            viewer_hint.setObjectName("subtitleLabel")
+            self._viewer_tabs.addTab(viewer_hint, "3D 뷰어")
+        self._viewer_tabs.addTab(self._compare_widget, "해석해 비교")
+        right_splitter.addWidget(self._viewer_tabs)
 
         # 결과 로그
         log_group = QGroupBox("결과 / 로그")
@@ -147,19 +204,12 @@ class AnalyzePanel(QWidget):
         log_layout.addWidget(self._result_text)
         right_splitter.addWidget(log_group)
 
-        # 해석해 비교 시각화 위젯
-        from naviertwin.gui.widgets.analytic_compare_widget import (
-            AnalyticCompareWidget,
-        )
-        self._compare_widget = AnalyticCompareWidget()
-        right_splitter.addWidget(self._compare_widget)
-
         # 상태 레이블
         self._status_label = QLabel("데이터를 먼저 가져오세요.")
         self._status_label.setObjectName("subtitleLabel")
         right_splitter.addWidget(self._status_label)
 
-        right_splitter.setSizes([200, 300, 40])
+        right_splitter.setSizes([520, 180, 40])
         layout.addWidget(right_splitter, stretch=1)
 
         self._method_list.setCurrentRow(0)
@@ -249,23 +299,25 @@ class AnalyzePanel(QWidget):
         form.addRow("벽면 전단응력 필드:", wss_combo)
 
         rho_spin = QDoubleSpinBox()
+        rho_spin.setDecimals(4)
         rho_spin.setRange(0.001, 1e5)
         rho_spin.setValue(1.225)
-        rho_spin.setDecimals(4)
         form.addRow("밀도 ρ (kg/m³):", rho_spin)
 
+        # 주의: setDecimals 는 반드시 setValue 이전에 호출되어야 한다 — 아니면
+        # 작은 값(1.5e-5)이 기본 2 decimals 로 0.00 으로 반올림된다.
         nu_spin = QDoubleSpinBox()
-        nu_spin.setRange(1e-10, 1.0)
-        nu_spin.setValue(1.5e-5)
         nu_spin.setDecimals(8)
+        nu_spin.setRange(1e-10, 1.0)
         nu_spin.setSingleStep(1e-6)
+        nu_spin.setValue(1.5e-5)
         form.addRow("동점성계수 ν (m²/s):", nu_spin)
 
         y_spin = QDoubleSpinBox()
-        y_spin.setRange(1e-10, 1.0)
-        y_spin.setValue(1e-4)
         y_spin.setDecimals(8)
+        y_spin.setRange(1e-10, 1.0)
         y_spin.setSingleStep(1e-5)
+        y_spin.setValue(1e-4)
         form.addRow("첫 번째 셀 높이 y (m):", y_spin)
 
         return w
@@ -312,13 +364,19 @@ class AnalyzePanel(QWidget):
         self._status_label.setText(
             f"데이터셋 준비 완료 ({dataset.n_points} points, {dataset.n_time_steps} steps)"
         )
-        # 속도 필드 콤보 업데이트
+        # 속도 필드 콤보 업데이트 — 가능하면 U/velocity/u 를 기본 선택.
+        velocity_priority = ("U", "velocity", "u", "Velocity")
         for page_idx in [self._method_index("q_criterion"), self._method_index("lambda2")]:
             page = self._param_stack.widget(page_idx)
             combo = page.findChild(QComboBox, "velocity_combo")
             if combo is not None:
                 combo.clear()
                 combo.addItems(dataset.field_names)
+                for name in velocity_priority:
+                    idx = combo.findText(name)
+                    if idx >= 0:
+                        combo.setCurrentIndex(idx)
+                        break
 
         # 해석해 비교 필드 콤보 업데이트
         analytic_page = self._param_stack.widget(self._method_index("analytic"))
@@ -327,6 +385,51 @@ class AnalyzePanel(QWidget):
             if field_combo is not None and dataset.field_names:
                 field_combo.clear()
                 field_combo.addItems(dataset.field_names)
+
+        # 시간 스냅샷이 부족하면 시계열 분석 비활성화.
+        self._update_method_availability(dataset.n_time_steps)
+
+        # viewer 에 데이터셋을 전달해 mesh/field를 표시한다.
+        if self._vtk_viewer is not None:
+            try:
+                self._vtk_viewer.load_dataset(dataset)
+            except Exception:
+                pass
+
+    def _update_method_availability(self, n_time_steps: int) -> None:
+        """단일 스냅샷일 때 시계열 의존 분석 항목을 disable + 흐린 글씨."""
+        from PySide6.QtGui import QBrush, QColor, QFont
+
+        has_time = int(n_time_steps) > 1
+        disabled_color = QBrush(QColor("#606070"))   # 흐린 회색
+        enabled_color = QBrush(QColor("#E0E0E0"))    # 일반 텍스트
+        for row, (label, key) in enumerate(_ANALYSIS_METHODS):
+            item: QListWidgetItem = self._method_list.item(row)
+            if item is None:
+                continue
+            requires_time = key in _TIME_SERIES_METHODS
+            font: QFont = item.font()
+            if requires_time and not has_time:
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+                item.setForeground(disabled_color)
+                font.setItalic(True)
+                item.setFont(font)
+                item.setToolTip(
+                    "이 분석은 시계열 데이터(스냅샷 ≥ 2)가 필요합니다."
+                )
+            else:
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEnabled)
+                item.setForeground(enabled_color)
+                font.setItalic(False)
+                item.setFont(font)
+                item.setToolTip("")
+        # 비활성 항목이 현재 선택된 경우 첫 활성 항목으로 이동.
+        cur = self._method_list.currentItem()
+        if cur is not None and not (cur.flags() & Qt.ItemFlag.ItemIsEnabled):
+            for row in range(self._method_list.count()):
+                if self._method_list.item(row).flags() & Qt.ItemFlag.ItemIsEnabled:
+                    self._method_list.setCurrentRow(row)
+                    break
 
     # ──────────────────────────────────────────────────────────────────
     # 슬롯
@@ -346,8 +449,38 @@ class AnalyzePanel(QWidget):
             self.analysis_done.emit(method, result)
             if method == "analytic" and isinstance(result, dict):
                 self._compare_widget.update_result(result)
+                # 비교 차트가 있는 탭으로 자동 전환.
+                if hasattr(self, "_viewer_tabs") and self._viewer_tabs is not None:
+                    self._viewer_tabs.setCurrentWidget(self._compare_widget)
+            else:
+                # viewer 에 분석 결과 필드를 동기화한다.
+                new_field = _METHOD_RESULT_FIELDS.get(method)
+                if new_field is not None:
+                    self._sync_result_field_to_viewer(new_field)
         except Exception as exc:
             self._result_text.append(f"[ERROR] {method}: {exc}\n")
+
+    def _sync_result_field_to_viewer(self, field_name: str) -> None:
+        """mesh.point_data 에 추가된 분석 결과 필드를 viewer 에 노출."""
+        if self._dataset is None or self._vtk_viewer is None:
+            return
+        try:
+            mesh = self._dataset.mesh
+            if field_name not in mesh.point_data and field_name not in mesh.cell_data:
+                return
+        except Exception:
+            return
+        # dataset.field_names 에도 반영.
+        try:
+            if field_name not in self._dataset.field_names:
+                self._dataset.field_names.append(field_name)
+        except Exception:
+            pass
+        # viewer 콤보 갱신 + 새 필드 선택.
+        self._vtk_viewer.refresh_fields(prefer_field=field_name)
+        # viewer 탭으로 자동 전환.
+        if hasattr(self, "_viewer_tabs") and self._viewer_tabs is not None:
+            self._viewer_tabs.setCurrentWidget(self._vtk_viewer)
 
     def _dispatch(self, method: str) -> object:
         from naviertwin.core.flow_analysis.vortex.q_criterion import (
@@ -358,22 +491,31 @@ class AnalyzePanel(QWidget):
         mesh = self._dataset.mesh  # type: ignore[union-attr]
 
         if method == "q_criterion":
-            page = self._param_stack.widget(0)
+            page = self._param_stack.widget(self._method_index("q_criterion"))
             combo = page.findChild(QComboBox, "velocity_combo")
             vel = combo.currentText() if combo else "U"
             result_mesh = compute_q_criterion(mesh, vel)
             vals = result_mesh.point_data.get("Q-criterion")
             if vals is not None:
+                # 원본 mesh 에도 결과 필드 복사 → 뷰어 컨투어 표시 가능.
+                try:
+                    mesh.point_data["Q-criterion"] = vals
+                except Exception:
+                    pass
                 return f"Q range: [{vals.min():.4g}, {vals.max():.4g}]"
             return result_mesh
 
         elif method == "lambda2":
-            page = self._param_stack.widget(1)
+            page = self._param_stack.widget(self._method_index("lambda2"))
             combo = page.findChild(QComboBox, "velocity_combo")
             vel = combo.currentText() if combo else "U"
             result_mesh = compute_lambda2(mesh, vel)
             vals = result_mesh.point_data.get("lambda2")
             if vals is not None:
+                try:
+                    mesh.point_data["lambda2"] = vals
+                except Exception:
+                    pass
                 return f"λ₂ range: [{vals.min():.4g}, {vals.max():.4g}]"
             return result_mesh
 
@@ -389,7 +531,7 @@ class AnalyzePanel(QWidget):
             if n_steps <= 1:
                 return "FFT: time-series 데이터가 없어 실행할 수 없습니다."
 
-            page = self._param_stack.widget(2)
+            page = self._param_stack.widget(self._method_index("fft_psd"))
             spins = page.findChildren(QDoubleSpinBox)
             dt = spins[0].value() if spins else 0.01
             field = self._dataset.field_names[0] if self._dataset.field_names else None  # type: ignore[union-attr]
@@ -410,7 +552,7 @@ class AnalyzePanel(QWidget):
 
             from naviertwin.core.flow_analysis.boundary_layer.yplus import compute_yplus
 
-            page = self._param_stack.widget(3)
+            page = self._param_stack.widget(self._method_index("yplus"))
             spins = page.findChildren(QDoubleSpinBox)
             rho = spins[0].value() if len(spins) > 0 else 1.225
             nu = spins[1].value() if len(spins) > 1 else 1.5e-5
@@ -431,6 +573,11 @@ class AnalyzePanel(QWidget):
                     nu,
                     np.full(tau_arr.shape[0], y_wall, dtype=float),
                 )
+                # 원본 mesh 에도 yplus 필드 추가 → 뷰어 컨투어 표시.
+                try:
+                    mesh.point_data["yplus"] = np.asarray(yplus, dtype=float)
+                except Exception:
+                    pass
                 return f"y+ range: [{yplus.min():.4g}, {yplus.max():.4g}], mean={yplus.mean():.4g}"
             return "y+: 벽면 전단응력 필드 없음"
 
@@ -474,7 +621,7 @@ class AnalyzePanel(QWidget):
             poiseuille_pipe,
         )
 
-        page = self._param_stack.widget(4)
+        page = self._param_stack.widget(self._method_index("analytic"))
         flow_combo: QComboBox = page.findChild(QComboBox, "analytic_flow_combo")
         field_combo: QComboBox = page.findChild(QComboBox, "analytic_field_combo")
         axis_combo: QComboBox = page.findChild(QComboBox, "analytic_axis_combo")
