@@ -1753,6 +1753,83 @@ static py::array_t<double> fast_march_1d(ArrayD phi, double dx) {
     return out;
 }
 
+static py::tuple mesh_refine_by_gradient(ArrayD x_in, ArrayD f_in, double threshold, int max_passes) {
+    if (x_in.ndim() != 1 || f_in.ndim() != 1 || x_in.shape(0) != f_in.shape(0)) {
+        throw std::invalid_argument("x and f must be matching 1D arrays");
+    }
+    if (max_passes < 0) {
+        throw std::invalid_argument("max_passes must be non-negative");
+    }
+    std::vector<double> x(x_in.data(), x_in.data() + x_in.shape(0));
+    std::vector<double> f(f_in.data(), f_in.data() + f_in.shape(0));
+    for (int pass = 0; pass < max_passes; ++pass) {
+        const std::size_t n = x.size();
+        bool any = false;
+        std::vector<char> mask(n > 0 ? n - 1 : 0, 0);
+        for (std::size_t i = 0; i + 1 < n; ++i) {
+            if (std::abs(f[i + 1] - f[i]) > threshold) {
+                mask[i] = 1;
+                any = true;
+            }
+        }
+        if (!any) {
+            break;
+        }
+        std::vector<double> new_x;
+        std::vector<double> new_f;
+        new_x.reserve(n * 2);
+        new_f.reserve(n * 2);
+        for (std::size_t i = 0; i + 1 < n; ++i) {
+            new_x.push_back(x[i]);
+            new_f.push_back(f[i]);
+            if (mask[i]) {
+                new_x.push_back(0.5 * (x[i] + x[i + 1]));
+                new_f.push_back(0.5 * (f[i] + f[i + 1]));
+            }
+        }
+        if (n > 0) {
+            new_x.push_back(x.back());
+            new_f.push_back(f.back());
+        }
+        x.swap(new_x);
+        f.swap(new_f);
+    }
+    auto x_out = py::array_t<double>({static_cast<py::ssize_t>(x.size())});
+    auto f_out = py::array_t<double>({static_cast<py::ssize_t>(f.size())});
+    std::copy(x.begin(), x.end(), x_out.mutable_data());
+    std::copy(f.begin(), f.end(), f_out.mutable_data());
+    return py::make_tuple(x_out, f_out);
+}
+
+static py::tuple mesh_coarsen_by_tolerance(ArrayD x, ArrayD f, double tol) {
+    if (x.ndim() != 1 || f.ndim() != 1 || x.shape(0) != f.shape(0)) {
+        throw std::invalid_argument("x and f must be matching 1D arrays");
+    }
+    const py::ssize_t n = x.shape(0);
+    const double* xp = x.data();
+    const double* fp = f.data();
+    std::vector<double> x_keep;
+    std::vector<double> f_keep;
+    x_keep.reserve(static_cast<std::size_t>(n));
+    f_keep.reserve(static_cast<std::size_t>(n));
+    for (py::ssize_t i = 0; i < n; ++i) {
+        bool keep = (i == 0 || i == n - 1);
+        if (!keep) {
+            const double d2 = fp[i - 1] - 2.0 * fp[i] + fp[i + 1];
+            keep = std::abs(d2) >= tol;
+        }
+        if (keep) {
+            x_keep.push_back(xp[i]);
+            f_keep.push_back(fp[i]);
+        }
+    }
+    auto x_out = py::array_t<double>({static_cast<py::ssize_t>(x_keep.size())});
+    auto f_out = py::array_t<double>({static_cast<py::ssize_t>(f_keep.size())});
+    std::copy(x_keep.begin(), x_keep.end(), x_out.mutable_data());
+    std::copy(f_keep.begin(), f_keep.end(), f_out.mutable_data());
+    return py::make_tuple(x_out, f_out);
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -1810,5 +1887,7 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("poisson_2d_jacobi", &poisson_2d_jacobi_native, py::arg("f"), py::arg("dx") = 1.0, py::arg("dy") = 1.0, py::arg("max_iter") = 5000, py::arg("tol") = 1e-6);
     m.def("levelset_reinit_1d", &levelset_reinit_1d, py::arg("phi"), py::arg("dx") = 1.0, py::arg("n_iter") = 30);
     m.def("fast_march_1d", &fast_march_1d, py::arg("phi"), py::arg("dx") = 1.0);
+    m.def("mesh_refine_by_gradient", &mesh_refine_by_gradient, py::arg("x"), py::arg("f"), py::arg("threshold") = 0.1, py::arg("max_passes") = 5);
+    m.def("mesh_coarsen_by_tolerance", &mesh_coarsen_by_tolerance, py::arg("x"), py::arg("f"), py::arg("tol") = 1e-3);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
