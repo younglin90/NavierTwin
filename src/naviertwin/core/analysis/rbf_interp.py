@@ -15,6 +15,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def _phi(r: NDArray, kernel: str, eps: float) -> NDArray:
     if kernel == "gaussian":
@@ -48,7 +53,7 @@ class RBFInterpolator:
         A = _phi(D, kernel, self.eps)
         if reg > 0:
             A = A + reg * np.eye(n)
-        self.w = np.linalg.solve(A, self.y)
+        self.w = np.asarray(_kernels.solve_square(A, self.y), dtype=np.float64)
 
     def __call__(self, Xq: NDArray[np.float64]) -> NDArray[np.float64]:
         Xq = np.asarray(Xq, dtype=np.float64)

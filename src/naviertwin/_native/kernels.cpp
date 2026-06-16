@@ -547,6 +547,41 @@ static std::vector<double> solve_linear_system(std::vector<double> m, std::vecto
     return x;
 }
 
+static py::array_t<double> solve_square_native(ArrayD a, ArrayD b) {
+    check_square_matrix(a);
+    const py::ssize_t n = a.shape(0);
+    if (b.ndim() != 1 && b.ndim() != 2) {
+        throw std::invalid_argument("b must have shape (N,) or (N, K)");
+    }
+    if (b.shape(0) != n) {
+        throw std::invalid_argument("A and b dimensions do not match");
+    }
+
+    const double* ap = a.data();
+    std::vector<double> matrix(ap, ap + n * n);
+    const double* bp = b.data();
+    if (b.ndim() == 1) {
+        std::vector<double> rhs(bp, bp + n);
+        std::vector<double> x = solve_linear_system(matrix, rhs, n);
+        return vector_to_numpy(x);
+    }
+
+    const py::ssize_t cols = b.shape(1);
+    auto out = py::array_t<double>({n, cols});
+    double* op = out.mutable_data();
+    for (py::ssize_t col = 0; col < cols; ++col) {
+        std::vector<double> rhs(static_cast<std::size_t>(n), 0.0);
+        for (py::ssize_t row = 0; row < n; ++row) {
+            rhs[static_cast<std::size_t>(row)] = bp[row * cols + col];
+        }
+        std::vector<double> x = solve_linear_system(matrix, rhs, n);
+        for (py::ssize_t row = 0; row < n; ++row) {
+            op[row * cols + col] = x[static_cast<std::size_t>(row)];
+        }
+    }
+    return out;
+}
+
 static py::tuple power_iteration_native(ArrayD a, int n_iter, ArrayD x0, double tol) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -611,6 +646,7 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("decompose_j_3x3", &decompose_j_3x3, py::arg("J"));
     m.def("symmetric_eigenvalues_3x3", &symmetric_eigenvalues_3x3, py::arg("J"));
     m.def("invariants_3x3", &invariants_3x3, py::arg("J"));
+    m.def("solve_square", &solve_square_native, py::arg("A"), py::arg("b"));
     m.def("power_iteration", &power_iteration_native, py::arg("A"), py::arg("n_iter"), py::arg("x0"), py::arg("tol"));
     m.def("inverse_power", &inverse_power_native, py::arg("A"), py::arg("shift"), py::arg("n_iter"), py::arg("x0"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));

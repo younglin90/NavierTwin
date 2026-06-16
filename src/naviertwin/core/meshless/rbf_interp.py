@@ -15,6 +15,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def _gaussian(r2, eps):
     return np.exp(-eps * r2)
@@ -30,7 +35,7 @@ class RBFInterp:
         self.X = np.asarray(X, dtype=np.float64)
         d = self.X[:, None, :] - self.X[None, :, :]
         K = _gaussian(np.sum(d ** 2, axis=-1), self.eps)
-        self.w = np.linalg.solve(K + 1e-10 * np.eye(K.shape[0]), np.asarray(y))
+        self.w = np.asarray(_kernels.solve_square(K + 1e-10 * np.eye(K.shape[0]), np.asarray(y)), dtype=np.float64)
         return self
 
     def predict(self, X_q: NDArray[np.float64]) -> NDArray[np.float64]:
