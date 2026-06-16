@@ -2755,6 +2755,15 @@ static py::tuple cht_iterate_native(ArrayD T_solid, ArrayD T_fluid, double k_s, 
     return py::make_tuple(Ts, Tf);
 }
 
+static double battery_temperature_step_native(double T, double T_amb, double Q_gen, double h, double A, double m, double cp, double dt) {
+    const double dTdt = (Q_gen - h * A * (T - T_amb)) / (m * cp);
+    return T + dt * dTdt;
+}
+
+static double battery_steady_temperature_native(double T_amb, double Q_gen, double h, double A) {
+    return T_amb + Q_gen / (h * A);
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -2858,5 +2867,13 @@ PYBIND11_MODULE(_kernels, m) {
         py::arg("Re"), py::arg("rho"), py::arg("U_inf"), py::arg("nu")
     );
     m.def("cht_iterate", &cht_iterate_native, py::arg("T_solid"), py::arg("T_fluid"), py::arg("k_s"), py::arg("k_f"), py::arg("n_iter"));
+    m.def(
+        "battery_temperature_step", &battery_temperature_step_native, py::arg("T"), py::arg("T_amb"),
+        py::arg("Q_gen"), py::arg("h"), py::arg("A"), py::arg("m"), py::arg("cp"), py::arg("dt")
+    );
+    m.def(
+        "battery_steady_temperature", &battery_steady_temperature_native, py::arg("T_amb"),
+        py::arg("Q_gen"), py::arg("h"), py::arg("A")
+    );
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
