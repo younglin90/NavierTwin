@@ -1331,6 +1331,37 @@ static py::list dominant_frequencies_from_power(ArrayD freqs, ArrayD power, int 
     return out;
 }
 
+static py::array_t<double> deposit_cic_1d(ArrayD x, ArrayD weights, int n_grid, double dx, double x0) {
+    if (x.ndim() != 1 || weights.ndim() != 1 || x.shape(0) != weights.shape(0)) {
+        throw std::invalid_argument("x and weights must be matching 1D arrays");
+    }
+    if (n_grid < 0) {
+        throw std::invalid_argument("n_grid must be non-negative");
+    }
+    if (dx == 0.0) {
+        throw std::invalid_argument("dx must be non-zero");
+    }
+    auto out = py::array_t<double>({static_cast<py::ssize_t>(n_grid)});
+    double* op = out.mutable_data();
+    std::fill(op, op + n_grid, 0.0);
+
+    const double* xp = x.data();
+    const double* wp = weights.data();
+    const py::ssize_t n = x.shape(0);
+    for (py::ssize_t k = 0; k < n; ++k) {
+        const double pos = (xp[k] - x0) / dx;
+        const auto i = static_cast<py::ssize_t>(std::floor(pos));
+        const double f = pos - static_cast<double>(i);
+        if (0 <= i && i < n_grid) {
+            op[i] += wp[k] * (1.0 - f);
+        }
+        if (0 <= i + 1 && i + 1 < n_grid) {
+            op[i + 1] += wp[k] * f;
+        }
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -1376,5 +1407,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("rom_energy_spectrum", &rom_energy_spectrum_native, py::arg("singular_values"));
     m.def("radial_energy_sum", &radial_energy_sum, py::arg("K"), py::arg("energy"), py::arg("edges"));
     m.def("dominant_frequencies_from_power", &dominant_frequencies_from_power, py::arg("freqs"), py::arg("power"), py::arg("top_k"));
+    m.def("deposit_cic_1d", &deposit_cic_1d, py::arg("x"), py::arg("weights"), py::arg("n_grid"), py::arg("dx") = 1.0, py::arg("x0") = 0.0);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

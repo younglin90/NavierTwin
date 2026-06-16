@@ -12,6 +12,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def deposit_cic_1d(
     x: NDArray[np.float64],
@@ -22,16 +27,13 @@ def deposit_cic_1d(
     x0: float = 0.0,
 ) -> NDArray[np.float64]:
     """Cloud-in-cell linear deposition."""
-    rho = np.zeros(n_grid)
-    pos = (np.asarray(x) - x0) / dx
-    i = np.floor(pos).astype(int)
-    f = pos - i
-    for k in range(len(x)):
-        if 0 <= i[k] < n_grid:
-            rho[i[k]] += float(weights[k]) * (1 - f[k])
-        if 0 <= i[k] + 1 < n_grid:
-            rho[i[k] + 1] += float(weights[k]) * f[k]
-    return rho
+    return _kernels.deposit_cic_1d(
+        np.asarray(x, dtype=np.float64),
+        np.asarray(weights, dtype=np.float64),
+        int(n_grid),
+        float(dx),
+        float(x0),
+    )
 
 
 __all__ = ["deposit_cic_1d"]
