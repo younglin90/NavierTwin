@@ -23,7 +23,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
 from naviertwin.utils.logger import get_logger
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
 
 logger = get_logger(__name__)
 
@@ -61,35 +65,7 @@ def quadrant_split(
     if hole < 0:
         raise ValueError(f"hole must be >= 0, got {hole}")
 
-    u_rms = np.sqrt(np.mean(up ** 2)) + 1e-30
-    v_rms = np.sqrt(np.mean(vp ** 2)) + 1e-30
-    threshold = hole * u_rms * v_rms
-
-    uv = up * vp
-    in_hole = np.abs(uv) < threshold
-
-    Q1 = (up > 0) & (vp > 0) & ~in_hole
-    Q2 = (up < 0) & (vp > 0) & ~in_hole
-    Q3 = (up < 0) & (vp < 0) & ~in_hole
-    Q4 = (up > 0) & (vp < 0) & ~in_hole
-
-    n = len(up)
-    out: dict[str, dict[str, float | int]] = {}
-    for name, mask in (("Q1", Q1), ("Q2", Q2), ("Q3", Q3), ("Q4", Q4)):
-        cnt = int(mask.sum())
-        out[name] = {
-            "count": cnt,
-            "fraction": cnt / max(n, 1),
-            "mean_uv": float(uv[mask].mean()) if cnt > 0 else 0.0,
-            "contribution": float(uv[mask].sum()) / max(n, 1),
-        }
-    out["hole"] = {
-        "count": int(in_hole.sum()),
-        "fraction": float(in_hole.sum()) / max(n, 1),
-        "mean_uv": float(uv[in_hole].mean()) if in_hole.sum() > 0 else 0.0,
-        "contribution": float(uv[in_hole].sum()) / max(n, 1),
-    }
-    return out
+    return dict(_kernels.quadrant_split(up, vp, float(hole)))
 
 
 def histogram_pdf(

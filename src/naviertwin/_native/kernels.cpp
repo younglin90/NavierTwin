@@ -2400,6 +2400,61 @@ static py::tuple trigger_average_accum(ArrayD signal, ArrayI valid_indices, int 
     return py::make_tuple(mean, static_cast<int>(count));
 }
 
+static py::dict quadrant_split_native(ArrayD up, ArrayD vp, double hole) {
+    if (up.ndim() != 1 || vp.ndim() != 1 || up.shape(0) != vp.shape(0)) {
+        throw std::invalid_argument("up and vp must be matching 1D arrays");
+    }
+    if (hole < 0.0) {
+        throw std::invalid_argument("hole must be non-negative");
+    }
+    const py::ssize_t n = up.shape(0);
+    const double* upv = up.data();
+    const double* vpv = vp.data();
+    double sum_u2 = 0.0;
+    double sum_v2 = 0.0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        sum_u2 += upv[i] * upv[i];
+        sum_v2 += vpv[i] * vpv[i];
+    }
+    const double denom_n = static_cast<double>(std::max<py::ssize_t>(n, 1));
+    const double u_rms = std::sqrt(sum_u2 / denom_n) + 1e-30;
+    const double v_rms = std::sqrt(sum_v2 / denom_n) + 1e-30;
+    const double threshold = hole * u_rms * v_rms;
+    std::array<int, 5> counts = {0, 0, 0, 0, 0};
+    std::array<double, 5> sums = {0.0, 0.0, 0.0, 0.0, 0.0};
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const double uv = upv[i] * vpv[i];
+        const bool in_hole = std::abs(uv) < threshold;
+        int bucket = in_hole ? 4 : -1;
+        if (!in_hole) {
+            if (upv[i] > 0.0 && vpv[i] > 0.0) {
+                bucket = 0;
+            } else if (upv[i] < 0.0 && vpv[i] > 0.0) {
+                bucket = 1;
+            } else if (upv[i] < 0.0 && vpv[i] < 0.0) {
+                bucket = 2;
+            } else if (upv[i] > 0.0 && vpv[i] < 0.0) {
+                bucket = 3;
+            }
+        }
+        if (bucket >= 0) {
+            counts[static_cast<std::size_t>(bucket)] += 1;
+            sums[static_cast<std::size_t>(bucket)] += uv;
+        }
+    }
+    const char* names[5] = {"Q1", "Q2", "Q3", "Q4", "hole"};
+    py::dict out;
+    for (int b = 0; b < 5; ++b) {
+        py::dict item;
+        item["count"] = counts[static_cast<std::size_t>(b)];
+        item["fraction"] = static_cast<double>(counts[static_cast<std::size_t>(b)]) / denom_n;
+        item["mean_uv"] = counts[static_cast<std::size_t>(b)] > 0 ? sums[static_cast<std::size_t>(b)] / counts[static_cast<std::size_t>(b)] : 0.0;
+        item["contribution"] = sums[static_cast<std::size_t>(b)] / denom_n;
+        out[names[b]] = item;
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -2482,5 +2537,6 @@ PYBIND11_MODULE(_kernels, m) {
         "trigger_average_accum", &trigger_average_accum, py::arg("signal"), py::arg("valid_indices"),
         py::arg("half_window"), py::arg("return_std")
     );
+    m.def("quadrant_split", &quadrant_split_native, py::arg("up"), py::arg("vp"), py::arg("hole") = 0.0);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
