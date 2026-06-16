@@ -23,7 +23,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
 from naviertwin.utils.logger import get_logger
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
 
 logger = get_logger(__name__)
 
@@ -158,8 +162,7 @@ def reynolds_stress_eigenvalues(
     if R.shape != (3, 3):
         raise ValueError(f"R must be (3, 3), got {R.shape}")
     R_sym = 0.5 * (R + R.T)
-    eigvals = np.linalg.eigvalsh(R_sym)
-    return np.sort(eigvals)
+    return np.asarray(_kernels.symmetric_eigenvalues_3x3(R_sym), dtype=np.float64)
 
 
 def barycentric_coordinates(
@@ -180,7 +183,7 @@ def barycentric_coordinates(
     if b.shape != (3, 3):
         raise ValueError(f"b must be (3, 3), got {b.shape}")
     b_sym = 0.5 * (b + b.T)
-    eigs = np.sort(np.linalg.eigvalsh(b_sym))[::-1]  # 내림차순
+    eigs = np.asarray(_kernels.symmetric_eigenvalues_3x3(b_sym), dtype=np.float64)[::-1]
     lam1, lam2, lam3 = float(eigs[0]), float(eigs[1]), float(eigs[2])
     C_1c = lam1 - lam2
     C_2c = 2 * (lam2 - lam3)

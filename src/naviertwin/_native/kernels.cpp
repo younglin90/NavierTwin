@@ -407,6 +407,26 @@ static py::tuple decompose_j_3x3(py::array_t<double, py::array::c_style | py::ar
     return py::make_tuple(s, w);
 }
 
+static py::array_t<double> symmetric_eigenvalues_3x3(py::array_t<double, py::array::c_style | py::array::forcecast> j) {
+    if (j.ndim() != 2 || j.shape(0) != 3 || j.shape(1) != 3) {
+        throw std::invalid_argument("3x3 expected");
+    }
+    const double* a = j.data();
+    const double a00 = a[0];
+    const double a01 = 0.5 * (a[1] + a[3]);
+    const double a02 = 0.5 * (a[2] + a[6]);
+    const double a11 = a[4];
+    const double a12 = 0.5 * (a[5] + a[7]);
+    const double a22 = a[8];
+    const auto eig = sorted_symmetric_eigenvalues(a00, a01, a02, a11, a12, a22);
+    auto out = py::array_t<double>({static_cast<py::ssize_t>(3)});
+    double* op = out.mutable_data();
+    op[0] = eig[0];
+    op[1] = eig[1];
+    op[2] = eig[2];
+    return out;
+}
+
 static py::dict invariants_3x3(py::array_t<double, py::array::c_style | py::array::forcecast> j) {
     if (j.ndim() != 2 || j.shape(0) != 3 || j.shape(1) != 3) {
         throw std::invalid_argument("3x3 expected");
@@ -589,6 +609,7 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("q_criterion_from_grad_3d", &q_criterion_from_grad_3d, py::arg("gradient"));
     m.def("lambda2_from_grad_3d", &lambda2_from_grad_3d, py::arg("gradient"));
     m.def("decompose_j_3x3", &decompose_j_3x3, py::arg("J"));
+    m.def("symmetric_eigenvalues_3x3", &symmetric_eigenvalues_3x3, py::arg("J"));
     m.def("invariants_3x3", &invariants_3x3, py::arg("J"));
     m.def("power_iteration", &power_iteration_native, py::arg("A"), py::arg("n_iter"), py::arg("x0"), py::arg("tol"));
     m.def("inverse_power", &inverse_power_native, py::arg("A"), py::arg("shift"), py::arg("n_iter"), py::arg("x0"));
