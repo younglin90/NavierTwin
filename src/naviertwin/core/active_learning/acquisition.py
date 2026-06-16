@@ -25,12 +25,14 @@ Examples:
 
 from __future__ import annotations
 
-from math import erf, sqrt
-
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
 from naviertwin.utils.logger import get_logger
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
 
 logger = get_logger(__name__)
 
@@ -40,7 +42,10 @@ def _norm_pdf(x: NDArray[np.float64]) -> NDArray[np.float64]:
 
 
 def _norm_cdf(x: NDArray[np.float64]) -> NDArray[np.float64]:
-    return np.array([0.5 * (1.0 + erf(xi / sqrt(2.0))) for xi in np.atleast_1d(x)])
+    values = np.atleast_1d(x)
+    return _kernels.norm_cdf(
+        np.asarray(values, dtype=np.float64),
+    ).reshape(values.shape)
 
 
 def expected_improvement(
@@ -255,17 +260,13 @@ def greedy_batch_acquisition(
     if batch_size <= 0:
         raise ValueError(f"batch_size > 0 required, got {batch_size}")
 
-    sorted_idx = np.argsort(-a)
-    selected: list[int] = []
-    for idx in sorted_idx:
-        if len(selected) >= batch_size:
-            break
-        if min_distance is not None and selected:
-            dists = np.linalg.norm(C[idx] - C[selected], axis=1)
-            if dists.min() < min_distance:
-                continue
-        selected.append(int(idx))
-    return np.array(selected, dtype=np.intp)
+    return _kernels.greedy_batch_acquisition(
+        a,
+        C,
+        int(batch_size),
+        0.0 if min_distance is None else float(min_distance),
+        min_distance is not None,
+    ).astype(np.intp)
 
 
 __all__ = [

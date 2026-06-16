@@ -2242,6 +2242,65 @@ static py::array_t<double> regular_grid_points(Array2D bounds, int per) {
     return out;
 }
 
+static py::array_t<double> norm_cdf(ArrayD x) {
+    const py::ssize_t n = x.size();
+    auto out = py::array_t<double>({n});
+    const double* xp = x.data();
+    double* op = out.mutable_data();
+    const double inv_sqrt2 = 0.707106781186547524400844362104849039;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        op[i] = 0.5 * (1.0 + std::erf(xp[i] * inv_sqrt2));
+    }
+    return out;
+}
+
+static py::array_t<long long> greedy_batch_acquisition_native(
+    ArrayD acq, Array2D candidates, int batch_size, double min_distance, bool use_distance
+) {
+    if (acq.ndim() != 1 || candidates.shape(0) != acq.shape(0)) {
+        throw std::invalid_argument("acq must be 1D and candidates must have matching rows");
+    }
+    if (batch_size <= 0) {
+        throw std::invalid_argument("batch_size must be positive");
+    }
+    const py::ssize_t n = acq.shape(0);
+    const py::ssize_t dim = candidates.shape(1);
+    const double* ap = acq.data();
+    const double* cp = candidates.data();
+    std::vector<py::ssize_t> order(static_cast<std::size_t>(n));
+    for (py::ssize_t i = 0; i < n; ++i) {
+        order[static_cast<std::size_t>(i)] = i;
+    }
+    std::sort(order.begin(), order.end(), [ap](py::ssize_t lhs, py::ssize_t rhs) {
+        return ap[lhs] > ap[rhs];
+    });
+    std::vector<long long> selected;
+    selected.reserve(static_cast<std::size_t>(batch_size));
+    for (const py::ssize_t idx : order) {
+        if (static_cast<int>(selected.size()) >= batch_size) {
+            break;
+        }
+        if (use_distance && !selected.empty()) {
+            double min_dist2 = std::numeric_limits<double>::infinity();
+            for (const long long sel : selected) {
+                double dist2 = 0.0;
+                for (py::ssize_t d = 0; d < dim; ++d) {
+                    const double diff = cp[idx * dim + d] - cp[static_cast<py::ssize_t>(sel) * dim + d];
+                    dist2 += diff * diff;
+                }
+                min_dist2 = std::min(min_dist2, dist2);
+            }
+            if (std::sqrt(min_dist2) < min_distance) {
+                continue;
+            }
+        }
+        selected.push_back(static_cast<long long>(idx));
+    }
+    auto out = py::array_t<long long>({static_cast<py::ssize_t>(selected.size())});
+    std::copy(selected.begin(), selected.end(), out.mutable_data());
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -2314,5 +2373,10 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("delta99_scan", &delta99_scan, py::arg("y"), py::arg("u"), py::arg("target"));
     m.def("scale_to_bounds", &scale_to_bounds_native, py::arg("unit"), py::arg("bounds"));
     m.def("regular_grid_points", &regular_grid_points, py::arg("bounds"), py::arg("per"));
+    m.def("norm_cdf", &norm_cdf, py::arg("x"));
+    m.def(
+        "greedy_batch_acquisition", &greedy_batch_acquisition_native, py::arg("acq"), py::arg("candidates"),
+        py::arg("batch_size"), py::arg("min_distance"), py::arg("use_distance")
+    );
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
