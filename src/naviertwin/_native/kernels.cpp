@@ -1411,6 +1411,35 @@ static double reaction_rate_native(double k, py::sequence concentrations, py::se
     return rate;
 }
 
+static py::array_t<double> vof_step_1d(ArrayD alpha, ArrayD u, double dt, double dx) {
+    if (alpha.ndim() != 1 || u.ndim() != 1 || alpha.shape(0) != u.shape(0)) {
+        throw std::invalid_argument("alpha and u must be matching 1D arrays");
+    }
+    if (dx == 0.0) {
+        throw std::invalid_argument("dx must be non-zero");
+    }
+    const py::ssize_t n = alpha.shape(0);
+    auto out = py::array_t<double>({n});
+    const double* ap = alpha.data();
+    const double* up = u.data();
+    double* op = out.mutable_data();
+    for (py::ssize_t i = 0; i < n; ++i) {
+        op[i] = ap[i];
+    }
+    const double c = dt / dx;
+    for (py::ssize_t i = 1; i < n - 1; ++i) {
+        if (up[i] >= 0.0) {
+            op[i] = ap[i] - c * up[i] * (ap[i] - ap[i - 1]);
+        } else {
+            op[i] = ap[i] - c * up[i] * (ap[i + 1] - ap[i]);
+        }
+    }
+    for (py::ssize_t i = 0; i < n; ++i) {
+        op[i] = std::min(1.0, std::max(0.0, op[i]));
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -1459,5 +1488,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("deposit_cic_1d", &deposit_cic_1d, py::arg("x"), py::arg("weights"), py::arg("n_grid"), py::arg("dx") = 1.0, py::arg("x0") = 0.0);
     m.def("sph_density_1d", &sph_density_1d, py::arg("positions"), py::arg("masses"), py::arg("h") = 1.0);
     m.def("reaction_rate", &reaction_rate_native, py::arg("k"), py::arg("concentrations"), py::arg("orders"));
+    m.def("vof_step_1d", &vof_step_1d, py::arg("alpha"), py::arg("u"), py::arg("dt"), py::arg("dx"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

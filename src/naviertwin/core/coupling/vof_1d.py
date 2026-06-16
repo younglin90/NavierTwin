@@ -13,6 +13,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def vof_step(
     alpha: NDArray[np.float64],
@@ -21,16 +26,12 @@ def vof_step(
     dt: float, dx: float,
 ) -> NDArray[np.float64]:
     """upwind advection of color function (clipped to [0, 1])."""
-    a = np.asarray(alpha, dtype=np.float64).copy()
-    u = np.asarray(u, dtype=np.float64)
-    a_new = a.copy()
-    n = len(a)
-    for i in range(1, n - 1):
-        if u[i] >= 0:
-            a_new[i] = a[i] - dt / dx * u[i] * (a[i] - a[i - 1])
-        else:
-            a_new[i] = a[i] - dt / dx * u[i] * (a[i + 1] - a[i])
-    return np.clip(a_new, 0.0, 1.0)
+    return _kernels.vof_step_1d(
+        np.asarray(alpha, dtype=np.float64),
+        np.asarray(u, dtype=np.float64),
+        float(dt),
+        float(dx),
+    )
 
 
 __all__ = ["vof_step"]
