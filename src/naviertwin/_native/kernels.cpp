@@ -2506,6 +2506,39 @@ static int number_peaks_native(ArrayD x, int support) {
     return count;
 }
 
+static double jackknife_mean_var_native(ArrayD data) {
+    if (data.ndim() != 1) {
+        throw std::invalid_argument("data must be a 1D array");
+    }
+    const py::ssize_t n = data.shape(0);
+    if (n == 0) {
+        throw std::invalid_argument("data must not be empty");
+    }
+    if (n == 1) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    const double* xp = data.data();
+    double total = 0.0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        total += xp[i];
+    }
+    std::vector<double> theta(static_cast<std::size_t>(n));
+    double theta_dot = 0.0;
+    const double denom = static_cast<double>(n - 1);
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const double value = (total - xp[i]) / denom;
+        theta[static_cast<std::size_t>(i)] = value;
+        theta_dot += value;
+    }
+    theta_dot /= static_cast<double>(n);
+    double ss = 0.0;
+    for (double value : theta) {
+        const double diff = value - theta_dot;
+        ss += diff * diff;
+    }
+    return static_cast<double>(n - 1) / static_cast<double>(n) * ss;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -2591,5 +2624,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("quadrant_split", &quadrant_split_native, py::arg("up"), py::arg("vp"), py::arg("hole") = 0.0);
     m.def("kolmogorov_pvalue", &kolmogorov_pvalue, py::arg("D"), py::arg("n"));
     m.def("number_peaks", &number_peaks_native, py::arg("x"), py::arg("support") = 3);
+    m.def("jackknife_mean_var", &jackknife_mean_var_native, py::arg("data"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
