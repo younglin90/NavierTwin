@@ -25,7 +25,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
 from naviertwin.utils.logger import get_logger
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
 
 logger = get_logger(__name__)
 
@@ -61,7 +65,8 @@ def project_linear_constraint(
     AAT = A @ A.T                   # (m, m)
     # 잔차: (..., m)
     r = np.tensordot(u, A, axes=([-1], [1])) - b
-    lam = np.linalg.solve(AAT.T, r[..., None])[..., 0]  # broadcast-safe
+    rhs = r.reshape(-1, b.size).T
+    lam = np.asarray(_kernels.solve_square(AAT.T, rhs), dtype=np.float64).T.reshape(r.shape)
     # 수정: Aᵀ lam → (..., n)
     correction = lam @ A            # (..., n)
     return u - correction
