@@ -1066,6 +1066,69 @@ static py::tuple conjugate_gradient_dense_native(ArrayD a, ArrayD b, ArrayD x0, 
     return py::make_tuple(vector_to_numpy(x), info);
 }
 
+static py::tuple arnoldi_native(ArrayD a, ArrayD b, int k_in) {
+    check_square_matrix(a);
+    const py::ssize_t n = a.shape(0);
+    const int k = std::min(k_in, static_cast<int>(n));
+    std::vector<double> q0 = contiguous_vector(b, n, "b");
+    normalize_in_place(q0);
+    auto q_arr = py::array_t<double>({n, static_cast<py::ssize_t>(k + 1)});
+    auto h_arr = py::array_t<double>({static_cast<py::ssize_t>(k + 1), static_cast<py::ssize_t>(k)});
+    double* qp = q_arr.mutable_data();
+    double* hp = h_arr.mutable_data();
+    std::fill(qp, qp + n * (k + 1), 0.0);
+    std::fill(hp, hp + (k + 1) * k, 0.0);
+    for (py::ssize_t row = 0; row < n; ++row) {
+        qp[row * (k + 1)] = q0[static_cast<std::size_t>(row)];
+    }
+
+    const double* ap = a.data();
+    int cols = k + 1;
+    int h_cols = k;
+    for (int j = 0; j < k; ++j) {
+        std::vector<double> qj(static_cast<std::size_t>(n), 0.0);
+        for (py::ssize_t row = 0; row < n; ++row) {
+            qj[static_cast<std::size_t>(row)] = qp[row * cols + j];
+        }
+        std::vector<double> v = matvec(ap, n, qj);
+        for (int i = 0; i <= j; ++i) {
+            std::vector<double> qi(static_cast<std::size_t>(n), 0.0);
+            for (py::ssize_t row = 0; row < n; ++row) {
+                qi[static_cast<std::size_t>(row)] = qp[row * cols + i];
+            }
+            const double hij = dot(qi, v);
+            hp[i * h_cols + j] = hij;
+            for (py::ssize_t row = 0; row < n; ++row) {
+                v[static_cast<std::size_t>(row)] -= hij * qi[static_cast<std::size_t>(row)];
+            }
+        }
+        const double h_next = vec_norm(v);
+        hp[(j + 1) * h_cols + j] = h_next;
+        if (h_next < 1e-14) {
+            const py::ssize_t q_cols = j + 1;
+            auto q_small = py::array_t<double>({n, q_cols});
+            auto h_small = py::array_t<double>({q_cols, q_cols});
+            double* qsp = q_small.mutable_data();
+            double* hsp = h_small.mutable_data();
+            for (py::ssize_t row = 0; row < n; ++row) {
+                for (py::ssize_t col = 0; col < q_cols; ++col) {
+                    qsp[row * q_cols + col] = qp[row * cols + col];
+                }
+            }
+            for (py::ssize_t row = 0; row < q_cols; ++row) {
+                for (py::ssize_t col = 0; col < q_cols; ++col) {
+                    hsp[row * q_cols + col] = hp[row * h_cols + col];
+                }
+            }
+            return py::make_tuple(q_small, h_small);
+        }
+        for (py::ssize_t row = 0; row < n; ++row) {
+            qp[row * cols + j + 1] = v[static_cast<std::size_t>(row)] / h_next;
+        }
+    }
+    return py::make_tuple(q_arr, h_arr);
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -1103,5 +1166,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("jacobi_dense", &jacobi_dense_native, py::arg("A"), py::arg("b"), py::arg("x0"), py::arg("max_iter"), py::arg("tol"));
     m.def("gauss_seidel_dense", &gauss_seidel_dense_native, py::arg("A"), py::arg("b"), py::arg("x0"), py::arg("max_iter"), py::arg("tol"));
     m.def("conjugate_gradient_dense", &conjugate_gradient_dense_native, py::arg("A"), py::arg("b"), py::arg("x0"), py::arg("max_iter"), py::arg("tol"));
+    m.def("arnoldi", &arnoldi_native, py::arg("A"), py::arg("b"), py::arg("k"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

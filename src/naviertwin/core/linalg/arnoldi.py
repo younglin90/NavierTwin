@@ -14,29 +14,18 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def arnoldi(
     A: NDArray[np.float64], b: NDArray[np.float64], k: int,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     """k-step Arnoldi. 반환: (Q (n, k+1), H (k+1, k))."""
-    A = np.asarray(A, dtype=np.float64)
-    n = A.shape[0]
-    k = int(min(k, n))
-    Q = np.zeros((n, k + 1))
-    H = np.zeros((k + 1, k))
-    q = np.asarray(b, dtype=np.float64).ravel()
-    q = q / (np.linalg.norm(q) + 1e-30)
-    Q[:, 0] = q
-    for j in range(k):
-        v = A @ Q[:, j]
-        for i in range(j + 1):
-            H[i, j] = Q[:, i] @ v
-            v = v - H[i, j] * Q[:, i]
-        H[j + 1, j] = float(np.linalg.norm(v))
-        if H[j + 1, j] < 1e-14:
-            return Q[:, :j + 1], H[:j + 1, :j + 1]
-        Q[:, j + 1] = v / H[j + 1, j]
-    return Q, H
+    Q, H = _kernels.arnoldi(np.asarray(A, dtype=np.float64), np.asarray(b, dtype=np.float64).ravel(), int(k))
+    return np.asarray(Q, dtype=np.float64), np.asarray(H, dtype=np.float64)
 
 
 def ritz_values(
