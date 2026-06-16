@@ -30,7 +30,11 @@ from typing import Callable
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
 from naviertwin.utils.logger import get_logger
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
 
 logger = get_logger(__name__)
 
@@ -109,21 +113,12 @@ def trigger_average(
             return np.zeros(out_shape), np.zeros(out_shape), 0
         return np.zeros(out_shape), 0
 
-    accum = np.zeros(out_shape, dtype=np.float64)
-    if return_std:
-        accum_sq = np.zeros(out_shape, dtype=np.float64)
-    for i in valid:
-        chunk = signal[i - half_window : i + half_window + 1]
-        accum = accum + chunk
-        if return_std:
-            accum_sq = accum_sq + chunk * chunk
-    n = len(valid)
-    mean = accum / n
-    if return_std:
-        var = accum_sq / n - mean ** 2
-        std = np.sqrt(np.maximum(var, 0.0))
-        return mean, std, int(n)
-    return mean, int(n)
+    return _kernels.trigger_average_accum(
+        signal,
+        valid.astype(np.int64),
+        int(half_window),
+        bool(return_std),
+    )
 
 
 def conditional_average(

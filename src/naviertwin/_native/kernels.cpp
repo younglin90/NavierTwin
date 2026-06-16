@@ -2336,6 +2336,70 @@ static double hex_volume_native(Array2D vertices) {
     return volume;
 }
 
+static py::tuple trigger_average_accum(ArrayD signal, ArrayI valid_indices, int half_window, bool return_std) {
+    if (signal.ndim() < 1) {
+        throw std::invalid_argument("signal must have at least one dimension");
+    }
+    if (valid_indices.ndim() != 1) {
+        throw std::invalid_argument("valid_indices must be 1D");
+    }
+    const py::ssize_t n_t = signal.shape(0);
+    const py::ssize_t win_len = 2 * static_cast<py::ssize_t>(half_window) + 1;
+    py::ssize_t frame_size = 1;
+    std::vector<py::ssize_t> out_shape;
+    out_shape.push_back(win_len);
+    for (py::ssize_t axis = 1; axis < signal.ndim(); ++axis) {
+        out_shape.push_back(signal.shape(axis));
+        frame_size *= signal.shape(axis);
+    }
+    auto mean = py::array_t<double>(out_shape);
+    double* mp = mean.mutable_data();
+    const py::ssize_t out_size = win_len * frame_size;
+    std::fill(mp, mp + out_size, 0.0);
+    auto std_arr = py::array_t<double>(out_shape);
+    double* sp = std_arr.mutable_data();
+    if (return_std) {
+        std::fill(sp, sp + out_size, 0.0);
+    }
+    const double* sig = signal.data();
+    const long long* idxp = valid_indices.data();
+    const py::ssize_t count = valid_indices.shape(0);
+    for (py::ssize_t idx_i = 0; idx_i < count; ++idx_i) {
+        const py::ssize_t center = static_cast<py::ssize_t>(idxp[idx_i]);
+        if (center - half_window < 0 || center + half_window >= n_t) {
+            continue;
+        }
+        for (py::ssize_t w = 0; w < win_len; ++w) {
+            const py::ssize_t src_frame = center - half_window + w;
+            for (py::ssize_t q = 0; q < frame_size; ++q) {
+                const double value = sig[src_frame * frame_size + q];
+                const py::ssize_t out_idx = w * frame_size + q;
+                mp[out_idx] += value;
+                if (return_std) {
+                    sp[out_idx] += value * value;
+                }
+            }
+        }
+    }
+    if (count == 0) {
+        if (return_std) {
+            return py::make_tuple(mean, std_arr, 0);
+        }
+        return py::make_tuple(mean, 0);
+    }
+    for (py::ssize_t i = 0; i < out_size; ++i) {
+        mp[i] /= static_cast<double>(count);
+    }
+    if (return_std) {
+        for (py::ssize_t i = 0; i < out_size; ++i) {
+            const double var = sp[i] / static_cast<double>(count) - mp[i] * mp[i];
+            sp[i] = std::sqrt(std::max(var, 0.0));
+        }
+        return py::make_tuple(mean, std_arr, static_cast<int>(count));
+    }
+    return py::make_tuple(mean, static_cast<int>(count));
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -2414,5 +2478,9 @@ PYBIND11_MODULE(_kernels, m) {
         py::arg("batch_size"), py::arg("min_distance"), py::arg("use_distance")
     );
     m.def("hex_volume", &hex_volume_native, py::arg("vertices"));
+    m.def(
+        "trigger_average_accum", &trigger_average_accum, py::arg("signal"), py::arg("valid_indices"),
+        py::arg("half_window"), py::arg("return_std")
+    );
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
