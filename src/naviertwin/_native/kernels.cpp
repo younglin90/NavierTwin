@@ -910,6 +910,33 @@ static py::tuple bicgstab_dense_native(ArrayD a, ArrayD b, ArrayD x0, int max_it
     return py::make_tuple(vector_to_numpy(x), info);
 }
 
+static py::array_t<double> thomas_solve_native(ArrayD a, ArrayD b, ArrayD c, ArrayD d) {
+    if (d.ndim() != 1) {
+        throw std::invalid_argument("d must have shape (N,)");
+    }
+    const py::ssize_t n = d.shape(0);
+    std::vector<double> aa = contiguous_vector(a, n, "a");
+    std::vector<double> bb = contiguous_vector(b, n, "b");
+    std::vector<double> cc = contiguous_vector(c, n, "c");
+    std::vector<double> dd = contiguous_vector(d, n, "d");
+    for (py::ssize_t i = 1; i < n; ++i) {
+        const double m = aa[static_cast<std::size_t>(i)] / bb[static_cast<std::size_t>(i - 1)];
+        bb[static_cast<std::size_t>(i)] -= m * cc[static_cast<std::size_t>(i - 1)];
+        dd[static_cast<std::size_t>(i)] -= m * dd[static_cast<std::size_t>(i - 1)];
+    }
+    std::vector<double> x(static_cast<std::size_t>(n), 0.0);
+    x[static_cast<std::size_t>(n - 1)] = dd[static_cast<std::size_t>(n - 1)] / bb[static_cast<std::size_t>(n - 1)];
+    for (py::ssize_t i = n - 2; i >= 0; --i) {
+        x[static_cast<std::size_t>(i)] =
+            (dd[static_cast<std::size_t>(i)] - cc[static_cast<std::size_t>(i)] * x[static_cast<std::size_t>(i + 1)]) /
+            bb[static_cast<std::size_t>(i)];
+        if (i == 0) {
+            break;
+        }
+    }
+    return vector_to_numpy(x);
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -943,5 +970,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("inverse_power", &inverse_power_native, py::arg("A"), py::arg("shift"), py::arg("n_iter"), py::arg("x0"));
     m.def("pcg_jacobi", &pcg_jacobi_native, py::arg("A"), py::arg("b"), py::arg("x0"), py::arg("max_iter"), py::arg("tol"));
     m.def("bicgstab_dense", &bicgstab_dense_native, py::arg("A"), py::arg("b"), py::arg("x0"), py::arg("max_iter"), py::arg("tol"));
+    m.def("thomas_solve", &thomas_solve_native, py::arg("a"), py::arg("b"), py::arg("c"), py::arg("d"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

@@ -19,6 +19,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def thomas_solve(
     a: NDArray[np.float64],
@@ -30,27 +35,21 @@ def thomas_solve(
     n = len(d)
     if not (len(a) == len(b) == len(c) == n):
         raise ValueError("diagonal 길이 불일치")
-    a = np.asarray(a, dtype=np.float64).copy()
-    b = np.asarray(b, dtype=np.float64).copy()
-    c = np.asarray(c, dtype=np.float64).copy()
-    d = np.asarray(d, dtype=np.float64).copy()
-    # forward
-    for i in range(1, n):
-        m = a[i] / b[i - 1]
-        b[i] = b[i] - m * c[i - 1]
-        d[i] = d[i] - m * d[i - 1]
-    # back substitution
-    x = np.zeros(n, dtype=np.float64)
-    x[-1] = d[-1] / b[-1]
-    for i in range(n - 2, -1, -1):
-        x[i] = (d[i] - c[i] * x[i + 1]) / b[i]
-    return x
+    return np.asarray(
+        _kernels.thomas_solve(
+            np.asarray(a, dtype=np.float64),
+            np.asarray(b, dtype=np.float64),
+            np.asarray(c, dtype=np.float64),
+            np.asarray(d, dtype=np.float64),
+        ),
+        dtype=np.float64,
+    )
 
 
 def crank_nicolson_heat_step(
     u: NDArray[np.float64], nu: float, dx: float, dt: float,
 ) -> NDArray[np.float64]:
-    """1 step of Crank-Nicolson for heat 1D (Dirichlet)."""
+    """Crank-Nicolson heat 1D step (Dirichlet)."""
     n = u.size
     r = nu * dt / (2 * dx ** 2)
     a = np.full(n, -r)
@@ -58,10 +57,8 @@ def crank_nicolson_heat_step(
     c = np.full(n, -r)
     a[0] = 0.0
     c[-1] = 0.0
-    # RHS
     d = u.copy()
     d[1:-1] = (1 - 2 * r) * u[1:-1] + r * (u[2:] + u[:-2])
-    # Dirichlet 0
     d[0] = 0.0
     d[-1] = 0.0
     b[0] = 1.0
