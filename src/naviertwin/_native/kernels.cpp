@@ -2680,6 +2680,49 @@ static int locate_triangle_native(ArrayD points, ArrayI simplices, ArrayD p) {
     return -1;
 }
 
+static py::array_t<double> friction_velocity_native(ArrayD wall_shear_stress, double rho) {
+    if (rho <= 0.0) {
+        throw std::invalid_argument("rho must be positive");
+    }
+    if (wall_shear_stress.ndim() == 1) {
+        double tau2 = 0.0;
+        const double* wp = wall_shear_stress.data();
+        for (py::ssize_t j = 0; j < wall_shear_stress.shape(0); ++j) {
+            tau2 += wp[j] * wp[j];
+        }
+        auto out = py::array_t<double>({static_cast<py::ssize_t>(1)});
+        out.mutable_data()[0] = std::sqrt(std::sqrt(tau2) / rho);
+        return out;
+    }
+    if (wall_shear_stress.ndim() != 2) {
+        throw std::invalid_argument("wall_shear_stress must be a 1D vector or 2D array");
+    }
+    const py::ssize_t n = wall_shear_stress.shape(0);
+    const py::ssize_t dim = wall_shear_stress.shape(1);
+    auto out = py::array_t<double>({n});
+    const double* wp = wall_shear_stress.data();
+    double* op = out.mutable_data();
+    for (py::ssize_t i = 0; i < n; ++i) {
+        double tau2 = 0.0;
+        for (py::ssize_t j = 0; j < dim; ++j) {
+            const double value = wp[i * dim + j];
+            tau2 += value * value;
+        }
+        op[i] = std::sqrt(std::sqrt(tau2) / rho);
+    }
+    return out;
+}
+
+static double estimate_first_cell_height_native(double y_plus_target, double Re, double rho, double U_inf, double nu) {
+    const double Cf = 0.026 * std::pow(Re, -1.0 / 7.0);
+    const double tau_w = Cf * 0.5 * rho * U_inf * U_inf;
+    const double u_tau = std::sqrt(tau_w / rho);
+    if (u_tau < 1e-16) {
+        throw std::invalid_argument("friction velocity is too small");
+    }
+    return y_plus_target * nu / u_tau;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -2777,5 +2820,10 @@ PYBIND11_MODULE(_kernels, m) {
     );
     m.def("barycentric_2d", &barycentric_2d_native, py::arg("triangle"), py::arg("p"));
     m.def("locate_triangle", &locate_triangle_native, py::arg("points"), py::arg("simplices"), py::arg("p"));
+    m.def("friction_velocity", &friction_velocity_native, py::arg("wall_shear_stress"), py::arg("rho"));
+    m.def(
+        "estimate_first_cell_height", &estimate_first_cell_height_native, py::arg("y_plus_target"),
+        py::arg("Re"), py::arg("rho"), py::arg("U_inf"), py::arg("nu")
+    );
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

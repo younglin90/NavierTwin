@@ -27,9 +27,13 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
 from naviertwin.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required by y+ analysis")
 
 
 def compute_yplus(
@@ -119,22 +123,21 @@ def estimate_first_cell_height(
         ...     Re=1e6, L=1.0, nu=1.5e-5, rho=1.225, U_inf=1.0
         ... )
     """
-    for name, val in (("Re", Re), ("L", L), ("nu", nu), ("rho", rho), ("U_inf", U_inf)):
-        if val <= 0:
-            raise ValueError(f"{name} 은(는) 0 보다 커야 합니다. 입력값: {val}")
+    if Re <= 0:
+        raise ValueError(f"Re 은(는) 0 보다 커야 합니다. 입력값: {Re}")
+    if L <= 0:
+        raise ValueError(f"L 은(는) 0 보다 커야 합니다. 입력값: {L}")
+    if nu <= 0:
+        raise ValueError(f"nu 은(는) 0 보다 커야 합니다. 입력값: {nu}")
+    if rho <= 0:
+        raise ValueError(f"rho 은(는) 0 보다 커야 합니다. 입력값: {rho}")
+    if U_inf <= 0:
+        raise ValueError(f"U_inf 은(는) 0 보다 커야 합니다. 입력값: {U_inf}")
 
-    # Schlichting 평판 난류 마찰 계수
     Cf = 0.026 * (Re ** (-1.0 / 7.0))
     tau_w = Cf * 0.5 * rho * U_inf**2
     u_tau = float(np.sqrt(tau_w / rho))
-
-    if u_tau < 1e-16:
-        raise ValueError(
-            f"마찰 속도가 너무 작습니다 (u_tau={u_tau:.3e}). "
-            "입력 파라미터를 확인하세요."
-        )
-
-    y1 = y_plus_target * nu / u_tau
+    y1 = float(_kernels.estimate_first_cell_height(y_plus_target, Re, rho, U_inf, nu))
 
     logger.debug(
         "estimate_first_cell_height: Cf=%.4e, tau_w=%.4e, u_tau=%.4e, y1=%.4e m",
@@ -174,16 +177,7 @@ def compute_friction_velocity(
         raise ValueError(f"밀도(rho)는 0 보다 커야 합니다. 입력값: {rho}")
 
     wall_shear_stress = np.asarray(wall_shear_stress, dtype=np.float64)
-
-    if wall_shear_stress.ndim == 1:
-        # 단일 벡터 처리
-        tau_mag = np.linalg.norm(wall_shear_stress)
-        u_tau = np.sqrt(tau_mag / rho)
-        return np.array([u_tau], dtype=np.float64)
-
-    # shape (N, 3) → (N,)
-    tau_mag = np.linalg.norm(wall_shear_stress, axis=-1)
-    u_tau = np.sqrt(tau_mag / rho)
+    u_tau = _kernels.friction_velocity(wall_shear_stress, float(rho))
 
     logger.debug(
         "compute_friction_velocity: u_tau 범위 [%.4e, %.4e] m/s",
