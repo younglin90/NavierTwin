@@ -2158,6 +2158,19 @@ static double combined_disc_uncertainty_native(py::sequence uncs) {
     return std::sqrt(total);
 }
 
+static double friction_colebrook_native(double re, double eps_over_d, int n_iter) {
+    double f = 0.02;
+    for (int i = 0; i < n_iter; ++i) {
+        const double rhs = -2.0 * std::log10(eps_over_d / 3.7 + 2.51 / (re * std::sqrt(f) + 1e-30));
+        const double f_new = 1.0 / (rhs * rhs);
+        if (std::abs(f_new - f) < 1e-10) {
+            return f_new;
+        }
+        f = f_new;
+    }
+    return f;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -2226,5 +2239,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("is_monotone_decreasing", &is_monotone_decreasing_native, py::arg("errs"), py::arg("atol") = 0.0);
     m.def("convergence_ratio", &convergence_ratio_native, py::arg("errs"));
     m.def("combined_disc_uncertainty", &combined_disc_uncertainty_native, py::arg("uncs"));
+    m.def("friction_colebrook", &friction_colebrook_native, py::arg("Re"), py::arg("eps_over_D"), py::arg("n_iter") = 50);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
