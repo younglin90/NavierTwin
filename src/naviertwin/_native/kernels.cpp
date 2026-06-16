@@ -2539,6 +2539,66 @@ static double jackknife_mean_var_native(ArrayD data) {
     return static_cast<double>(n - 1) / static_cast<double>(n) * ss;
 }
 
+static py::array_t<double> probe_time_series_native(ArrayD snapshots, ArrayD coords, ArrayD probes, const std::string& method, int k) {
+    if (snapshots.ndim() != 2 || coords.ndim() != 2 || probes.ndim() != 2) {
+        throw std::invalid_argument("snapshots, coords, and probes must be 2D arrays");
+    }
+    const py::ssize_t n_points = snapshots.shape(0);
+    const py::ssize_t n_times = snapshots.shape(1);
+    if (coords.shape(0) != n_points || probes.shape(1) != coords.shape(1)) {
+        throw std::invalid_argument("shape mismatch among snapshots, coords, and probes");
+    }
+    if (method != "nearest" && method != "idw") {
+        throw std::invalid_argument("unknown probe interpolation method");
+    }
+    const py::ssize_t dim = coords.shape(1);
+    const py::ssize_t n_probes = probes.shape(0);
+    auto out = py::array_t<double>({n_probes, n_times});
+    double* op = out.mutable_data();
+    const double* sp = snapshots.data();
+    const double* cp = coords.data();
+    const double* pp = probes.data();
+    const int kk = std::max(1, std::min(k, static_cast<int>(n_points)));
+    std::vector<std::pair<double, py::ssize_t>> dist_idx(static_cast<std::size_t>(n_points));
+    for (py::ssize_t p = 0; p < n_probes; ++p) {
+        for (py::ssize_t i = 0; i < n_points; ++i) {
+            double d2 = 0.0;
+            for (py::ssize_t d = 0; d < dim; ++d) {
+                const double diff = pp[p * dim + d] - cp[i * dim + d];
+                d2 += diff * diff;
+            }
+            dist_idx[static_cast<std::size_t>(i)] = {d2, i};
+        }
+        std::partial_sort(
+            dist_idx.begin(), dist_idx.begin() + kk, dist_idx.end(),
+            [](const auto& a, const auto& b) {
+                if (a.first == b.first) {
+                    return a.second < b.second;
+                }
+                return a.first < b.first;
+            }
+        );
+        for (py::ssize_t t = 0; t < n_times; ++t) {
+            double value = 0.0;
+            if (method == "nearest") {
+                value = sp[dist_idx[0].second * n_times + t];
+            } else {
+                double weight_sum = 0.0;
+                double weighted = 0.0;
+                for (int j = 0; j < kk; ++j) {
+                    const py::ssize_t src_i = dist_idx[static_cast<std::size_t>(j)].second;
+                    const double weight = 1.0 / (dist_idx[static_cast<std::size_t>(j)].first + 1e-12);
+                    weight_sum += weight;
+                    weighted += weight * sp[src_i * n_times + t];
+                }
+                value = weighted / weight_sum;
+            }
+            op[p * n_times + t] = value;
+        }
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -2625,5 +2685,9 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("kolmogorov_pvalue", &kolmogorov_pvalue, py::arg("D"), py::arg("n"));
     m.def("number_peaks", &number_peaks_native, py::arg("x"), py::arg("support") = 3);
     m.def("jackknife_mean_var", &jackknife_mean_var_native, py::arg("data"));
+    m.def(
+        "probe_time_series", &probe_time_series_native, py::arg("snapshots"), py::arg("coords"),
+        py::arg("probes"), py::arg("method") = "nearest", py::arg("k") = 4
+    );
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

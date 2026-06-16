@@ -17,6 +17,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required by probe analysis")
+
 
 def probe_time_series(
     snapshots: NDArray[np.float64],
@@ -38,24 +43,12 @@ def probe_time_series(
     Returns:
         (n_probes, n_times).
     """
-    from naviertwin.core.analysis.interpolate import (
-        idw_interpolate,
-        knn_interpolate,
-    )
-
     snapshots = np.asarray(snapshots, dtype=np.float64)
-    T = snapshots.shape[1]
-    n_probes = probes.shape[0]
-    out = np.zeros((n_probes, T), dtype=np.float64)
-    for t in range(T):
-        vals = snapshots[:, t]
-        if method == "nearest":
-            out[:, t] = knn_interpolate(coords, vals, probes, k=1)
-        elif method == "idw":
-            out[:, t] = idw_interpolate(coords, vals, probes, k=k)
-        else:
-            raise ValueError(f"unknown method: {method}")
-    return out
+    coords = np.asarray(coords, dtype=np.float64)
+    probes = np.asarray(probes, dtype=np.float64)
+    if method not in {"nearest", "idw"}:
+        raise ValueError(f"unknown method: {method}")
+    return _kernels.probe_time_series(snapshots, coords, probes, method, int(k))
 
 
 def probe_statistics(time_series: NDArray[np.float64]) -> dict[str, NDArray[np.float64]]:
