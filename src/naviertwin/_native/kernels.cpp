@@ -108,6 +108,155 @@ static py::array_t<double> lambda2_2d(Array2D u, Array2D v, double dx, double dy
     return out;
 }
 
+static py::array_t<double> vorticity_2d_native(Array2D u, Array2D v, double dx, double dy) {
+    check_same_2d(u, v);
+    if (dx == 0.0 || dy == 0.0) {
+        throw std::invalid_argument("dx and dy must be non-zero");
+    }
+
+    const auto ny = u.shape(0);
+    const auto nx = u.shape(1);
+    auto out = py::array_t<double>({ny, nx});
+    const double* up = u.data();
+    const double* vp = v.data();
+    double* op = out.mutable_data();
+
+    for (py::ssize_t i = 0; i < ny; ++i) {
+        for (py::ssize_t j = 0; j < nx; ++j) {
+            op[i * nx + j] = grad_x(vp, ny, nx, i, j, dx) - grad_y(up, ny, nx, i, j, dy);
+        }
+    }
+    return out;
+}
+
+static py::array_t<double> q_criterion_2d_native(Array2D u, Array2D v, double dx, double dy) {
+    check_same_2d(u, v);
+    if (dx == 0.0 || dy == 0.0) {
+        throw std::invalid_argument("dx and dy must be non-zero");
+    }
+
+    const auto ny = u.shape(0);
+    const auto nx = u.shape(1);
+    auto out = py::array_t<double>({ny, nx});
+    const double* up = u.data();
+    const double* vp = v.data();
+    double* op = out.mutable_data();
+
+    for (py::ssize_t i = 0; i < ny; ++i) {
+        for (py::ssize_t j = 0; j < nx; ++j) {
+            const double du_dx = grad_x(up, ny, nx, i, j, dx);
+            const double du_dy = grad_y(up, ny, nx, i, j, dy);
+            const double dv_dx = grad_x(vp, ny, nx, i, j, dx);
+            const double dv_dy = grad_y(vp, ny, nx, i, j, dy);
+            const double s12 = 0.5 * (du_dy + dv_dx);
+            const double o12 = 0.5 * (dv_dx - du_dy);
+            const double s2 = du_dx * du_dx + dv_dy * dv_dy + 2.0 * s12 * s12;
+            const double o2 = 2.0 * o12 * o12;
+            op[i * nx + j] = 0.5 * (o2 - s2);
+        }
+    }
+    return out;
+}
+
+static void check_same_3d(const ArrayD& u, const ArrayD& v, const ArrayD& w) {
+    if (u.ndim() != 3 || v.ndim() != 3 || w.ndim() != 3) {
+        throw std::invalid_argument("3D arrays expected");
+    }
+    if (
+        u.shape(0) != v.shape(0) || u.shape(0) != w.shape(0) ||
+        u.shape(1) != v.shape(1) || u.shape(1) != w.shape(1) ||
+        u.shape(2) != v.shape(2) || u.shape(2) != w.shape(2)
+    ) {
+        throw std::invalid_argument("u, v, and w must have the same shape");
+    }
+    if (u.shape(0) < 2 || u.shape(1) < 2 || u.shape(2) < 2) {
+        throw std::invalid_argument("each array axis must have at least 2 points");
+    }
+}
+
+static inline py::ssize_t idx3(py::ssize_t z, py::ssize_t y, py::ssize_t x, py::ssize_t ny, py::ssize_t nx) {
+    return (z * ny + y) * nx + x;
+}
+
+static inline double grad3_axis0(
+    const double* a, py::ssize_t nz, py::ssize_t ny, py::ssize_t nx,
+    py::ssize_t z, py::ssize_t y, py::ssize_t x, double dz
+) {
+    if (z == 0) {
+        return (a[idx3(1, y, x, ny, nx)] - a[idx3(0, y, x, ny, nx)]) / dz;
+    }
+    if (z == nz - 1) {
+        return (a[idx3(z, y, x, ny, nx)] - a[idx3(z - 1, y, x, ny, nx)]) / dz;
+    }
+    return (a[idx3(z + 1, y, x, ny, nx)] - a[idx3(z - 1, y, x, ny, nx)]) / (2.0 * dz);
+}
+
+static inline double grad3_axis1(
+    const double* a, py::ssize_t nz, py::ssize_t ny, py::ssize_t nx,
+    py::ssize_t z, py::ssize_t y, py::ssize_t x, double dy
+) {
+    (void)nz;
+    if (y == 0) {
+        return (a[idx3(z, 1, x, ny, nx)] - a[idx3(z, 0, x, ny, nx)]) / dy;
+    }
+    if (y == ny - 1) {
+        return (a[idx3(z, y, x, ny, nx)] - a[idx3(z, y - 1, x, ny, nx)]) / dy;
+    }
+    return (a[idx3(z, y + 1, x, ny, nx)] - a[idx3(z, y - 1, x, ny, nx)]) / (2.0 * dy);
+}
+
+static inline double grad3_axis2(
+    const double* a, py::ssize_t nz, py::ssize_t ny, py::ssize_t nx,
+    py::ssize_t z, py::ssize_t y, py::ssize_t x, double dx
+) {
+    (void)nz;
+    if (x == 0) {
+        return (a[idx3(z, y, 1, ny, nx)] - a[idx3(z, y, 0, ny, nx)]) / dx;
+    }
+    if (x == nx - 1) {
+        return (a[idx3(z, y, x, ny, nx)] - a[idx3(z, y, x - 1, ny, nx)]) / dx;
+    }
+    return (a[idx3(z, y, x + 1, ny, nx)] - a[idx3(z, y, x - 1, ny, nx)]) / (2.0 * dx);
+}
+
+static py::tuple vorticity_3d_native(ArrayD u, ArrayD v, ArrayD w, double dx, double dy, double dz) {
+    check_same_3d(u, v, w);
+    if (dx == 0.0 || dy == 0.0 || dz == 0.0) {
+        throw std::invalid_argument("dx, dy, and dz must be non-zero");
+    }
+
+    const auto nz = u.shape(0);
+    const auto ny = u.shape(1);
+    const auto nx = u.shape(2);
+    auto wx = py::array_t<double>({nz, ny, nx});
+    auto wy = py::array_t<double>({nz, ny, nx});
+    auto wz = py::array_t<double>({nz, ny, nx});
+    const double* up = u.data();
+    const double* vp = v.data();
+    const double* wp = w.data();
+    double* wxp = wx.mutable_data();
+    double* wyp = wy.mutable_data();
+    double* wzp = wz.mutable_data();
+
+    for (py::ssize_t z = 0; z < nz; ++z) {
+        for (py::ssize_t y = 0; y < ny; ++y) {
+            for (py::ssize_t x = 0; x < nx; ++x) {
+                const py::ssize_t index = idx3(z, y, x, ny, nx);
+                const double du_dy = grad3_axis1(up, nz, ny, nx, z, y, x, dy);
+                const double du_dz = grad3_axis0(up, nz, ny, nx, z, y, x, dz);
+                const double dv_dx = grad3_axis2(vp, nz, ny, nx, z, y, x, dx);
+                const double dv_dz = grad3_axis0(vp, nz, ny, nx, z, y, x, dz);
+                const double dw_dx = grad3_axis2(wp, nz, ny, nx, z, y, x, dx);
+                const double dw_dy = grad3_axis1(wp, nz, ny, nx, z, y, x, dy);
+                wxp[index] = dw_dy - dv_dz;
+                wyp[index] = du_dz - dw_dx;
+                wzp[index] = dv_dx - du_dy;
+            }
+        }
+    }
+    return py::make_tuple(wx, wy, wz);
+}
+
 static inline void load_grad_3x3(const double* gp, py::ssize_t n, py::ssize_t idx, bool flat9, double j[3][3]) {
     const double* row = gp + (flat9 ? idx * 9 : idx * 9);
     (void)n;
@@ -431,6 +580,12 @@ PYBIND11_MODULE(_kernels, m) {
     m.doc() = "C++ kernels for NavierTwin numeric hot paths";
     m.def("field_j_2d", &field_j_2d, py::arg("u"), py::arg("v"), py::arg("dx") = 1.0, py::arg("dy") = 1.0);
     m.def("lambda2_2d", &lambda2_2d, py::arg("u"), py::arg("v"), py::arg("dx") = 1.0, py::arg("dy") = 1.0);
+    m.def("vorticity_2d", &vorticity_2d_native, py::arg("u"), py::arg("v"), py::arg("dx") = 1.0, py::arg("dy") = 1.0);
+    m.def("q_criterion_2d", &q_criterion_2d_native, py::arg("u"), py::arg("v"), py::arg("dx") = 1.0, py::arg("dy") = 1.0);
+    m.def(
+        "vorticity_3d", &vorticity_3d_native, py::arg("u"), py::arg("v"), py::arg("w"),
+        py::arg("dx") = 1.0, py::arg("dy") = 1.0, py::arg("dz") = 1.0
+    );
     m.def("q_criterion_from_grad_3d", &q_criterion_from_grad_3d, py::arg("gradient"));
     m.def("lambda2_from_grad_3d", &lambda2_from_grad_3d, py::arg("gradient"));
     m.def("decompose_j_3x3", &decompose_j_3x3, py::arg("J"));
