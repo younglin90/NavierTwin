@@ -20,6 +20,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def poisson_2d_fft(
     f: NDArray[np.float64], Lx: float = 1.0, Ly: float = 1.0,
@@ -47,23 +52,13 @@ def poisson_2d_jacobi(
     *, max_iter: int = 5000, tol: float = 1e-6,
 ) -> tuple[NDArray[np.float64], dict]:
     """Dirichlet 0 경계 2D Poisson — Jacobi iteration."""
-    f = np.asarray(f, dtype=np.float64)
-    nx, ny = f.shape
-    p = np.zeros_like(f)
-    denom = 2.0 * (1 / dx ** 2 + 1 / dy ** 2)
-    for it in range(max_iter):
-        p_new = p.copy()
-        p_new[1:-1, 1:-1] = (
-            (p[2:, 1:-1] + p[:-2, 1:-1]) / dx ** 2
-            + (p[1:-1, 2:] + p[1:-1, :-2]) / dy ** 2
-            - f[1:-1, 1:-1]
-        ) / denom
-        p_new[0, :] = p_new[-1, :] = p_new[:, 0] = p_new[:, -1] = 0.0
-        err = float(np.max(np.abs(p_new - p)))
-        p = p_new
-        if err < tol:
-            return p, {"iters": it + 1, "err": err, "converged": True}
-    return p, {"iters": max_iter, "err": err, "converged": False}
+    return _kernels.poisson_2d_jacobi(
+        np.asarray(f, dtype=np.float64),
+        float(dx),
+        float(dy),
+        int(max_iter),
+        float(tol),
+    )
 
 
 __all__ = ["poisson_2d_fft", "poisson_2d_jacobi"]

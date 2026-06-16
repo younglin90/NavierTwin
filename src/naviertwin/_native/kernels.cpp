@@ -1605,6 +1605,71 @@ static py::tuple fd_burgers_1d_evolve(ArrayD u0, int n_steps, double dt, double 
     return py::make_tuple(t, U);
 }
 
+static py::tuple poisson_2d_jacobi_native(Array2D f, double dx, double dy, int max_iter, double tol) {
+    if (dx == 0.0 || dy == 0.0) {
+        throw std::invalid_argument("dx and dy must be non-zero");
+    }
+    if (max_iter < 0) {
+        throw std::invalid_argument("max_iter must be non-negative");
+    }
+    const py::ssize_t nx = f.shape(0);
+    const py::ssize_t ny = f.shape(1);
+    auto out = py::array_t<double>({nx, ny});
+    double* op = out.mutable_data();
+    const double* fp = f.data();
+    const py::ssize_t total = nx * ny;
+    std::vector<double> p(static_cast<std::size_t>(total), 0.0);
+    std::vector<double> p_new(static_cast<std::size_t>(total), 0.0);
+    const double inv_dx2 = 1.0 / (dx * dx);
+    const double inv_dy2 = 1.0 / (dy * dy);
+    const double denom = 2.0 * (inv_dx2 + inv_dy2);
+    double err = 0.0;
+    for (int it = 0; it < max_iter; ++it) {
+        p_new = p;
+        for (py::ssize_t i = 1; i < nx - 1; ++i) {
+            for (py::ssize_t j = 1; j < ny - 1; ++j) {
+                const py::ssize_t idx = i * ny + j;
+                p_new[static_cast<std::size_t>(idx)] = (
+                    (p[static_cast<std::size_t>((i + 1) * ny + j)] + p[static_cast<std::size_t>((i - 1) * ny + j)]) * inv_dx2
+                    + (p[static_cast<std::size_t>(i * ny + j + 1)] + p[static_cast<std::size_t>(i * ny + j - 1)]) * inv_dy2
+                    - fp[idx]
+                ) / denom;
+            }
+        }
+        for (py::ssize_t i = 0; i < nx; ++i) {
+            p_new[static_cast<std::size_t>(i * ny)] = 0.0;
+            p_new[static_cast<std::size_t>(i * ny + ny - 1)] = 0.0;
+        }
+        for (py::ssize_t j = 0; j < ny; ++j) {
+            p_new[static_cast<std::size_t>(j)] = 0.0;
+            p_new[static_cast<std::size_t>((nx - 1) * ny + j)] = 0.0;
+        }
+        err = 0.0;
+        for (py::ssize_t idx = 0; idx < total; ++idx) {
+            err = std::max(err, std::abs(p_new[static_cast<std::size_t>(idx)] - p[static_cast<std::size_t>(idx)]));
+        }
+        p.swap(p_new);
+        if (err < tol) {
+            for (py::ssize_t idx = 0; idx < total; ++idx) {
+                op[idx] = p[static_cast<std::size_t>(idx)];
+            }
+            py::dict info;
+            info["iters"] = it + 1;
+            info["err"] = err;
+            info["converged"] = true;
+            return py::make_tuple(out, info);
+        }
+    }
+    for (py::ssize_t idx = 0; idx < total; ++idx) {
+        op[idx] = p[static_cast<std::size_t>(idx)];
+    }
+    py::dict info;
+    info["iters"] = max_iter;
+    info["err"] = err;
+    info["converged"] = false;
+    return py::make_tuple(out, info);
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -1659,5 +1724,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("conservative_remap_1d", &conservative_remap_1d, py::arg("x_old_edges"), py::arg("u_old"), py::arg("x_new_edges"));
     m.def("fd_heat_1d_evolve", &fd_heat_1d_evolve, py::arg("u0"), py::arg("n_steps"), py::arg("coef"), py::arg("dt"));
     m.def("fd_burgers_1d_evolve", &fd_burgers_1d_evolve, py::arg("u0"), py::arg("n_steps"), py::arg("dt"), py::arg("dx"), py::arg("nu"));
+    m.def("poisson_2d_jacobi", &poisson_2d_jacobi_native, py::arg("f"), py::arg("dx") = 1.0, py::arg("dy") = 1.0, py::arg("max_iter") = 5000, py::arg("tol") = 1e-6);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
