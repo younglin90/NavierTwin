@@ -3,6 +3,7 @@
 #include <array>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
@@ -281,6 +282,151 @@ static py::dict invariants_3x3(py::array_t<double, py::array::c_style | py::arra
     return out;
 }
 
+static void check_square_matrix(const ArrayD& a) {
+    if (a.ndim() != 2 || a.shape(0) != a.shape(1)) {
+        throw std::invalid_argument("square matrix expected");
+    }
+}
+
+static std::vector<double> contiguous_vector(const ArrayD& x, py::ssize_t n, const char* name) {
+    if (x.ndim() != 1 || x.shape(0) != n) {
+        throw std::invalid_argument(std::string(name) + " must have shape (N,)");
+    }
+    const double* xp = x.data();
+    return std::vector<double>(xp, xp + n);
+}
+
+static double dot(const std::vector<double>& a, const std::vector<double>& b) {
+    double out = 0.0;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        out += a[i] * b[i];
+    }
+    return out;
+}
+
+static double vec_norm(const std::vector<double>& x) {
+    return std::sqrt(dot(x, x));
+}
+
+static std::vector<double> matvec(const double* a, py::ssize_t n, const std::vector<double>& x) {
+    std::vector<double> out(static_cast<std::size_t>(n), 0.0);
+    for (py::ssize_t r = 0; r < n; ++r) {
+        double acc = 0.0;
+        for (py::ssize_t c = 0; c < n; ++c) {
+            acc += a[r * n + c] * x[static_cast<std::size_t>(c)];
+        }
+        out[static_cast<std::size_t>(r)] = acc;
+    }
+    return out;
+}
+
+static void normalize_in_place(std::vector<double>& x) {
+    const double scale = vec_norm(x) + 1e-30;
+    for (double& value : x) {
+        value /= scale;
+    }
+}
+
+static py::array_t<double> vector_to_numpy(const std::vector<double>& x) {
+    auto out = py::array_t<double>({static_cast<py::ssize_t>(x.size())});
+    double* op = out.mutable_data();
+    std::copy(x.begin(), x.end(), op);
+    return out;
+}
+
+static std::vector<double> solve_linear_system(std::vector<double> m, std::vector<double> rhs, py::ssize_t n) {
+    for (py::ssize_t k = 0; k < n; ++k) {
+        py::ssize_t pivot = k;
+        double pivot_abs = std::abs(m[k * n + k]);
+        for (py::ssize_t r = k + 1; r < n; ++r) {
+            const double candidate = std::abs(m[r * n + k]);
+            if (candidate > pivot_abs) {
+                pivot_abs = candidate;
+                pivot = r;
+            }
+        }
+        if (pivot_abs == 0.0) {
+            throw std::invalid_argument("singular matrix in inverse_power");
+        }
+        if (pivot != k) {
+            for (py::ssize_t c = 0; c < n; ++c) {
+                std::swap(m[k * n + c], m[pivot * n + c]);
+            }
+            std::swap(rhs[static_cast<std::size_t>(k)], rhs[static_cast<std::size_t>(pivot)]);
+        }
+        for (py::ssize_t r = k + 1; r < n; ++r) {
+            const double factor = m[r * n + k] / m[k * n + k];
+            m[r * n + k] = 0.0;
+            for (py::ssize_t c = k + 1; c < n; ++c) {
+                m[r * n + c] -= factor * m[k * n + c];
+            }
+            rhs[static_cast<std::size_t>(r)] -= factor * rhs[static_cast<std::size_t>(k)];
+        }
+    }
+
+    std::vector<double> x(static_cast<std::size_t>(n), 0.0);
+    for (py::ssize_t r = n - 1; r >= 0; --r) {
+        double acc = rhs[static_cast<std::size_t>(r)];
+        for (py::ssize_t c = r + 1; c < n; ++c) {
+            acc -= m[r * n + c] * x[static_cast<std::size_t>(c)];
+        }
+        x[static_cast<std::size_t>(r)] = acc / m[r * n + r];
+        if (r == 0) {
+            break;
+        }
+    }
+    return x;
+}
+
+static py::tuple power_iteration_native(ArrayD a, int n_iter, ArrayD x0, double tol) {
+    check_square_matrix(a);
+    const py::ssize_t n = a.shape(0);
+    std::vector<double> x = contiguous_vector(x0, n, "x0");
+    normalize_in_place(x);
+    const double* ap = a.data();
+    double lam_prev = 0.0;
+    double lam = 0.0;
+    for (int iter = 0; iter < n_iter; ++iter) {
+        std::vector<double> y = matvec(ap, n, x);
+        normalize_in_place(y);
+        x = std::move(y);
+        lam = dot(x, matvec(ap, n, x));
+        if (std::abs(lam - lam_prev) < tol * std::max(1.0, std::abs(lam))) {
+            break;
+        }
+        lam_prev = lam;
+    }
+    return py::make_tuple(lam, vector_to_numpy(x));
+}
+
+static py::tuple inverse_power_native(ArrayD a, double shift, int n_iter, ArrayD x0) {
+    check_square_matrix(a);
+    const py::ssize_t n = a.shape(0);
+    const double* ap = a.data();
+    std::vector<double> shifted(static_cast<std::size_t>(n * n), 0.0);
+    for (py::ssize_t r = 0; r < n; ++r) {
+        for (py::ssize_t c = 0; c < n; ++c) {
+            shifted[static_cast<std::size_t>(r * n + c)] = ap[r * n + c] - (r == c ? shift : 0.0);
+        }
+    }
+
+    std::vector<double> x = contiguous_vector(x0, n, "x0");
+    normalize_in_place(x);
+    for (int iter = 0; iter < n_iter; ++iter) {
+        x = solve_linear_system(shifted, x, n);
+        normalize_in_place(x);
+    }
+    const double lam = dot(x, matvec(ap, n, x));
+    return py::make_tuple(lam, vector_to_numpy(x));
+}
+
+static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
+    check_square_matrix(a);
+    const py::ssize_t n = a.shape(0);
+    std::vector<double> x = contiguous_vector(x0, n, "x");
+    return dot(x, matvec(a.data(), n, x)) / (dot(x, x) + 1e-30);
+}
+
 PYBIND11_MODULE(_kernels, m) {
     m.doc() = "C++ kernels for NavierTwin numeric hot paths";
     m.def("field_j_2d", &field_j_2d, py::arg("u"), py::arg("v"), py::arg("dx") = 1.0, py::arg("dy") = 1.0);
@@ -289,4 +435,7 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("lambda2_from_grad_3d", &lambda2_from_grad_3d, py::arg("gradient"));
     m.def("decompose_j_3x3", &decompose_j_3x3, py::arg("J"));
     m.def("invariants_3x3", &invariants_3x3, py::arg("J"));
+    m.def("power_iteration", &power_iteration_native, py::arg("A"), py::arg("n_iter"), py::arg("x0"), py::arg("tol"));
+    m.def("inverse_power", &inverse_power_native, py::arg("A"), py::arg("shift"), py::arg("n_iter"), py::arg("x0"));
+    m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
