@@ -26,7 +26,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
 from naviertwin.utils.logger import get_logger
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
 
 logger = get_logger(__name__)
 
@@ -105,7 +109,7 @@ class EnKF:
         Pxy = (A.T @ D) / (N - 1)  # (n, m)
         Pyy = (D.T @ D) / (N - 1) + self.R  # (m, m)
 
-        K = np.linalg.solve(Pyy.T, Pxy.T).T  # (n, m)
+        K = np.asarray(_kernels.solve_square(Pyy.T, Pxy.T), dtype=np.float64).T  # (n, m)
 
         # 관측 교란
         noise = rng.multivariate_normal(
