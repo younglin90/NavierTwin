@@ -1397,6 +1397,20 @@ static py::array_t<double> sph_density_1d(ArrayD positions, ArrayD masses, doubl
     return out;
 }
 
+static double reaction_rate_native(double k, py::sequence concentrations, py::sequence orders) {
+    const auto n = py::len(concentrations);
+    if (py::len(orders) != n) {
+        throw py::value_error("zip() argument 2 is shorter or longer than argument 1");
+    }
+    double rate = k;
+    for (py::size_t i = 0; i < n; ++i) {
+        const double c = py::cast<double>(concentrations[i]);
+        const double order = py::cast<double>(orders[i]);
+        rate *= std::pow(std::max(c, 0.0), order);
+    }
+    return rate;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -1444,5 +1458,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("dominant_frequencies_from_power", &dominant_frequencies_from_power, py::arg("freqs"), py::arg("power"), py::arg("top_k"));
     m.def("deposit_cic_1d", &deposit_cic_1d, py::arg("x"), py::arg("weights"), py::arg("n_grid"), py::arg("dx") = 1.0, py::arg("x0") = 0.0);
     m.def("sph_density_1d", &sph_density_1d, py::arg("positions"), py::arg("masses"), py::arg("h") = 1.0);
+    m.def("reaction_rate", &reaction_rate_native, py::arg("k"), py::arg("concentrations"), py::arg("orders"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

@@ -10,6 +10,11 @@ from __future__ import annotations
 
 import numpy as np
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 R_GAS = 8.314
 
 
@@ -18,10 +23,7 @@ def arrhenius_k(*, A: float, T: float, Ea: float, beta: float = 0.0) -> float:
 
 
 def reaction_rate(*, k: float, concentrations: list[float], orders: list[float]) -> float:
-    rate = k
-    for c, n in zip(concentrations, orders, strict=True):
-        rate *= max(c, 0) ** n
-    return float(rate)
+    return float(_kernels.reaction_rate(float(k), concentrations, orders))
 
 
 __all__ = ["R_GAS", "arrhenius_k", "reaction_rate"]
