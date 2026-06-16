@@ -15,6 +15,11 @@ from typing import Callable
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def solve_heat_1d(
     nx: int = 64, L: float = 1.0, T: float = 0.1,
@@ -34,19 +39,10 @@ def solve_heat_1d(
     if u0 is None:
         u = np.sin(np.pi * x)
     else:
-        u = u0(x)
+        u = np.asarray(u0(x), dtype=np.float64)
     u[0] = u[-1] = 0.0
-    U = np.zeros((nx, n_steps + 1), dtype=np.float64)
-    U[:, 0] = u
-    t = np.zeros(n_steps + 1)
     coef = nu * dt / dx ** 2
-    for k in range(n_steps):
-        u_new = u.copy()
-        u_new[1:-1] = u[1:-1] + coef * (u[2:] - 2 * u[1:-1] + u[:-2])
-        u_new[0] = u_new[-1] = 0.0
-        u = u_new
-        U[:, k + 1] = u
-        t[k + 1] = (k + 1) * dt
+    t, U = _kernels.fd_heat_1d_evolve(u, n_steps, coef, dt)
     return x, t, U
 
 
@@ -61,21 +57,9 @@ def solve_burgers_1d(
     n_steps = int(np.ceil(T / dt))
     dt = T / n_steps
     x = np.linspace(0, L, nx)
-    u = u0(x) if u0 is not None else np.sin(np.pi * x)
+    u = np.asarray(u0(x) if u0 is not None else np.sin(np.pi * x), dtype=np.float64)
     u[0] = u[-1] = 0.0
-    U = np.zeros((nx, n_steps + 1), dtype=np.float64)
-    U[:, 0] = u
-    t = np.zeros(n_steps + 1)
-    for k in range(n_steps):
-        # 중심차분 + upwind 혼합 (단순 central)
-        du = (u[2:] - u[:-2]) / (2 * dx)
-        d2u = (u[2:] - 2 * u[1:-1] + u[:-2]) / dx ** 2
-        u_new = u.copy()
-        u_new[1:-1] = u[1:-1] + dt * (-u[1:-1] * du + nu * d2u)
-        u_new[0] = u_new[-1] = 0.0
-        u = u_new
-        U[:, k + 1] = u
-        t[k + 1] = (k + 1) * dt
+    t, U = _kernels.fd_burgers_1d_evolve(u, n_steps, dt, dx, nu)
     return x, t, U
 
 

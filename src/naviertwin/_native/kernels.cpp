@@ -1517,6 +1517,94 @@ static py::array_t<double> conservative_remap_1d(ArrayD x_old_edges, ArrayD u_ol
     return out;
 }
 
+static py::tuple fd_heat_1d_evolve(ArrayD u0, int n_steps, double coef, double dt) {
+    if (u0.ndim() != 1) {
+        throw std::invalid_argument("u0 must be a 1D array");
+    }
+    if (n_steps < 0) {
+        throw std::invalid_argument("n_steps must be non-negative");
+    }
+    const py::ssize_t nx = u0.shape(0);
+    const py::ssize_t nt = static_cast<py::ssize_t>(n_steps) + 1;
+    auto t = py::array_t<double>({nt});
+    auto U = py::array_t<double>({nx, nt});
+    double* tp = t.mutable_data();
+    double* Up = U.mutable_data();
+    std::vector<double> u(static_cast<std::size_t>(nx));
+    std::vector<double> u_new(static_cast<std::size_t>(nx));
+    const double* u0p = u0.data();
+    for (py::ssize_t i = 0; i < nx; ++i) {
+        u[static_cast<std::size_t>(i)] = u0p[i];
+        Up[i * nt] = u0p[i];
+    }
+    tp[0] = 0.0;
+    for (int k = 0; k < n_steps; ++k) {
+        u_new = u;
+        for (py::ssize_t i = 1; i < nx - 1; ++i) {
+            u_new[static_cast<std::size_t>(i)] = u[static_cast<std::size_t>(i)]
+                + coef * (u[static_cast<std::size_t>(i + 1)] - 2.0 * u[static_cast<std::size_t>(i)] + u[static_cast<std::size_t>(i - 1)]);
+        }
+        if (nx > 0) {
+            u_new[0] = 0.0;
+            u_new[static_cast<std::size_t>(nx - 1)] = 0.0;
+        }
+        u.swap(u_new);
+        const py::ssize_t col = static_cast<py::ssize_t>(k) + 1;
+        for (py::ssize_t i = 0; i < nx; ++i) {
+            Up[i * nt + col] = u[static_cast<std::size_t>(i)];
+        }
+        tp[col] = static_cast<double>(k + 1) * dt;
+    }
+    return py::make_tuple(t, U);
+}
+
+static py::tuple fd_burgers_1d_evolve(ArrayD u0, int n_steps, double dt, double dx, double nu) {
+    if (u0.ndim() != 1) {
+        throw std::invalid_argument("u0 must be a 1D array");
+    }
+    if (n_steps < 0) {
+        throw std::invalid_argument("n_steps must be non-negative");
+    }
+    if (dx == 0.0) {
+        throw std::invalid_argument("dx must be non-zero");
+    }
+    const py::ssize_t nx = u0.shape(0);
+    const py::ssize_t nt = static_cast<py::ssize_t>(n_steps) + 1;
+    auto t = py::array_t<double>({nt});
+    auto U = py::array_t<double>({nx, nt});
+    double* tp = t.mutable_data();
+    double* Up = U.mutable_data();
+    std::vector<double> u(static_cast<std::size_t>(nx));
+    std::vector<double> u_new(static_cast<std::size_t>(nx));
+    const double* u0p = u0.data();
+    for (py::ssize_t i = 0; i < nx; ++i) {
+        u[static_cast<std::size_t>(i)] = u0p[i];
+        Up[i * nt] = u0p[i];
+    }
+    tp[0] = 0.0;
+    for (int k = 0; k < n_steps; ++k) {
+        u_new = u;
+        for (py::ssize_t i = 1; i < nx - 1; ++i) {
+            const double du = (u[static_cast<std::size_t>(i + 1)] - u[static_cast<std::size_t>(i - 1)]) / (2.0 * dx);
+            const double d2u = (
+                u[static_cast<std::size_t>(i + 1)] - 2.0 * u[static_cast<std::size_t>(i)] + u[static_cast<std::size_t>(i - 1)]
+            ) / (dx * dx);
+            u_new[static_cast<std::size_t>(i)] = u[static_cast<std::size_t>(i)] + dt * (-u[static_cast<std::size_t>(i)] * du + nu * d2u);
+        }
+        if (nx > 0) {
+            u_new[0] = 0.0;
+            u_new[static_cast<std::size_t>(nx - 1)] = 0.0;
+        }
+        u.swap(u_new);
+        const py::ssize_t col = static_cast<py::ssize_t>(k) + 1;
+        for (py::ssize_t i = 0; i < nx; ++i) {
+            Up[i * nt + col] = u[static_cast<std::size_t>(i)];
+        }
+        tp[col] = static_cast<double>(k + 1) * dt;
+    }
+    return py::make_tuple(t, U);
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -1569,5 +1657,7 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("levelset_advect_step_1d", &levelset_advect_step_1d, py::arg("phi"), py::arg("u"), py::arg("dt"), py::arg("dx"));
     m.def("jensen_farm_velocity", &jensen_farm_velocity, py::arg("V0"), py::arg("distances"), py::arg("R"), py::arg("a") = 0.3, py::arg("k") = 0.04);
     m.def("conservative_remap_1d", &conservative_remap_1d, py::arg("x_old_edges"), py::arg("u_old"), py::arg("x_new_edges"));
+    m.def("fd_heat_1d_evolve", &fd_heat_1d_evolve, py::arg("u0"), py::arg("n_steps"), py::arg("coef"), py::arg("dt"));
+    m.def("fd_burgers_1d_evolve", &fd_burgers_1d_evolve, py::arg("u0"), py::arg("n_steps"), py::arg("dt"), py::arg("dx"), py::arg("nu"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
