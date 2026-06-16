@@ -2148,6 +2148,16 @@ static py::list convergence_ratio_native(py::sequence errs) {
     return out;
 }
 
+static double combined_disc_uncertainty_native(py::sequence uncs) {
+    const auto n = py::len(uncs);
+    double total = 0.0;
+    for (py::size_t i = 0; i < n; ++i) {
+        const double u = py::cast<double>(uncs[i]);
+        total += u * u;
+    }
+    return std::sqrt(total);
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -2215,5 +2225,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("lbm_step", &lbm_step, py::arg("f"), py::arg("omega") = 1.0);
     m.def("is_monotone_decreasing", &is_monotone_decreasing_native, py::arg("errs"), py::arg("atol") = 0.0);
     m.def("convergence_ratio", &convergence_ratio_native, py::arg("errs"));
+    m.def("combined_disc_uncertainty", &combined_disc_uncertainty_native, py::arg("uncs"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

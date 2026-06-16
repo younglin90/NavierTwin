@@ -7,13 +7,17 @@ Examples:
 
 from __future__ import annotations
 
-import math
 from collections.abc import Sequence
+
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
 
 
 def combined_disc_uncertainty(uncs: Sequence[float]) -> float:
     """RSS of per-QoI discretization uncertainties."""
-    return float(math.sqrt(sum(u * u for u in uncs)))
+    return float(_kernels.combined_disc_uncertainty(list(uncs)))
 
 
 __all__ = ["combined_disc_uncertainty"]
