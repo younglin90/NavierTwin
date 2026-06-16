@@ -2612,6 +2612,74 @@ static double bingham_apparent_viscosity_native(double gamma_dot, double tau_y, 
     return tau_y / g + mu_p;
 }
 
+static std::array<double, 3> barycentric_values_2d(const double* tri, const double* p) {
+    const double v0x = tri[2] - tri[0];
+    const double v0y = tri[3] - tri[1];
+    const double v1x = tri[4] - tri[0];
+    const double v1y = tri[5] - tri[1];
+    const double v2x = p[0] - tri[0];
+    const double v2y = p[1] - tri[1];
+    const double d00 = v0x * v0x + v0y * v0y;
+    const double d01 = v0x * v1x + v0y * v1y;
+    const double d11 = v1x * v1x + v1y * v1y;
+    const double d20 = v2x * v0x + v2y * v0y;
+    const double d21 = v2x * v1x + v2y * v1y;
+    const double denom = d00 * d11 - d01 * d01;
+    if (std::abs(denom) < 1e-20) {
+        throw std::invalid_argument("degenerate triangle");
+    }
+    const double v = (d11 * d20 - d01 * d21) / denom;
+    const double w = (d00 * d21 - d01 * d20) / denom;
+    return {1.0 - v - w, v, w};
+}
+
+static py::array_t<double> barycentric_2d_native(ArrayD triangle, ArrayD p) {
+    if (triangle.ndim() != 2 || triangle.shape(0) != 3 || triangle.shape(1) != 2 || p.ndim() != 1 || p.shape(0) != 2) {
+        throw std::invalid_argument("triangle must be (3, 2) and p must be (2,)");
+    }
+    const auto bc = barycentric_values_2d(triangle.data(), p.data());
+    auto out = py::array_t<double>({static_cast<py::ssize_t>(3)});
+    double* op = out.mutable_data();
+    op[0] = bc[0];
+    op[1] = bc[1];
+    op[2] = bc[2];
+    return out;
+}
+
+static int locate_triangle_native(ArrayD points, ArrayI simplices, ArrayD p) {
+    if (points.ndim() != 2 || points.shape(1) != 2 || simplices.ndim() != 2 || simplices.shape(1) != 3 || p.ndim() != 1 || p.shape(0) != 2) {
+        throw std::invalid_argument("points must be (N, 2), simplices must be (M, 3), and p must be (2,)");
+    }
+    const double* pts = points.data();
+    const long long* sim = simplices.data();
+    const py::ssize_t n_tri = simplices.shape(0);
+    for (py::ssize_t i = 0; i < n_tri; ++i) {
+        double tri[6];
+        bool valid = true;
+        for (py::ssize_t j = 0; j < 3; ++j) {
+            const long long idx = sim[i * 3 + j];
+            if (idx < 0 || idx >= points.shape(0)) {
+                valid = false;
+                break;
+            }
+            tri[2 * j] = pts[idx * 2];
+            tri[2 * j + 1] = pts[idx * 2 + 1];
+        }
+        if (!valid) {
+            continue;
+        }
+        try {
+            const auto bc = barycentric_values_2d(tri, p.data());
+            if (bc[0] >= -1e-10 && bc[1] >= -1e-10 && bc[2] >= -1e-10) {
+                return static_cast<int>(i);
+            }
+        } catch (const std::invalid_argument&) {
+            continue;
+        }
+    }
+    return -1;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -2707,5 +2775,7 @@ PYBIND11_MODULE(_kernels, m) {
         "bingham_apparent_viscosity", &bingham_apparent_viscosity_native, py::arg("gamma_dot"),
         py::arg("tau_y"), py::arg("mu_p"), py::arg("eps") = 1e-6
     );
+    m.def("barycentric_2d", &barycentric_2d_native, py::arg("triangle"), py::arg("p"));
+    m.def("locate_triangle", &locate_triangle_native, py::arg("points"), py::arg("simplices"), py::arg("p"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
