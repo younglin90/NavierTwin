@@ -1894,6 +1894,78 @@ static py::array_t<double> laplacian_smooth_native(ArrayD verts, ArrayI edges, i
     return out;
 }
 
+static inline double dist2d(const double* p, py::ssize_t dim, py::ssize_t a, py::ssize_t b) {
+    const double dx = p[a * dim] - p[b * dim];
+    const double dy = p[a * dim + 1] - p[b * dim + 1];
+    return std::sqrt(dx * dx + dy * dy);
+}
+
+static inline double triangle_aspect_from_points(const double* p, py::ssize_t dim, py::ssize_t ia, py::ssize_t ib, py::ssize_t ic) {
+    const double a = dist2d(p, dim, ib, ic);
+    const double b = dist2d(p, dim, ia, ic);
+    const double c = dist2d(p, dim, ia, ib);
+    const double s = 0.5 * (a + b + c);
+    const double area_arg = std::max(s * (s - a) * (s - b) * (s - c), 1e-30);
+    const double area = std::max(std::sqrt(area_arg), 1e-30);
+    const double R = (a * b * c) / (4.0 * area);
+    const double r = area / s;
+    return R / (2.0 * r);
+}
+
+static inline double triangle_angle_deg(const double* p, py::ssize_t dim, py::ssize_t ip, py::ssize_t iq, py::ssize_t ir) {
+    const double ux = p[iq * dim] - p[ip * dim];
+    const double uy = p[iq * dim + 1] - p[ip * dim + 1];
+    const double vx = p[ir * dim] - p[ip * dim];
+    const double vy = p[ir * dim + 1] - p[ip * dim + 1];
+    const double un = std::sqrt(ux * ux + uy * uy);
+    const double vn = std::sqrt(vx * vx + vy * vy);
+    double cosv = (ux * vx + uy * vy) / (un * vn + 1e-30);
+    cosv = std::min(1.0, std::max(-1.0, cosv));
+    return std::acos(cosv) * 180.0 / 3.141592653589793238462643383279502884;
+}
+
+static py::dict mesh_quality_report_native(ArrayD points, ArrayI simplices) {
+    if (points.ndim() != 2 || points.shape(1) < 2) {
+        throw std::invalid_argument("points must have shape (n, >=2)");
+    }
+    if (simplices.ndim() != 2 || simplices.shape(1) != 3) {
+        throw std::invalid_argument("simplices must have shape (n, 3)");
+    }
+    const py::ssize_t dim = points.shape(1);
+    const py::ssize_t n_tri = simplices.shape(0);
+    const double* pp = points.data();
+    const long long* sp = simplices.data();
+    double sum_aspect = 0.0;
+    double max_aspect = -std::numeric_limits<double>::infinity();
+    double sum_skew = 0.0;
+    double max_skew = -std::numeric_limits<double>::infinity();
+    double min_angle = std::numeric_limits<double>::infinity();
+    for (py::ssize_t t = 0; t < n_tri; ++t) {
+        const auto ia = static_cast<py::ssize_t>(sp[3 * t]);
+        const auto ib = static_cast<py::ssize_t>(sp[3 * t + 1]);
+        const auto ic = static_cast<py::ssize_t>(sp[3 * t + 2]);
+        const double aspect = triangle_aspect_from_points(pp, dim, ia, ib, ic);
+        const double angle = std::min({
+            triangle_angle_deg(pp, dim, ia, ib, ic),
+            triangle_angle_deg(pp, dim, ib, ia, ic),
+            triangle_angle_deg(pp, dim, ic, ia, ib),
+        });
+        const double skew = std::max(0.0, (60.0 - angle) / 60.0);
+        sum_aspect += aspect;
+        max_aspect = std::max(max_aspect, aspect);
+        sum_skew += skew;
+        max_skew = std::max(max_skew, skew);
+        min_angle = std::min(min_angle, angle);
+    }
+    py::dict out;
+    out["mean_aspect"] = sum_aspect / static_cast<double>(n_tri);
+    out["max_aspect"] = max_aspect;
+    out["mean_skew"] = sum_skew / static_cast<double>(n_tri);
+    out["max_skew"] = max_skew;
+    out["min_angle_deg"] = min_angle;
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -1954,5 +2026,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("mesh_refine_by_gradient", &mesh_refine_by_gradient, py::arg("x"), py::arg("f"), py::arg("threshold") = 0.1, py::arg("max_passes") = 5);
     m.def("mesh_coarsen_by_tolerance", &mesh_coarsen_by_tolerance, py::arg("x"), py::arg("f"), py::arg("tol") = 1e-3);
     m.def("laplacian_smooth", &laplacian_smooth_native, py::arg("verts"), py::arg("edges"), py::arg("n_iter"), py::arg("alpha"), py::arg("fixed"));
+    m.def("mesh_quality_report", &mesh_quality_report_native, py::arg("points"), py::arg("simplices"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

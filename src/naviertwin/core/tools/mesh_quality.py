@@ -13,6 +13,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def aspect_ratio_triangle(tri: NDArray[np.float64]) -> float:
     """AR = R / (2r) (R circumradius, r inradius). 정삼각 = 1."""
@@ -46,16 +51,12 @@ def skewness_equilateral(tri: NDArray[np.float64]) -> float:
 def mesh_quality_report(
     points: NDArray[np.float64], simplices: NDArray[np.int64],
 ) -> dict[str, float]:
-    ar = [aspect_ratio_triangle(points[t]) for t in simplices]
-    sk = [skewness_equilateral(points[t]) for t in simplices]
-    an = [min_angle_deg(points[t]) for t in simplices]
-    return {
-        "mean_aspect": float(np.mean(ar)),
-        "max_aspect": float(np.max(ar)),
-        "mean_skew": float(np.mean(sk)),
-        "max_skew": float(np.max(sk)),
-        "min_angle_deg": float(np.min(an)),
-    }
+    return dict(
+        _kernels.mesh_quality_report(
+            np.asarray(points, dtype=np.float64),
+            np.asarray(simplices, dtype=np.int64),
+        ),
+    )
 
 
 __all__ = [
