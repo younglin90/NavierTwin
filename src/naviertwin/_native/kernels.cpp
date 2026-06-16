@@ -2455,6 +2455,29 @@ static py::dict quadrant_split_native(ArrayD up, ArrayD vp, double hole) {
     return out;
 }
 
+static double kolmogorov_pvalue(double d, double n) {
+    if (d <= 0.0) {
+        return 1.0;
+    }
+    const double s = std::sqrt(n);
+    const double en = s + 0.12 + 0.11 / s;
+    const double lam = en * d;
+    if (lam < 0.18) {
+        return 1.0;
+    }
+    double sum_p = 0.0;
+    double sign = 1.0;
+    for (int j = 1; j <= 100; ++j) {
+        const double term = sign * std::exp(-2.0 * static_cast<double>(j * j) * lam * lam);
+        sum_p += term;
+        if (std::abs(term) < 1e-9 * std::abs(sum_p)) {
+            break;
+        }
+        sign = -sign;
+    }
+    return std::min(1.0, std::max(0.0, 2.0 * sum_p));
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -2538,5 +2561,6 @@ PYBIND11_MODULE(_kernels, m) {
         py::arg("half_window"), py::arg("return_std")
     );
     m.def("quadrant_split", &quadrant_split_native, py::arg("up"), py::arg("vp"), py::arg("hole") = 0.0);
+    m.def("kolmogorov_pvalue", &kolmogorov_pvalue, py::arg("D"), py::arg("n"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

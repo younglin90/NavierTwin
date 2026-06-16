@@ -30,29 +30,18 @@ from typing import Callable
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
 from naviertwin.utils.logger import get_logger
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
 
 logger = get_logger(__name__)
 
 
 def _kolmogorov_pvalue(D: float, n: int) -> float:
     """KS 통계량 D와 표본 크기 n에서 점진적 p-value (Marsaglia 1956 근사)."""
-    if D <= 0:
-        return 1.0
-    s = np.sqrt(n)
-    en = s + 0.12 + 0.11 / s
-    lam = en * D
-    if lam < 0.18:
-        return 1.0
-    sum_p = 0.0
-    sign = 1.0
-    for j in range(1, 101):
-        term = sign * np.exp(-2.0 * (j ** 2) * lam ** 2)
-        sum_p += term
-        if abs(term) < 1e-9 * abs(sum_p):
-            break
-        sign = -sign
-    return float(np.clip(2.0 * sum_p, 0.0, 1.0))
+    return float(_kernels.kolmogorov_pvalue(float(D), float(n)))
 
 
 def ks_test_against_cdf(
@@ -91,10 +80,8 @@ def ks_test_against_cdf(
 
 def normal_cdf(x: NDArray[np.float64], mu: float = 0.0, sigma: float = 1.0) -> NDArray[np.float64]:
     """정규 분포 CDF (오차 함수 기반)."""
-    from math import erf, sqrt
-
     z = (np.asarray(x) - mu) / max(sigma, 1e-30)
-    return np.array([0.5 * (1.0 + erf(zi / sqrt(2.0))) for zi in z])
+    return _kernels.norm_cdf(np.asarray(z, dtype=np.float64))
 
 
 def ks_test_normal(
@@ -178,7 +165,7 @@ def anderson_darling_normal(
     x = np.asarray(x, dtype=np.float64).ravel()
     n = len(x)
     if n < 8:
-        raise ValueError(f"need at least 8 samples for AD, got {n}")
+        raise ValueError(f"AD test needs at least 8 samples, got {n}")
     sigma = float(x.std(ddof=1))
     if sigma < 1e-30:
         raise ValueError("standard deviation is zero")
@@ -260,7 +247,12 @@ def shapiro_wilk_simplified(
     mean = s.mean()
     # Blom 근사 m_i
     i = np.arange(1, n + 1)
-    m = -np.sqrt(2.0) * np.array([_inverse_norm_cdf((j - 0.375) / (n + 0.25)) for j in i])
+    probs = (i - 0.375) / (n + 0.25)
+    m = -np.sqrt(2.0) * np.fromiter(
+        map(_inverse_norm_cdf, probs),
+        dtype=np.float64,
+        count=n,
+    )
     m = -m  # ascending → expected order stats
     m_norm = float(np.sqrt((m * m).sum()))
     a = m / max(m_norm, 1e-30)
