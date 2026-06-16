@@ -2599,6 +2599,19 @@ static py::array_t<double> probe_time_series_native(ArrayD snapshots, ArrayD coo
     return out;
 }
 
+static double bingham_stress_native(double gamma_dot, double tau_y, double mu_p) {
+    if (gamma_dot == 0.0) {
+        return 0.0;
+    }
+    const double sign = gamma_dot > 0.0 ? 1.0 : -1.0;
+    return sign * (tau_y + mu_p * std::abs(gamma_dot));
+}
+
+static double bingham_apparent_viscosity_native(double gamma_dot, double tau_y, double mu_p, double eps) {
+    const double g = std::max(std::abs(gamma_dot), eps);
+    return tau_y / g + mu_p;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -2688,6 +2701,11 @@ PYBIND11_MODULE(_kernels, m) {
     m.def(
         "probe_time_series", &probe_time_series_native, py::arg("snapshots"), py::arg("coords"),
         py::arg("probes"), py::arg("method") = "nearest", py::arg("k") = 4
+    );
+    m.def("bingham_stress", &bingham_stress_native, py::arg("gamma_dot"), py::arg("tau_y"), py::arg("mu_p"));
+    m.def(
+        "bingham_apparent_viscosity", &bingham_apparent_viscosity_native, py::arg("gamma_dot"),
+        py::arg("tau_y"), py::arg("mu_p"), py::arg("eps") = 1e-6
     );
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
