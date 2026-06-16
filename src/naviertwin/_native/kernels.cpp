@@ -1717,6 +1717,42 @@ static py::array_t<double> levelset_reinit_1d(ArrayD phi, double dx, int n_iter)
     return out;
 }
 
+static py::array_t<double> fast_march_1d(ArrayD phi, double dx) {
+    if (phi.ndim() != 1) {
+        throw std::invalid_argument("phi must be a 1D array");
+    }
+    const py::ssize_t n = phi.shape(0);
+    const double* pp = phi.data();
+    std::vector<double> iface_locs;
+    iface_locs.reserve(static_cast<std::size_t>(n));
+    for (py::ssize_t i = 0; i < n - 1; ++i) {
+        if (pp[i] == 0.0) {
+            iface_locs.push_back(static_cast<double>(i) * dx);
+        } else if (pp[i] * pp[i + 1] < 0.0) {
+            const double t = pp[i] / (pp[i] - pp[i + 1]);
+            iface_locs.push_back((static_cast<double>(i) + t) * dx);
+        }
+    }
+    auto out = py::array_t<double>({n});
+    double* op = out.mutable_data();
+    if (iface_locs.empty()) {
+        for (py::ssize_t i = 0; i < n; ++i) {
+            op[i] = pp[i];
+        }
+        return out;
+    }
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const double x = static_cast<double>(i) * dx;
+        double d = std::numeric_limits<double>::infinity();
+        for (const double loc : iface_locs) {
+            d = std::min(d, std::abs(x - loc));
+        }
+        const double sign = (pp[i] > 0.0) ? 1.0 : ((pp[i] < 0.0) ? -1.0 : 0.0);
+        op[i] = d * sign;
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -1773,5 +1809,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("fd_burgers_1d_evolve", &fd_burgers_1d_evolve, py::arg("u0"), py::arg("n_steps"), py::arg("dt"), py::arg("dx"), py::arg("nu"));
     m.def("poisson_2d_jacobi", &poisson_2d_jacobi_native, py::arg("f"), py::arg("dx") = 1.0, py::arg("dy") = 1.0, py::arg("max_iter") = 5000, py::arg("tol") = 1e-6);
     m.def("levelset_reinit_1d", &levelset_reinit_1d, py::arg("phi"), py::arg("dx") = 1.0, py::arg("n_iter") = 30);
+    m.def("fast_march_1d", &fast_march_1d, py::arg("phi"), py::arg("dx") = 1.0);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
