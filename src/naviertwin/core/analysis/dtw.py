@@ -15,6 +15,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def dtw_distance(
     a: NDArray[np.float64], b: NDArray[np.float64],
@@ -22,31 +27,13 @@ def dtw_distance(
 ) -> float:
     a = np.asarray(a, dtype=np.float64).ravel()
     b = np.asarray(b, dtype=np.float64).ravel()
-    n, m = a.size, b.size
-    w = window if window is not None else max(n, m)
-    INF = np.inf
-    D = np.full((n + 1, m + 1), INF)
-    D[0, 0] = 0.0
-    for i in range(1, n + 1):
-        jlo = max(1, i - w)
-        jhi = min(m, i + w)
-        for j in range(jlo, jhi + 1):
-            cost = abs(a[i - 1] - b[j - 1])
-            D[i, j] = cost + min(D[i - 1, j], D[i, j - 1], D[i - 1, j - 1])
-    return float(D[n, m])
+    return float(_kernels.dtw_distance(a, b, window))
 
 
 def dtw_matrix(a, b) -> NDArray[np.float64]:
     a = np.asarray(a, dtype=np.float64).ravel()
     b = np.asarray(b, dtype=np.float64).ravel()
-    n, m = a.size, b.size
-    D = np.full((n + 1, m + 1), np.inf)
-    D[0, 0] = 0.0
-    for i in range(1, n + 1):
-        for j in range(1, m + 1):
-            c = abs(a[i - 1] - b[j - 1])
-            D[i, j] = c + min(D[i - 1, j], D[i, j - 1], D[i - 1, j - 1])
-    return D
+    return np.asarray(_kernels.dtw_matrix(a, b), dtype=np.float64)
 
 
 __all__ = ["dtw_distance", "dtw_matrix"]

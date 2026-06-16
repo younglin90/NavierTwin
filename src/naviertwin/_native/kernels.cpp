@@ -1,6 +1,7 @@
 #include <cmath>
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -1129,6 +1130,57 @@ static py::tuple arnoldi_native(ArrayD a, ArrayD b, int k_in) {
     return py::make_tuple(q_arr, h_arr);
 }
 
+static py::array_t<double> dtw_matrix_native(ArrayD a, ArrayD b) {
+    if (a.ndim() != 1 || b.ndim() != 1) {
+        throw std::invalid_argument("1D arrays expected");
+    }
+    const py::ssize_t n = a.shape(0);
+    const py::ssize_t m = b.shape(0);
+    auto out = py::array_t<double>({n + 1, m + 1});
+    const double* ap = a.data();
+    const double* bp = b.data();
+    double* dp = out.mutable_data();
+    const double inf = std::numeric_limits<double>::infinity();
+    std::fill(dp, dp + (n + 1) * (m + 1), inf);
+    dp[0] = 0.0;
+    const py::ssize_t cols = m + 1;
+    for (py::ssize_t i = 1; i <= n; ++i) {
+        for (py::ssize_t j = 1; j <= m; ++j) {
+            const double cost = std::abs(ap[i - 1] - bp[j - 1]);
+            const double prev = std::min({dp[(i - 1) * cols + j], dp[i * cols + j - 1], dp[(i - 1) * cols + j - 1]});
+            dp[i * cols + j] = cost + prev;
+        }
+    }
+    return out;
+}
+
+static double dtw_distance_native(ArrayD a, ArrayD b, py::object window) {
+    if (a.ndim() != 1 || b.ndim() != 1) {
+        throw std::invalid_argument("1D arrays expected");
+    }
+    const py::ssize_t n = a.shape(0);
+    const py::ssize_t m = b.shape(0);
+    py::ssize_t w = std::max(n, m);
+    if (!window.is_none()) {
+        w = window.cast<py::ssize_t>();
+    }
+    std::vector<double> d(static_cast<std::size_t>((n + 1) * (m + 1)), std::numeric_limits<double>::infinity());
+    const double* ap = a.data();
+    const double* bp = b.data();
+    const py::ssize_t cols = m + 1;
+    d[0] = 0.0;
+    for (py::ssize_t i = 1; i <= n; ++i) {
+        const py::ssize_t jlo = std::max(static_cast<py::ssize_t>(1), i - w);
+        const py::ssize_t jhi = std::min(m, i + w);
+        for (py::ssize_t j = jlo; j <= jhi; ++j) {
+            const double cost = std::abs(ap[i - 1] - bp[j - 1]);
+            const double prev = std::min({d[static_cast<std::size_t>((i - 1) * cols + j)], d[static_cast<std::size_t>(i * cols + j - 1)], d[static_cast<std::size_t>((i - 1) * cols + j - 1)]});
+            d[static_cast<std::size_t>(i * cols + j)] = cost + prev;
+        }
+    }
+    return d[static_cast<std::size_t>(n * cols + m)];
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -1167,5 +1219,7 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("gauss_seidel_dense", &gauss_seidel_dense_native, py::arg("A"), py::arg("b"), py::arg("x0"), py::arg("max_iter"), py::arg("tol"));
     m.def("conjugate_gradient_dense", &conjugate_gradient_dense_native, py::arg("A"), py::arg("b"), py::arg("x0"), py::arg("max_iter"), py::arg("tol"));
     m.def("arnoldi", &arnoldi_native, py::arg("A"), py::arg("b"), py::arg("k"));
+    m.def("dtw_distance", &dtw_distance_native, py::arg("a"), py::arg("b"), py::arg("window") = py::none());
+    m.def("dtw_matrix", &dtw_matrix_native, py::arg("a"), py::arg("b"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
