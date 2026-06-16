@@ -2171,6 +2171,28 @@ static double friction_colebrook_native(double re, double eps_over_d, int n_iter
     return f;
 }
 
+static double delta99_scan(ArrayD y, ArrayD u, double target) {
+    if (y.ndim() != 1 || u.ndim() != 1 || y.shape(0) != u.shape(0)) {
+        throw std::invalid_argument("y and u must be matching 1D arrays");
+    }
+    const py::ssize_t n = u.shape(0);
+    if (n == 0) {
+        throw std::invalid_argument("y and u must be non-empty");
+    }
+    const double* yp = y.data();
+    const double* up = u.data();
+    for (py::ssize_t i = 0; i < n - 1; ++i) {
+        if ((up[i] <= target && target <= up[i + 1]) || (up[i] >= target && target >= up[i + 1])) {
+            if (up[i + 1] == up[i]) {
+                return yp[i];
+            }
+            const double frac = (target - up[i]) / (up[i + 1] - up[i]);
+            return yp[i] + frac * (yp[i + 1] - yp[i]);
+        }
+    }
+    return yp[n - 1];
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -2240,5 +2262,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("convergence_ratio", &convergence_ratio_native, py::arg("errs"));
     m.def("combined_disc_uncertainty", &combined_disc_uncertainty_native, py::arg("uncs"));
     m.def("friction_colebrook", &friction_colebrook_native, py::arg("Re"), py::arg("eps_over_D"), py::arg("n_iter") = 50);
+    m.def("delta99_scan", &delta99_scan, py::arg("y"), py::arg("u"), py::arg("target"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

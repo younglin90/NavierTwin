@@ -15,6 +15,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def delta99(
     y: NDArray[np.float64],
@@ -27,13 +32,7 @@ def delta99(
     u = np.asarray(u, dtype=np.float64)
     order = np.argsort(y)
     y, u = y[order], u[order]
-    for i in range(len(u) - 1):
-        if u[i] <= target <= u[i + 1] or u[i] >= target >= u[i + 1]:
-            if u[i + 1] == u[i]:
-                return float(y[i])
-            frac = (target - u[i]) / (u[i + 1] - u[i])
-            return float(y[i] + frac * (y[i + 1] - y[i]))
-    return float(y[-1])
+    return float(_kernels.delta99_scan(y, u, target))
 
 
 def displacement_thickness(
