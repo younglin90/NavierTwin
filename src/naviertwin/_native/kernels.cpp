@@ -15,6 +15,8 @@ using Array2D = py::array_t<double, py::array::c_style | py::array::forcecast>;
 
 using ArrayD = py::array_t<double, py::array::c_style | py::array::forcecast>;
 
+using ArrayI = py::array_t<long long, py::array::c_style | py::array::forcecast>;
+
 static void check_same_2d(const Array2D& u, const Array2D& v) {
     if (u.ndim() != 2 || v.ndim() != 2) {
         throw std::invalid_argument("2D arrays expected");
@@ -1830,6 +1832,68 @@ static py::tuple mesh_coarsen_by_tolerance(ArrayD x, ArrayD f, double tol) {
     return py::make_tuple(x_out, f_out);
 }
 
+static py::array_t<double> laplacian_smooth_native(ArrayD verts, ArrayI edges, int n_iter, double alpha, ArrayI fixed) {
+    if (verts.ndim() != 2) {
+        throw std::invalid_argument("verts must be a 2D array");
+    }
+    if (edges.ndim() != 2 || edges.shape(1) != 2) {
+        throw std::invalid_argument("edges must be a 2D array with shape (n_edges, 2)");
+    }
+    if (fixed.ndim() != 1) {
+        throw std::invalid_argument("fixed must be a 1D array");
+    }
+    if (n_iter < 0) {
+        throw std::invalid_argument("n_iter must be non-negative");
+    }
+    const py::ssize_t n = verts.shape(0);
+    const py::ssize_t dim = verts.shape(1);
+    const py::ssize_t n_edges = edges.shape(0);
+    std::vector<std::vector<py::ssize_t>> adj(static_cast<std::size_t>(n));
+    const long long* ep = edges.data();
+    for (py::ssize_t e = 0; e < n_edges; ++e) {
+        const auto a = static_cast<py::ssize_t>(ep[2 * e]);
+        const auto b = static_cast<py::ssize_t>(ep[2 * e + 1]);
+        if (a < 0 || b < 0 || a >= n || b >= n) {
+            throw std::out_of_range("edge index out of range");
+        }
+        adj[static_cast<std::size_t>(a)].push_back(b);
+        adj[static_cast<std::size_t>(b)].push_back(a);
+    }
+    std::vector<char> is_fixed(static_cast<std::size_t>(n), 0);
+    const long long* fp = fixed.data();
+    for (py::ssize_t i = 0; i < fixed.shape(0); ++i) {
+        const auto idx = static_cast<py::ssize_t>(fp[i]);
+        if (idx >= 0 && idx < n) {
+            is_fixed[static_cast<std::size_t>(idx)] = 1;
+        }
+    }
+    const py::ssize_t total = n * dim;
+    std::vector<double> v(verts.data(), verts.data() + total);
+    std::vector<double> v_new(static_cast<std::size_t>(total));
+    for (int iter = 0; iter < n_iter; ++iter) {
+        v_new = v;
+        for (py::ssize_t i = 0; i < n; ++i) {
+            const auto& neighbors = adj[static_cast<std::size_t>(i)];
+            if (is_fixed[static_cast<std::size_t>(i)] || neighbors.empty()) {
+                continue;
+            }
+            for (py::ssize_t d = 0; d < dim; ++d) {
+                double mean = 0.0;
+                for (const py::ssize_t j : neighbors) {
+                    mean += v[static_cast<std::size_t>(j * dim + d)];
+                }
+                mean /= static_cast<double>(neighbors.size());
+                const py::ssize_t idx = i * dim + d;
+                v_new[static_cast<std::size_t>(idx)] = (1.0 - alpha) * v[static_cast<std::size_t>(idx)] + alpha * mean;
+            }
+        }
+        v.swap(v_new);
+    }
+    auto out = py::array_t<double>({n, dim});
+    std::copy(v.begin(), v.end(), out.mutable_data());
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -1889,5 +1953,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("fast_march_1d", &fast_march_1d, py::arg("phi"), py::arg("dx") = 1.0);
     m.def("mesh_refine_by_gradient", &mesh_refine_by_gradient, py::arg("x"), py::arg("f"), py::arg("threshold") = 0.1, py::arg("max_passes") = 5);
     m.def("mesh_coarsen_by_tolerance", &mesh_coarsen_by_tolerance, py::arg("x"), py::arg("f"), py::arg("tol") = 1e-3);
+    m.def("laplacian_smooth", &laplacian_smooth_native, py::arg("verts"), py::arg("edges"), py::arg("n_iter"), py::arg("alpha"), py::arg("fixed"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

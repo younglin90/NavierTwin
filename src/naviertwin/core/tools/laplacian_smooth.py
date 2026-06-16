@@ -17,6 +17,11 @@ from collections.abc import Iterable
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def laplacian_smooth(
     verts: NDArray[np.float64],
@@ -27,22 +32,15 @@ def laplacian_smooth(
     fixed: Iterable[int] | None = None,
 ) -> NDArray[np.float64]:
     """v_i ← (1-α) v_i + α mean(v_j : j ∈ N(i))."""
-    v = np.asarray(verts, dtype=np.float64).copy()
-    n = v.shape[0]
-    adj: list[list[int]] = [[] for _ in range(n)]
-    for a, b in edges:
-        adj[a].append(b)
-        adj[b].append(a)
-    fixed_set = set(fixed) if fixed is not None else set()
-    for _ in range(n_iter):
-        v_new = v.copy()
-        for i in range(n):
-            if i in fixed_set or not adj[i]:
-                continue
-            mean = v[adj[i]].mean(axis=0)
-            v_new[i] = (1 - alpha) * v[i] + alpha * mean
-        v = v_new
-    return v
+    edge_arr = np.asarray(list(edges), dtype=np.int64).reshape(-1, 2)
+    fixed_arr = np.asarray([] if fixed is None else list(fixed), dtype=np.int64)
+    return _kernels.laplacian_smooth(
+        np.asarray(verts, dtype=np.float64),
+        edge_arr,
+        int(n_iter),
+        float(alpha),
+        fixed_arr,
+    )
 
 
 __all__ = ["laplacian_smooth"]
