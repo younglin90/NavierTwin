@@ -14,6 +14,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 # D2Q9 velocities and weights
 _E = np.array([
     [0, 0], [1, 0], [0, 1], [-1, 0], [0, -1],
@@ -24,29 +29,15 @@ _W = np.array([4 / 9] + [1 / 9] * 4 + [1 / 36] * 4)
 
 def equilibrium(rho: NDArray, u: NDArray) -> NDArray:
     """rho: (X,Y); u: (2,X,Y) → f_eq: (9,X,Y)."""
-    feq = np.zeros((9, *rho.shape))
-    u_sq = u[0] ** 2 + u[1] ** 2
-    for k in range(9):
-        eu = _E[k, 0] * u[0] + _E[k, 1] * u[1]
-        feq[k] = _W[k] * rho * (1 + 3 * eu + 4.5 * eu ** 2 - 1.5 * u_sq)
-    return feq
+    return _kernels.lbm_equilibrium(
+        np.asarray(rho, dtype=np.float64),
+        np.asarray(u, dtype=np.float64),
+    )
 
 
 def lbm_step(f: NDArray, *, omega: float = 1.0) -> NDArray:
     """BGK collision + streaming (periodic)."""
-    rho = f.sum(axis=0)
-    u = np.zeros((2, *rho.shape))
-    for k in range(9):
-        u[0] += _E[k, 0] * f[k]
-        u[1] += _E[k, 1] * f[k]
-    u /= np.maximum(rho, 1e-30)
-    feq = equilibrium(rho, u)
-    f = f - omega * (f - feq)
-    # streaming
-    f_new = np.zeros_like(f)
-    for k in range(9):
-        f_new[k] = np.roll(f[k], shift=(_E[k, 0], _E[k, 1]), axis=(0, 1))
-    return f_new
+    return _kernels.lbm_step(np.asarray(f, dtype=np.float64), float(omega))
 
 
 __all__ = ["equilibrium", "lbm_step"]

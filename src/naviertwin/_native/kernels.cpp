@@ -2031,6 +2031,92 @@ static py::array_t<double> sph_acceleration_1d(ArrayD x, ArrayD m, ArrayD rho, A
     return out;
 }
 
+static constexpr int D2Q9_E[9][2] = {
+    {0, 0}, {1, 0}, {0, 1}, {-1, 0}, {0, -1}, {1, 1}, {-1, 1}, {-1, -1}, {1, -1}
+};
+
+static constexpr double D2Q9_W[9] = {
+    4.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0,
+    1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0
+};
+
+static py::array_t<double> lbm_equilibrium(Array2D rho, py::array_t<double, py::array::c_style | py::array::forcecast> u) {
+    if (u.ndim() != 3 || u.shape(0) != 2 || u.shape(1) != rho.shape(0) || u.shape(2) != rho.shape(1)) {
+        throw std::invalid_argument("u must have shape (2, X, Y) matching rho");
+    }
+    const py::ssize_t nx = rho.shape(0);
+    const py::ssize_t ny = rho.shape(1);
+    auto out = py::array_t<double>({static_cast<py::ssize_t>(9), nx, ny});
+    const double* rp = rho.data();
+    const double* up = u.data();
+    double* op = out.mutable_data();
+    const py::ssize_t plane = nx * ny;
+    for (int k = 0; k < 9; ++k) {
+        for (py::ssize_t i = 0; i < nx; ++i) {
+            for (py::ssize_t j = 0; j < ny; ++j) {
+                const py::ssize_t idx = i * ny + j;
+                const double ux = up[idx];
+                const double uy = up[plane + idx];
+                const double u_sq = ux * ux + uy * uy;
+                const double eu = D2Q9_E[k][0] * ux + D2Q9_E[k][1] * uy;
+                op[k * plane + idx] = D2Q9_W[k] * rp[idx] * (1.0 + 3.0 * eu + 4.5 * eu * eu - 1.5 * u_sq);
+            }
+        }
+    }
+    return out;
+}
+
+static py::array_t<double> lbm_step(ArrayD f, double omega) {
+    if (f.ndim() != 3 || f.shape(0) != 9) {
+        throw std::invalid_argument("f must have shape (9, X, Y)");
+    }
+    const py::ssize_t nx = f.shape(1);
+    const py::ssize_t ny = f.shape(2);
+    const py::ssize_t plane = nx * ny;
+    const double* fp = f.data();
+    std::vector<double> rho(static_cast<std::size_t>(plane), 0.0);
+    std::vector<double> ux(static_cast<std::size_t>(plane), 0.0);
+    std::vector<double> uy(static_cast<std::size_t>(plane), 0.0);
+    std::vector<double> collided(static_cast<std::size_t>(9 * plane), 0.0);
+    for (int k = 0; k < 9; ++k) {
+        for (py::ssize_t idx = 0; idx < plane; ++idx) {
+            const double val = fp[k * plane + idx];
+            rho[static_cast<std::size_t>(idx)] += val;
+            ux[static_cast<std::size_t>(idx)] += D2Q9_E[k][0] * val;
+            uy[static_cast<std::size_t>(idx)] += D2Q9_E[k][1] * val;
+        }
+    }
+    for (py::ssize_t idx = 0; idx < plane; ++idx) {
+        const double denom = std::max(rho[static_cast<std::size_t>(idx)], 1e-30);
+        ux[static_cast<std::size_t>(idx)] /= denom;
+        uy[static_cast<std::size_t>(idx)] /= denom;
+    }
+    for (int k = 0; k < 9; ++k) {
+        for (py::ssize_t idx = 0; idx < plane; ++idx) {
+            const double u_sq = ux[static_cast<std::size_t>(idx)] * ux[static_cast<std::size_t>(idx)]
+                + uy[static_cast<std::size_t>(idx)] * uy[static_cast<std::size_t>(idx)];
+            const double eu = D2Q9_E[k][0] * ux[static_cast<std::size_t>(idx)] + D2Q9_E[k][1] * uy[static_cast<std::size_t>(idx)];
+            const double feq = D2Q9_W[k] * rho[static_cast<std::size_t>(idx)] * (1.0 + 3.0 * eu + 4.5 * eu * eu - 1.5 * u_sq);
+            collided[static_cast<std::size_t>(k * plane + idx)] = fp[k * plane + idx] - omega * (fp[k * plane + idx] - feq);
+        }
+    }
+    auto out = py::array_t<double>({static_cast<py::ssize_t>(9), nx, ny});
+    double* op = out.mutable_data();
+    std::fill(op, op + 9 * plane, 0.0);
+    for (int k = 0; k < 9; ++k) {
+        const py::ssize_t sx = D2Q9_E[k][0];
+        const py::ssize_t sy = D2Q9_E[k][1];
+        for (py::ssize_t i = 0; i < nx; ++i) {
+            for (py::ssize_t j = 0; j < ny; ++j) {
+                const py::ssize_t dst_i = (i + sx + nx) % nx;
+                const py::ssize_t dst_j = (j + sy + ny) % ny;
+                op[k * plane + dst_i * ny + dst_j] = collided[static_cast<std::size_t>(k * plane + i * ny + j)];
+            }
+        }
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -2094,5 +2180,7 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("mesh_quality_report", &mesh_quality_report_native, py::arg("points"), py::arg("simplices"));
     m.def("order_table", &order_table_native, py::arg("h"), py::arg("err"));
     m.def("sph_acceleration_1d", &sph_acceleration_1d, py::arg("x"), py::arg("m"), py::arg("rho"), py::arg("p"), py::arg("h") = 1.0);
+    m.def("lbm_equilibrium", &lbm_equilibrium, py::arg("rho"), py::arg("u"));
+    m.def("lbm_step", &lbm_step, py::arg("f"), py::arg("omega") = 1.0);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
