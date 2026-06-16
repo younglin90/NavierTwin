@@ -1181,6 +1181,62 @@ static double dtw_distance_native(ArrayD a, ArrayD b, py::object window) {
     return d[static_cast<std::size_t>(n * cols + m)];
 }
 
+static py::array_t<long long> dbscan_native(ArrayD points, double eps, int min_samples) {
+    if (points.ndim() != 2) {
+        throw std::invalid_argument("points must have shape (N, D)");
+    }
+    const py::ssize_t n = points.shape(0);
+    const py::ssize_t dim = points.shape(1);
+    const double* xp = points.data();
+    const double eps2 = eps * eps;
+    std::vector<std::vector<int>> neighbors(static_cast<std::size_t>(n));
+    for (py::ssize_t i = 0; i < n; ++i) {
+        for (py::ssize_t j = 0; j < n; ++j) {
+            double dist2 = 0.0;
+            for (py::ssize_t c = 0; c < dim; ++c) {
+                const double diff = xp[i * dim + c] - xp[j * dim + c];
+                dist2 += diff * diff;
+            }
+            if (dist2 <= eps2) {
+                neighbors[static_cast<std::size_t>(i)].push_back(static_cast<int>(j));
+            }
+        }
+    }
+
+    auto labels = py::array_t<long long>({n});
+    long long* lp = labels.mutable_data();
+    std::fill(lp, lp + n, -1);
+    long long cluster = 0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        if (lp[i] != -1) {
+            continue;
+        }
+        if (static_cast<int>(neighbors[static_cast<std::size_t>(i)].size()) < min_samples) {
+            continue;
+        }
+        lp[i] = cluster;
+        std::vector<int> seeds = neighbors[static_cast<std::size_t>(i)];
+        while (!seeds.empty()) {
+            const int j = seeds.back();
+            seeds.pop_back();
+            if (lp[j] == -1) {
+                lp[j] = cluster;
+            } else if (lp[j] != cluster) {
+                continue;
+            }
+            if (static_cast<int>(neighbors[static_cast<std::size_t>(j)].size()) >= min_samples) {
+                for (const int candidate : neighbors[static_cast<std::size_t>(j)]) {
+                    if (lp[candidate] == -1) {
+                        seeds.push_back(candidate);
+                    }
+                }
+            }
+        }
+        cluster += 1;
+    }
+    return labels;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -1221,5 +1277,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("arnoldi", &arnoldi_native, py::arg("A"), py::arg("b"), py::arg("k"));
     m.def("dtw_distance", &dtw_distance_native, py::arg("a"), py::arg("b"), py::arg("window") = py::none());
     m.def("dtw_matrix", &dtw_matrix_native, py::arg("a"), py::arg("b"));
+    m.def("dbscan", &dbscan_native, py::arg("points"), py::arg("eps") = 0.5, py::arg("min_samples") = 5);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

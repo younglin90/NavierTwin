@@ -14,39 +14,20 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def dbscan(
     points: NDArray[np.float64], eps: float = 0.5, min_samples: int = 5,
 ) -> NDArray[np.int64]:
     """간단 DBSCAN. 반환: label (N,), -1 = noise."""
-    X = np.asarray(points, dtype=np.float64)
-    n = X.shape[0]
-    labels = -np.ones(n, dtype=np.int64)
-
-    # pairwise distance (brute)
-    D = np.linalg.norm(X[:, None, :] - X[None, :, :], axis=2)
-    neighbors = [np.where(D[i] <= eps)[0].tolist() for i in range(n)]
-
-    cluster = 0
-    for i in range(n):
-        if labels[i] != -1:
-            continue
-        if len(neighbors[i]) < min_samples:
-            continue  # 아직 noise
-        labels[i] = cluster
-        seeds = list(neighbors[i])
-        while seeds:
-            j = seeds.pop()
-            if labels[j] == -1:
-                labels[j] = cluster
-            elif labels[j] != cluster:
-                continue
-            if len(neighbors[j]) >= min_samples:
-                for k in neighbors[j]:
-                    if labels[k] == -1:
-                        seeds.append(k)
-        cluster += 1
-    return labels
+    return np.asarray(
+        _kernels.dbscan(np.asarray(points, dtype=np.float64), float(eps), int(min_samples)),
+        dtype=np.int64,
+    )
 
 
 def n_clusters(labels: NDArray[np.int64]) -> int:
