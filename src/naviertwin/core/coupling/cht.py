@@ -15,6 +15,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required by CHT coupling")
+
 
 def cht_iterate(
     T_solid: NDArray[np.float64],
@@ -25,18 +30,14 @@ def cht_iterate(
     n_iter: int = 20,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     """Dirichlet-Neumann 반복: 인터페이스 (마지막/첫 노드) 매칭."""
-    Ts = np.asarray(T_solid, dtype=np.float64).copy()
-    Tf = np.asarray(T_fluid, dtype=np.float64).copy()
-    for _ in range(n_iter):
-        # solid: Laplace, fluid edge T_solid[-1] passed as Dirichlet to fluid[0]
-        # solid solve (1D Laplace, both ends fixed)
-        Ts[1:-1] = 0.5 * (Ts[2:] + Ts[:-2])
-        Tf[1:-1] = 0.5 * (Tf[2:] + Tf[:-2])
-        # heat-flux match at interface (Ts[-1] ↔ Tf[0])
-        T_iface = (k_s * Ts[-2] + k_f * Tf[1]) / (k_s + k_f)
-        Ts[-1] = T_iface
-        Tf[0] = T_iface
-    return Ts, Tf
+    Ts, Tf = _kernels.cht_iterate(
+        np.asarray(T_solid, dtype=np.float64),
+        np.asarray(T_fluid, dtype=np.float64),
+        float(k_s),
+        float(k_f),
+        int(n_iter),
+    )
+    return np.asarray(Ts, dtype=np.float64), np.asarray(Tf, dtype=np.float64)
 
 
 __all__ = ["cht_iterate"]

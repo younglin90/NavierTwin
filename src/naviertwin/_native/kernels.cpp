@@ -2723,6 +2723,38 @@ static double estimate_first_cell_height_native(double y_plus_target, double Re,
     return y_plus_target * nu / u_tau;
 }
 
+static py::tuple cht_iterate_native(ArrayD T_solid, ArrayD T_fluid, double k_s, double k_f, int n_iter) {
+    if (T_solid.ndim() != 1 || T_fluid.ndim() != 1) {
+        throw std::invalid_argument("T_solid and T_fluid must be 1D arrays");
+    }
+    if (T_solid.shape(0) < 2 || T_fluid.shape(0) < 2) {
+        throw std::invalid_argument("T_solid and T_fluid must have at least two nodes");
+    }
+    if (k_s + k_f == 0.0) {
+        throw std::invalid_argument("k_s + k_f must be non-zero");
+    }
+    const py::ssize_t ns = T_solid.shape(0);
+    const py::ssize_t nf = T_fluid.shape(0);
+    auto Ts = py::array_t<double>({ns});
+    auto Tf = py::array_t<double>({nf});
+    std::copy(T_solid.data(), T_solid.data() + ns, Ts.mutable_data());
+    std::copy(T_fluid.data(), T_fluid.data() + nf, Tf.mutable_data());
+    double* tsp = Ts.mutable_data();
+    double* tfp = Tf.mutable_data();
+    for (int it = 0; it < n_iter; ++it) {
+        for (py::ssize_t i = 1; i < ns - 1; ++i) {
+            tsp[i] = 0.5 * (tsp[i + 1] + tsp[i - 1]);
+        }
+        for (py::ssize_t i = 1; i < nf - 1; ++i) {
+            tfp[i] = 0.5 * (tfp[i + 1] + tfp[i - 1]);
+        }
+        const double T_iface = (k_s * tsp[ns - 2] + k_f * tfp[1]) / (k_s + k_f);
+        tsp[ns - 1] = T_iface;
+        tfp[0] = T_iface;
+    }
+    return py::make_tuple(Ts, Tf);
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -2825,5 +2857,6 @@ PYBIND11_MODULE(_kernels, m) {
         "estimate_first_cell_height", &estimate_first_cell_height_native, py::arg("y_plus_target"),
         py::arg("Re"), py::arg("rho"), py::arg("U_inf"), py::arg("nu")
     );
+    m.def("cht_iterate", &cht_iterate_native, py::arg("T_solid"), py::arg("T_fluid"), py::arg("k_s"), py::arg("k_f"), py::arg("n_iter"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
