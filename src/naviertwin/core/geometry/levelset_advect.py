@@ -13,6 +13,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required")
+
 
 def advect_step(
     phi: NDArray[np.float64],
@@ -20,16 +25,12 @@ def advect_step(
     *,
     dt: float, dx: float,
 ) -> NDArray[np.float64]:
-    phi = np.asarray(phi, dtype=np.float64).copy()
-    u = np.asarray(u, dtype=np.float64)
-    n = len(phi)
-    new = phi.copy()
-    for i in range(1, n - 1):
-        if u[i] >= 0:
-            new[i] = phi[i] - dt / dx * u[i] * (phi[i] - phi[i - 1])
-        else:
-            new[i] = phi[i] - dt / dx * u[i] * (phi[i + 1] - phi[i])
-    return new
+    return _kernels.levelset_advect_step_1d(
+        np.asarray(phi, dtype=np.float64),
+        np.asarray(u, dtype=np.float64),
+        float(dt),
+        float(dx),
+    )
 
 
 __all__ = ["advect_step"]

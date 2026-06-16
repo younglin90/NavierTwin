@@ -1440,6 +1440,32 @@ static py::array_t<double> vof_step_1d(ArrayD alpha, ArrayD u, double dt, double
     return out;
 }
 
+static py::array_t<double> levelset_advect_step_1d(ArrayD phi, ArrayD u, double dt, double dx) {
+    if (phi.ndim() != 1 || u.ndim() != 1 || phi.shape(0) != u.shape(0)) {
+        throw std::invalid_argument("phi and u must be matching 1D arrays");
+    }
+    if (dx == 0.0) {
+        throw std::invalid_argument("dx must be non-zero");
+    }
+    const py::ssize_t n = phi.shape(0);
+    auto out = py::array_t<double>({n});
+    const double* pp = phi.data();
+    const double* up = u.data();
+    double* op = out.mutable_data();
+    for (py::ssize_t i = 0; i < n; ++i) {
+        op[i] = pp[i];
+    }
+    const double c = dt / dx;
+    for (py::ssize_t i = 1; i < n - 1; ++i) {
+        if (up[i] >= 0.0) {
+            op[i] = pp[i] - c * up[i] * (pp[i] - pp[i - 1]);
+        } else {
+            op[i] = pp[i] - c * up[i] * (pp[i + 1] - pp[i]);
+        }
+    }
+    return out;
+}
+
 static inline double jensen_wake_velocity(double v0, double x, double r, double a, double k) {
     if (x <= 0.0) {
         return v0;
@@ -1510,6 +1536,7 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("sph_density_1d", &sph_density_1d, py::arg("positions"), py::arg("masses"), py::arg("h") = 1.0);
     m.def("reaction_rate", &reaction_rate_native, py::arg("k"), py::arg("concentrations"), py::arg("orders"));
     m.def("vof_step_1d", &vof_step_1d, py::arg("alpha"), py::arg("u"), py::arg("dt"), py::arg("dx"));
+    m.def("levelset_advect_step_1d", &levelset_advect_step_1d, py::arg("phi"), py::arg("u"), py::arg("dt"), py::arg("dx"));
     m.def("jensen_farm_velocity", &jensen_farm_velocity, py::arg("V0"), py::arg("distances"), py::arg("R"), py::arg("a") = 0.3, py::arg("k") = 0.04);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
