@@ -15,6 +15,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required by boundary-layer grid tools")
+
 
 def bl_grid(
     wall_pts: NDArray[np.float64],
@@ -25,14 +30,13 @@ def bl_grid(
     growth: float = 1.2,
 ) -> NDArray[np.float64]:
     """기하급수 두께로 wall-normal extrusion. 반환: (M, n_layers, dim)."""
-    wp = np.asarray(wall_pts, dtype=np.float64)
-    wn = np.asarray(wall_normals, dtype=np.float64)
-    # cumulative thickness
-    h = np.array([first * growth ** k for k in range(n_layers)])
-    y = np.cumsum(h)
-    # broadcast
-    grid = wp[:, None, :] + wn[:, None, :] * y[None, :, None]
-    return grid
+    return _kernels.bl_grid(
+        np.asarray(wall_pts, dtype=np.float64),
+        np.asarray(wall_normals, dtype=np.float64),
+        int(n_layers),
+        float(first),
+        float(growth),
+    )
 
 
 __all__ = ["bl_grid"]

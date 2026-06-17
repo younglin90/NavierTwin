@@ -2969,6 +2969,30 @@ static py::tuple ppm_monotonize_native(double u_im, double u_i, double u_ip, dou
     return py::make_tuple(uL, uR);
 }
 
+static py::array_t<double> bl_grid_native(ArrayD wall_pts, ArrayD wall_normals, int n_layers, double first, double growth) {
+    if (wall_pts.ndim() != 2 || wall_normals.ndim() != 2 || wall_pts.shape(0) != wall_normals.shape(0) || wall_pts.shape(1) != wall_normals.shape(1)) {
+        throw std::invalid_argument("wall_pts and wall_normals must be matching 2D arrays");
+    }
+    const py::ssize_t n_pts = wall_pts.shape(0);
+    const py::ssize_t dim = wall_pts.shape(1);
+    auto out = py::array_t<double>({n_pts, static_cast<py::ssize_t>(n_layers), dim});
+    const double* wp = wall_pts.data();
+    const double* wn = wall_normals.data();
+    double* op = out.mutable_data();
+    double y = 0.0;
+    double h = first;
+    for (int layer = 0; layer < n_layers; ++layer) {
+        y += h;
+        for (py::ssize_t i = 0; i < n_pts; ++i) {
+            for (py::ssize_t d = 0; d < dim; ++d) {
+                op[(i * n_layers + layer) * dim + d] = wp[i * dim + d] + wn[i * dim + d] * y;
+            }
+        }
+        h *= growth;
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -3096,6 +3120,10 @@ PYBIND11_MODULE(_kernels, m) {
     m.def(
         "ppm_monotonize", &ppm_monotonize_native, py::arg("u_im"), py::arg("u_i"), py::arg("u_ip"),
         py::arg("uL"), py::arg("uR")
+    );
+    m.def(
+        "bl_grid", &bl_grid_native, py::arg("wall_pts"), py::arg("wall_normals"), py::arg("n_layers"),
+        py::arg("first"), py::arg("growth")
     );
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
