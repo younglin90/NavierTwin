@@ -22,6 +22,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
 from naviertwin.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -73,8 +74,10 @@ class ParticleFilter:
             rng = np.random.default_rng()
 
         new_parts = np.zeros_like(self.particles_)
-        for i in range(self.n_particles):
+        i = 0
+        while i < self.n_particles:
             new_parts[i] = propagator(self.particles_[i])
+            i += 1
         if process_cov is not None:
             noise = rng.multivariate_normal(
                 mean=np.zeros(self.state_dim), cov=process_cov, size=self.n_particles
@@ -99,14 +102,14 @@ class ParticleFilter:
         Hx = self.particles_ @ H.T  # (N, m)
         diff = y[None, :] - Hx
         try:
-            R_inv = np.linalg.inv(R)
-            log_det = float(np.log(max(np.linalg.det(R), 1e-300)))
-        except np.linalg.LinAlgError:
+            if _kernels is None:
+                raise RuntimeError("naviertwin._native._kernels is required")
+            log_w = _kernels.gaussian_log_weights(diff, R)
+        except Exception:
             R_inv = np.linalg.pinv(R)
-            log_det = 0.0
+            log_w = -0.5 * np.einsum("ni,ij,nj->n", diff, R_inv, diff)
 
         # log-likelihood
-        log_w = -0.5 * np.einsum("ni,ij,nj->n", diff, R_inv, diff) - 0.5 * log_det
         log_w = log_w - log_w.max()  # 수치 안정화
         w = np.exp(log_w) * self.weights_
         total = float(w.sum())

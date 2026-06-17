@@ -4424,6 +4424,39 @@ static py::array_t<double> gmm_log_prob_matrix_native(Array2D X, ArrayD weights,
     return out;
 }
 
+static py::array_t<double> gaussian_log_weights_native(Array2D diff, Array2D cov) {
+    const py::ssize_t n = diff.shape(0);
+    const py::ssize_t d = diff.shape(1);
+    if (cov.shape(0) != d || cov.shape(1) != d) {
+        throw std::invalid_argument("cov shape must match diff columns");
+    }
+    std::vector<double> inv;
+    double det = 0.0;
+    if (!invert_with_logdet(cov.data(), d, 0.0, inv, det)) {
+        throw std::runtime_error("covariance matrix is singular");
+    }
+    if (det <= 0.0) {
+        det = 1e-300;
+    }
+    auto out = py::array_t<double>({n});
+    const double* dp = diff.data();
+    double* op = out.mutable_data();
+    const double log_det = std::log(std::max(det, 1e-300));
+    for (py::ssize_t row = 0; row < n; ++row) {
+        const double* x = dp + row * d;
+        double maha = 0.0;
+        for (py::ssize_t i = 0; i < d; ++i) {
+            double acc = 0.0;
+            for (py::ssize_t j = 0; j < d; ++j) {
+                acc += inv[static_cast<size_t>(i * d + j)] * x[j];
+            }
+            maha += x[i] * acc;
+        }
+        op[row] = -0.5 * maha - 0.5 * log_det;
+    }
+    return out;
+}
+
 static py::array_t<double> ftle_from_advected_stencils_native(ArrayD adv, double T, double eps) {
     if (adv.ndim() != 4 || adv.shape(2) != 4 || adv.shape(3) != 2) {
         throw std::invalid_argument("adv must have shape (ny, nx, 4, 2)");
@@ -4814,6 +4847,7 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("frequency_peak_dicts", &frequency_peak_dicts_native, py::arg("freqs"), py::arg("amplitudes"), py::arg("indices"));
     m.def("delta_criterion_3x3", &delta_criterion_3x3_native, py::arg("grad"));
     m.def("gmm_log_prob_matrix", &gmm_log_prob_matrix_native, py::arg("X"), py::arg("weights"), py::arg("means"), py::arg("covs"));
+    m.def("gaussian_log_weights", &gaussian_log_weights_native, py::arg("diff"), py::arg("cov"));
     m.def("ftle_from_advected_stencils", &ftle_from_advected_stencils_native, py::arg("adv"), py::arg("T"), py::arg("eps"));
     m.def("lcs_ftle_from_flow_map", &lcs_ftle_from_flow_map_native, py::arg("X"), py::arg("Y"), py::arg("dx"), py::arg("dy"), py::arg("T"));
     m.def("derivative_2d", &derivative_2d_native, py::arg("U"), py::arg("spacing"), py::arg("axis"), py::arg("order") = 1);
