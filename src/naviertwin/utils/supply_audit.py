@@ -30,13 +30,16 @@ def build_audit_report(
     artifacts: iterable of (raw_bytes, filename) pairs.
     """
     art_records = []
-    for blob, fname in artifacts:
+    idx = 0
+    while idx < len(artifacts):
+        blob, fname = artifacts[idx]
         h = cas_hash(blob)
         art_records.append({
             "name": fname,
             "sha256": h,
             "version": version_id(name, h),
         })
+        idx += 1
     sig = sign_config(config, key=key)
     return {
         "name": name,
