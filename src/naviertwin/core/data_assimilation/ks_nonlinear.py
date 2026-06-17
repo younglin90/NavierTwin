@@ -13,6 +13,8 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin.core.data_assimilation.iterated_ekf import _right_solve
+
 
 def nonlinear_rts(
     xs_filt: NDArray[np.float64],
@@ -25,11 +27,13 @@ def nonlinear_rts(
     xs = np.asarray(xs_filt, dtype=np.float64).copy()
     Ps = np.asarray(Ps_filt, dtype=np.float64).copy()
     N = xs.shape[0]
-    for k in range(N - 2, -1, -1):
+    k = N - 2
+    while k >= 0:
         Pp = F @ Ps[k] @ F.T + Q
-        Ck = Ps[k] @ F.T @ np.linalg.inv(Pp)
+        Ck = _right_solve(Pp, Ps[k] @ F.T)
         xs[k] = xs[k] + Ck @ (xs[k + 1] - F @ xs[k])
         Ps[k] = Ps[k] + Ck @ (Ps[k + 1] - Pp) @ Ck.T
+        k -= 1
     return xs, Ps
 
 
