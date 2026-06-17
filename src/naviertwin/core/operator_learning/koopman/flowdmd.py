@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
+from numpy.linalg import svd as _svd
 
 from naviertwin.core.operator_learning.koopman.ikno import IKNO
 from naviertwin.core.time_series.base import BaseTimeSeries
@@ -63,7 +64,7 @@ class FlowDMD(BaseTimeSeries):
         X = Z_seq[:-1].T  # (d_lat, T-1)
         Y = Z_seq[1:].T
         r = self.dmd_rank or min(X.shape[0], X.shape[1])
-        U, s, Vt = np.linalg.svd(X, full_matrices=False)
+        U, s, Vt = _svd(X, full_matrices=False)
         U_r = U[:, :r]
         S_r = np.diag(s[:r])
         V_r = Vt[:r].T
@@ -116,13 +117,15 @@ class FlowDMD(BaseTimeSeries):
             ).cpu().numpy()[0]
 
         preds: list[np.ndarray] = []
-        for _ in range(n_steps):
+        step = 0
+        while step < n_steps:
             z = self._A_lat @ z
             with torch.no_grad():
                 x = self._ikno._decode(
                     torch.tensor(z[None, :], dtype=torch.float32, device=self._ikno._device)
                 ).cpu().numpy()[0]
             preds.append(x.copy())
+            step += 1
         return np.stack(preds)
 
     def eigenvalues(self) -> np.ndarray:
