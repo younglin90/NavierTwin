@@ -121,7 +121,7 @@ def auto_tune_pipeline(
         "n_modes": int(best.get("n_modes", lo)),
         "surrogate_kind": best_kind,
     }
-    best_rmse = min((h["value"] for h in history), default=float("inf"))
+    best_rmse = min(map(lambda h: h["value"], history), default=float("inf"))
     logger.info(
         "auto_tune: best=%s, rmse=%.6g (trials=%d)",
         best_params, best_rmse, len(history),
