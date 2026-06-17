@@ -38,11 +38,13 @@ def _build_mlp(
     act_cls = acts.get(activation.lower(), nn.ReLU)
 
     layers: list[Any] = []
-    for i in range(len(sizes) - 1):
+    i = 0
+    while i < len(sizes) - 1:
         layers.append(nn.Linear(sizes[i], sizes[i + 1]))
         is_last = i == len(sizes) - 2
         if not (is_last and final_linear):
             layers.append(act_cls())
+        i += 1
     return nn.Sequential(*layers)
 
 
@@ -155,9 +157,15 @@ class Autoencoder(BaseReducer):
         )
 
         self.train_losses_ = []
-        for epoch in range(self.max_epochs):
+        epoch = 0
+        while epoch < self.max_epochs:
             epoch_loss = 0.0
-            for (xb,) in loader:
+            batches = iter(loader)
+            while True:
+                try:
+                    (xb,) = next(batches)
+                except StopIteration:
+                    break
                 xb = xb.to(device)
                 optim.zero_grad()
                 z = self._encoder(xb)
@@ -170,6 +178,7 @@ class Autoencoder(BaseReducer):
             self.train_losses_.append(epoch_loss)
             if (epoch + 1) % max(1, self.max_epochs // 5) == 0:
                 logger.debug("AE epoch %d/%d: loss=%.6g", epoch + 1, self.max_epochs, epoch_loss)
+            epoch += 1
 
         self.n_components = self.latent_dim
         self.is_fitted = True
