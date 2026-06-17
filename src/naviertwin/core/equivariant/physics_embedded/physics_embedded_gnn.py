@@ -120,11 +120,13 @@ class EGNN:
         class _EGNN(nn.Module):
             def __init__(self) -> None:
                 super().__init__()
-                self.layers = nn.ModuleList([_EGNNLayer() for _ in range(n_layers)])
+                self.layers = nn.ModuleList(map(lambda _: _EGNNLayer(), range(n_layers)))
 
             def forward(self, x: Any, h: Any) -> tuple[Any, Any]:
-                for lyr in self.layers:
-                    x, h = lyr(x, h)
+                layer_idx = 0
+                while layer_idx < len(self.layers):
+                    x, h = self.layers[layer_idx](x, h)
+                    layer_idx += 1
                 return x, h
 
         return _EGNN()
