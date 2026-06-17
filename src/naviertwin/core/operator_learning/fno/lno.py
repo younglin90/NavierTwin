@@ -137,18 +137,27 @@ class LNO1D(BaseOperator):
             def __init__(self) -> None:
                 super().__init__()
                 self.lift = nn.Linear(in_c, W)
-                self.lap = nn.ModuleList(
-                    [_build_laplace_1d(W, P) for _ in range(n_layers)]
-                )
-                self.ws = nn.ModuleList([nn.Conv1d(W, W, 1) for _ in range(n_layers)])
+                lap = nn.ModuleList()
+                ws = nn.ModuleList()
+                layer_idx = 0
+                while layer_idx < n_layers:
+                    lap.append(_build_laplace_1d(W, P))
+                    ws.append(nn.Conv1d(W, W, 1))
+                    layer_idx += 1
+                self.lap = lap
+                self.ws = ws
                 self.proj = nn.Sequential(
                     nn.Linear(W, 2 * W), nn.GELU(), nn.Linear(2 * W, out_c)
                 )
 
             def forward(self, x: Any) -> Any:  # (B, N, C_in)
                 x = self.lift(x).permute(0, 2, 1)  # (B, W, N)
-                for lp, wc in zip(self.lap, self.ws):
-                    x = torch.nn.functional.gelu(lp(x) + wc(x))
+                layer_idx = 0
+                while layer_idx < len(self.lap):
+                    x = torch.nn.functional.gelu(
+                        self.lap[layer_idx](x) + self.ws[layer_idx](x)
+                    )
+                    layer_idx += 1
                 x = x.permute(0, 2, 1)
                 return self.proj(x)
 
@@ -173,9 +182,15 @@ class LNO1D(BaseOperator):
             shuffle=True,
         )
         self.train_losses_ = []
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             epoch = 0.0
-            for xb, yb in loader:
+            batches = iter(loader)
+            while True:
+                try:
+                    xb, yb = next(batches)
+                except StopIteration:
+                    break
                 xb = xb.to(self._device)
                 yb = yb.to(self._device)
                 optim.zero_grad()
@@ -186,6 +201,7 @@ class LNO1D(BaseOperator):
                 epoch += float(loss.item()) * xb.shape[0]
             epoch /= max(len(X), 1)
             self.train_losses_.append(epoch)
+            epoch_idx += 1
 
         self.is_fitted = True
         logger.info(
