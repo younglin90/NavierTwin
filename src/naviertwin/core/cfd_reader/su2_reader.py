@@ -143,7 +143,14 @@ class SU2Reader(BaseReader):
             su2_path.with_name(f"{su2_path.stem}_surface.csv"),
             su2_path.with_name("restart_flow.csv"),
         ]
-        csv_path = next((p for p in candidates if p.exists()), None)
+        csv_path = None
+        candidate_idx = 0
+        while candidate_idx < len(candidates):
+            candidate = candidates[candidate_idx]
+            if candidate.exists():
+                csv_path = candidate
+                break
+            candidate_idx += 1
         if csv_path is None:
             logger.debug("sibling .csv 없음 — 메쉬만 로드됨: %s", su2_path)
             return
@@ -174,7 +181,12 @@ class SU2Reader(BaseReader):
             logger.warning(".csv 헤더가 비어 있습니다: %s", csv_path)
             return
 
-        headers = [h.strip().strip('"') for h in header_line.split(",")]
+        headers = []
+        raw_headers = header_line.split(",")
+        header_idx = 0
+        while header_idx < len(raw_headers):
+            headers.append(raw_headers[header_idx].strip().strip('"'))
+            header_idx += 1
         data = np.loadtxt(
             csv_path, delimiter=",", skiprows=1, dtype=float, ndmin=2
         )
@@ -193,20 +205,26 @@ class SU2Reader(BaseReader):
 
         mesh = dataset.mesh
         skip = {"pointid", "point_id", "x", "y", "z", "id"}
-        for col_idx, name in enumerate(headers):
+        merged_count = 0
+        col_idx = 0
+        while col_idx < len(headers):
+            name = headers[col_idx]
             if name.lower() in skip:
+                col_idx += 1
                 continue
             if not hasattr(mesh, "point_data"):
                 break
             mesh.point_data[name] = data[:, col_idx]
+            merged_count += 1
             if name not in dataset.field_names:
                 dataset.field_names.append(name)
+            col_idx += 1
 
         dataset.metadata["csv_sidecar"] = str(csv_path)
         logger.debug(
             ".csv 필드 병합 완료: %s → %d fields",
             csv_path.name,
-            len([h for h in headers if h.lower() not in skip]),
+            merged_count,
         )
 
 
@@ -250,7 +268,15 @@ class SU2ASCIIParser:
             ) from exc
 
         with self._path.open("r", encoding="utf-8", errors="replace") as f:
-            lines = [ln.strip() for ln in f if ln.strip() and not ln.lstrip().startswith("%")]
+            raw_lines = f.readlines()
+
+        lines = []
+        raw_idx = 0
+        while raw_idx < len(raw_lines):
+            stripped = raw_lines[raw_idx].strip()
+            if stripped and not stripped.lstrip().startswith("%"):
+                lines.append(stripped)
+            raw_idx += 1
 
         ndime = self._parse_keyword(lines, "NDIME")
         if ndime not in (2, 3):
@@ -259,14 +285,20 @@ class SU2ASCIIParser:
             )
 
         # NPOIN 섹션
-        try:
-            idx = next(i for i, ln in enumerate(lines) if ln.upper().startswith("NPOIN"))
-        except StopIteration as exc:
-            raise ValueError("SU2ASCIIParser: NPOIN 섹션을 찾을 수 없습니다") from exc
+        idx = -1
+        line_idx = 0
+        while line_idx < len(lines):
+            if lines[line_idx].upper().startswith("NPOIN"):
+                idx = line_idx
+                break
+            line_idx += 1
+        if idx < 0:
+            raise ValueError("SU2ASCIIParser: NPOIN 섹션을 찾을 수 없습니다")
 
         n_poin = int(lines[idx].split("=")[1].split()[0])
         points = np.zeros((n_poin, 3), dtype=np.float64)
-        for k in range(n_poin):
+        k = 0
+        while k < n_poin:
             parts = lines[idx + 1 + k].split()
             if ndime == 2:
                 points[k, 0] = float(parts[0])
@@ -276,26 +308,37 @@ class SU2ASCIIParser:
                 points[k, 0] = float(parts[0])
                 points[k, 1] = float(parts[1])
                 points[k, 2] = float(parts[2])
+            k += 1
 
         # NELEM 섹션 (옵션 — 없으면 포인트만 반환)
         cells: list[int] = []
         cell_types: list[int] = []
-        elem_idx = next(
-            (i for i, ln in enumerate(lines) if ln.upper().startswith("NELEM")),
-            None,
-        )
-        if elem_idx is not None:
+        elem_idx = -1
+        line_idx = 0
+        while line_idx < len(lines):
+            if lines[line_idx].upper().startswith("NELEM"):
+                elem_idx = line_idx
+                break
+            line_idx += 1
+        if elem_idx >= 0:
             n_elem = int(lines[elem_idx].split("=")[1].split()[0])
-            for k in range(n_elem):
+            k = 0
+            while k < n_elem:
                 parts = lines[elem_idx + 1 + k].split()
                 su2_type = int(parts[0])
                 mapping = _SU2_TO_VTK.get(su2_type)
                 if mapping is None:
+                    k += 1
                     continue
                 n_nodes, vtk_type = mapping
-                node_ids = [int(v) for v in parts[1 : 1 + n_nodes]]
+                node_ids = []
+                node_idx = 0
+                while node_idx < n_nodes:
+                    node_ids.append(int(parts[1 + node_idx]))
+                    node_idx += 1
                 cells.extend([n_nodes, *node_ids])
                 cell_types.append(vtk_type)
+                k += 1
 
         metadata: dict[str, Any] = {
             "reader": "SU2ASCIIParser",
@@ -327,10 +370,13 @@ class SU2ASCIIParser:
     @staticmethod
     def _parse_keyword(lines: list[str], keyword: str) -> int:
         """`KEYWORD= n` 형식 라인을 찾아 정수값을 반환한다. 없으면 -1."""
-        for ln in lines:
+        line_idx = 0
+        while line_idx < len(lines):
+            ln = lines[line_idx]
             if ln.upper().startswith(keyword.upper()):
                 try:
                     return int(ln.split("=")[1].split()[0])
                 except (IndexError, ValueError):
                     return -1
+            line_idx += 1
         return -1
