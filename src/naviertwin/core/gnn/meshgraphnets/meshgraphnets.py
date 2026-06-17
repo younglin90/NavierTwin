@@ -130,14 +130,21 @@ class MeshGraphNets(BaseOperator):
                 super().__init__()
                 self.node_enc = _mlp(node_in, h, h)
                 self.edge_enc = _mlp(edge_in, h, h)
-                self.blocks = nn.ModuleList([_EdgeNodeBlock() for _ in range(n_msg)])
+                blocks = nn.ModuleList()
+                block_idx = 0
+                while block_idx < n_msg:
+                    blocks.append(_EdgeNodeBlock())
+                    block_idx += 1
+                self.blocks = blocks
                 self.node_dec = _mlp(h, h, node_in)
 
             def forward(self, x: Any, edge_index: Any, edge_attr: Any) -> Any:
                 x = self.node_enc(x)
                 edge_attr = self.edge_enc(edge_attr)
-                for blk in self.blocks:
-                    x, edge_attr = blk(x, edge_index, edge_attr)
+                block_idx = 0
+                while block_idx < len(self.blocks):
+                    x, edge_attr = self.blocks[block_idx](x, edge_index, edge_attr)
+                    block_idx += 1
                 return self.node_dec(x)
 
         return _MGN()
@@ -173,11 +180,15 @@ class MeshGraphNets(BaseOperator):
         loss_fn = torch.nn.MSELoss()
 
         self.train_losses_ = []
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             epoch_loss = 0.0
             order = np.random.permutation(n_traj)
-            for ti in order:
-                for t in range(Tp1 - 1):
+            order_idx = 0
+            while order_idx < len(order):
+                ti = order[order_idx]
+                t = 0
+                while t < Tp1 - 1:
                     x = torch.tensor(traj[ti, t], device=self._device)
                     y = torch.tensor(traj[ti, t + 1], device=self._device)
                     delta_true = y - x
@@ -187,8 +198,11 @@ class MeshGraphNets(BaseOperator):
                     loss.backward()
                     optim.step()
                     epoch_loss += float(loss.item())
+                    t += 1
+                order_idx += 1
             epoch_loss /= max(n_traj * (Tp1 - 1), 1)
             self.train_losses_.append(epoch_loss)
+            epoch_idx += 1
 
         self.n_epochs = self.max_epochs
         self.is_fitted = True
@@ -223,10 +237,12 @@ class MeshGraphNets(BaseOperator):
         out = [x0.copy()]
         x = torch.tensor(x0, device=self._device)
         with torch.no_grad():
-            for _ in range(n_steps):
+            step_idx = 0
+            while step_idx < n_steps:
                 delta = self._model(x, edge_t, self._edge_features)
                 x = x + delta
                 out.append(x.cpu().numpy())
+                step_idx += 1
         return np.stack(out)  # (n_steps+1, N, f)
 
 
