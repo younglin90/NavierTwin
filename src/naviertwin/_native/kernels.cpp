@@ -3689,6 +3689,59 @@ static py::array_t<double> p1_stiffness_2d_native(ArrayD points, ArrayI simplice
     return out;
 }
 
+static py::list marching_squares_native(Array2D f, double level) {
+    const py::ssize_t nx = f.shape(0);
+    const py::ssize_t ny = f.shape(1);
+    const double* fp = f.data();
+    py::list segments;
+    for (py::ssize_t i = 0; i < nx - 1; ++i) {
+        for (py::ssize_t j = 0; j < ny - 1; ++j) {
+            const double v[4] = {
+                fp[i * ny + j],
+                fp[(i + 1) * ny + j],
+                fp[(i + 1) * ny + (j + 1)],
+                fp[i * ny + (j + 1)],
+            };
+            const bool below[4] = {v[0] < level, v[1] < level, v[2] < level, v[3] < level};
+            const double corners[4][2] = {
+                {static_cast<double>(i), static_cast<double>(j)},
+                {static_cast<double>(i + 1), static_cast<double>(j)},
+                {static_cast<double>(i + 1), static_cast<double>(j + 1)},
+                {static_cast<double>(i), static_cast<double>(j + 1)},
+            };
+            std::vector<std::array<double, 2>> edge_points;
+            edge_points.reserve(4);
+            for (int k = 0; k < 4; ++k) {
+                const int a = k;
+                const int b = (k + 1) % 4;
+                if (below[a] != below[b]) {
+                    const double t = (level - v[a]) / (v[b] - v[a] + 1e-30);
+                    edge_points.push_back({
+                        corners[a][0] + t * (corners[b][0] - corners[a][0]),
+                        corners[a][1] + t * (corners[b][1] - corners[a][1]),
+                    });
+                }
+            }
+            if (edge_points.size() == 2) {
+                segments.append(py::make_tuple(
+                    py::make_tuple(edge_points[0][0], edge_points[0][1]),
+                    py::make_tuple(edge_points[1][0], edge_points[1][1])
+                ));
+            } else if (edge_points.size() == 4) {
+                segments.append(py::make_tuple(
+                    py::make_tuple(edge_points[0][0], edge_points[0][1]),
+                    py::make_tuple(edge_points[1][0], edge_points[1][1])
+                ));
+                segments.append(py::make_tuple(
+                    py::make_tuple(edge_points[2][0], edge_points[2][1]),
+                    py::make_tuple(edge_points[3][0], edge_points[3][1])
+                ));
+            }
+        }
+    }
+    return segments;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -3845,5 +3898,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("boundary_faces_tet", &boundary_faces_tet_native, py::arg("tets"));
     m.def("lumped_mass_2d", &lumped_mass_2d_native, py::arg("points"), py::arg("simplices"));
     m.def("p1_stiffness_2d", &p1_stiffness_2d_native, py::arg("points"), py::arg("simplices"));
+    m.def("marching_squares", &marching_squares_native, py::arg("f"), py::arg("level") = 0.0);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
