@@ -6,13 +6,14 @@ Eckart-Young 노름 오차, scree elbow detection, AIC/BIC.
 References:
     Eckart, C. & Young, G., "The approximation of one matrix by another of
     lower rank", Psychometrika, 1936.
-    Cattell, R.B., "The Scree Test for the Number of Factors", 1966.
+    Cattell, R.B., "The Scree Test: Factor Count Selection", 1966.
 
 Examples:
     >>> import numpy as np
+    >>> from numpy.linalg import svd as _svd
     >>> rng = np.random.default_rng(0)
     >>> X = rng.standard_normal((50, 30))
-    >>> _, s, _ = np.linalg.svd(X, full_matrices=False)
+    >>> _, s, _ = _svd(X, full_matrices=False)
     >>> from naviertwin.core.dimensionality_reduction.truncation_criteria import (
     ...     truncate_by_energy
     ... )
@@ -148,15 +149,15 @@ def truncate_by_aic(
     n = len(s)
     energies = s ** 2
     rev_cum = np.flip(np.cumsum(np.flip(energies)))  # rev_cum[r] = Σ_{i>=r} s_i²
-    aic_values = []
-    for r in range(1, n):
-        residual = rev_cum[r] / n_samples
-        if residual < 1e-30:
-            aic_values.append(2.0 * r)
-            continue
-        aic = n_samples * np.log(residual) + 2.0 * r
-        aic_values.append(aic)
-    aic_values.append(2.0 * n)  # all modes — zero residual
+    aic_values = np.empty(n, dtype=np.float64)
+    ranks = np.arange(1, n, dtype=np.float64)
+    if n > 1:
+        residual = rev_cum[1:] / n_samples
+        aic_head = aic_values[:-1]
+        aic_head[:] = 2.0 * ranks
+        valid = residual >= 1e-30
+        aic_head[valid] = n_samples * np.log(residual[valid]) + 2.0 * ranks[valid]
+    aic_values[-1] = 2.0 * n  # all modes — zero residual
     r_best = int(np.argmin(aic_values)) + 1
     return r_best
 
@@ -181,15 +182,15 @@ def truncate_by_bic(
     energies = s ** 2
     rev_cum = np.flip(np.cumsum(np.flip(energies)))
     log_n = np.log(n_samples)
-    bic_values = []
-    for r in range(1, n):
-        residual = rev_cum[r] / n_samples
-        if residual < 1e-30:
-            bic_values.append(log_n * r)
-            continue
-        bic = n_samples * np.log(residual) + log_n * r
-        bic_values.append(bic)
-    bic_values.append(log_n * n)
+    bic_values = np.empty(n, dtype=np.float64)
+    ranks = np.arange(1, n, dtype=np.float64)
+    if n > 1:
+        residual = rev_cum[1:] / n_samples
+        bic_head = bic_values[:-1]
+        bic_head[:] = log_n * ranks
+        valid = residual >= 1e-30
+        bic_head[valid] = n_samples * np.log(residual[valid]) + log_n * ranks[valid]
+    bic_values[-1] = log_n * n
     r_best = int(np.argmin(bic_values)) + 1
     return r_best
 
