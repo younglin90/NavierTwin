@@ -56,7 +56,8 @@ def finite_difference_gradient(
 
     d = x.size
     grad = np.zeros(d)
-    for i in range(d):
+    i = 0
+    while i < d:
         x_plus = x.copy()
         x_minus = x.copy()
         x_plus[i] += h
@@ -67,6 +68,7 @@ def finite_difference_gradient(
         f_plus_val = float(np.atleast_1d(f_plus)[0])
         f_minus_val = float(np.atleast_1d(f_minus)[0])
         grad[i] = (f_plus_val - f_minus_val) / (2.0 * h)
+        i += 1
     return grad
 
 
@@ -109,12 +111,15 @@ def morris_elementary_effects(
     delta = 1.0 / (n_levels - 1)
 
     ees = np.zeros((n_trajectories, d))
-    for t in range(n_trajectories):
+    t = 0
+    while t < n_trajectories:
         # 무작위 시작 점 (0, delta, 2*delta, ...)
         x0 = rng.integers(0, n_levels, d) / (n_levels - 1)
         order = rng.permutation(d)
         x_curr = x0.copy()
-        for i in order:
+        order_idx = 0
+        while order_idx < order.size:
+            i = order[order_idx]
             x_next = x_curr.copy()
             sign = 1.0 if x_curr[i] + delta <= 1.0 else -1.0
             x_next[i] += sign * delta
@@ -125,6 +130,8 @@ def morris_elementary_effects(
             f_next = float(np.atleast_1d(f(real_next[None, :]))[0])
             ees[t, i] = (f_next - f_curr) / (sign * delta)
             x_curr = x_next
+            order_idx += 1
+        t += 1
 
     mu_star = np.mean(np.abs(ees), axis=0)
     sigma = np.std(ees, axis=0)
@@ -168,19 +175,21 @@ def variance_decomposition_1d(
 
     var_total = float(Y.var()) + 1e-30
     S1 = np.zeros(d)
-    for i in range(d):
+    i = 0
+    while i < d:
         bins = np.linspace(bounds[i, 0], bounds[i, 1], n_levels + 1)
         bin_idx = np.clip(
             np.digitize(X[:, i], bins) - 1, 0, n_levels - 1,
         )
-        bin_means = np.zeros(n_levels)
-        bin_counts = np.zeros(n_levels)
-        for b in range(n_levels):
-            mask = bin_idx == b
-            if mask.any():
-                bin_means[b] = float(Y[mask].mean())
-                bin_counts[b] = int(mask.sum())
-        # weighted mean of bin means
+        bin_counts = np.bincount(bin_idx, minlength=n_levels).astype(np.float64)
+        bin_sums = np.bincount(bin_idx, weights=Y, minlength=n_levels)
+        bin_means = np.divide(
+            bin_sums,
+            bin_counts,
+            out=np.zeros(n_levels, dtype=np.float64),
+            where=bin_counts > 0,
+        )
+        # weighted bin-mean aggregation
         total = bin_counts.sum()
         if total > 0:
             global_mean = (bin_means * bin_counts / total).sum()
@@ -190,6 +199,7 @@ def variance_decomposition_1d(
         else:
             cond_var = 0.0
         S1[i] = float(cond_var / var_total)
+        i += 1
     return S1
 
 
@@ -226,16 +236,20 @@ def permutation_importance(
 
     d = X.shape[1]
     importance = np.zeros(d)
-    for i in range(d):
-        diffs = []
-        for _ in range(n_repeats):
+    i = 0
+    while i < d:
+        diffs = np.zeros(n_repeats, dtype=np.float64)
+        repeat_idx = 0
+        while repeat_idx < n_repeats:
             X_perm = X.copy()
             perm = rng.permutation(X.shape[0])
             X_perm[:, i] = X[perm, i]
             y_perm = np.atleast_1d(f(X_perm)).ravel()
             rmse_perm = float(np.sqrt(np.mean((y - y_perm) ** 2)))
-            diffs.append(rmse_perm - rmse_base)
+            diffs[repeat_idx] = rmse_perm - rmse_base
+            repeat_idx += 1
         importance[i] = float(np.mean(diffs))
+        i += 1
     return importance
 
 
