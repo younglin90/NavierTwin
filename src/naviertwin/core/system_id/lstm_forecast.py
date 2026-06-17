@@ -1,4 +1,4 @@
-"""LSTM forecaster — torch.nn.LSTM stub for univariate forecasting.
+"""LSTM forecaster — torch.nn.LSTM univariate forecast stub.
 
 Examples:
     >>> import pytest
@@ -14,7 +14,10 @@ from torch import nn
 
 class LSTMForecaster(nn.Module):
     def __init__(
-        self, input_dim: int = 1, hidden: int = 32, n_layers: int = 1,
+        self,
+        input_dim: int = 1,
+        hidden: int = 32,
+        n_layers: int = 1,
     ) -> None:
         super().__init__()
         self.lstm = nn.LSTM(input_dim, hidden, num_layers=n_layers, batch_first=True)
@@ -29,10 +32,12 @@ class LSTMForecaster(nn.Module):
         """x0: (B, T, input_dim); rollout n_steps autoregressively."""
         seq = x0
         out = []
-        for _ in range(n_steps):
+        step = 0
+        while step < n_steps:
             y = self.forward(seq)
             out.append(y)
             seq = torch.cat([seq[:, 1:, :], y.unsqueeze(1)], dim=1)
+            step += 1
         return torch.stack(out, dim=1)
 
 
