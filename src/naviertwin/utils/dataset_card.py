@@ -28,8 +28,12 @@ def dataset_card_md(
         parts += ["", "## Description", description]
     if schema:
         parts += ["", "## Schema"]
-        for k, v in schema.items():
+        items = list(schema.items())
+        idx = 0
+        while idx < len(items):
+            k, v = items[idx]
             parts.append(f"- `{k}`: {v}")
+            idx += 1
     return "\n".join(parts) + "\n"
 
 
