@@ -1,4 +1,4 @@
-"""Downloadable feature-pack support for heavyweight optional stacks.
+"""Downloadable feature-pack support used by heavyweight optional stacks.
 
 Feature packs are ZIP archives that contain a ``manifest.json`` and a ``site/``
 directory produced by ``pip install --target``.  The Windows setup wizard can
@@ -28,7 +28,7 @@ from naviertwin import __version__
 
 @dataclass(frozen=True)
 class FeaturePackSpec:
-    """Metadata for a downloadable optional feature pack."""
+    """Metadata describing a downloadable optional feature pack."""
 
     id: str
     name: str
@@ -57,7 +57,7 @@ FEATURE_PACKS: dict[str, FeaturePackSpec] = {
     "physicsnemo": FeaturePackSpec(
         id="physicsnemo",
         name="NVIDIA PhysicsNeMo Pack",
-        description="PhysicsNeMo integration for physics-informed CFD workflows.",
+        description="PhysicsNeMo integration supporting physics-informed CFD workflows.",
         modules=("torch", "physicsnemo"),
         # PyPI 패키지명은 ``nvidia-physicsnemo`` (Python import 이름은 ``physicsnemo``).
         # 2.0.0 부터 Python ≥ 3.11 만 지원하므로, 3.10 환경에서는 1.3.0 으로 fallback.
@@ -68,14 +68,14 @@ FEATURE_PACKS: dict[str, FeaturePackSpec] = {
     "serving": FeaturePackSpec(
         id="serving",
         name="Serving/API Pack",
-        description="FastAPI and uvicorn runtime for local REST serving.",
+        description="FastAPI and uvicorn runtime used by local REST serving.",
         modules=("fastapi", "uvicorn"),
         packages=("fastapi", "uvicorn"),
     ),
     "reporting": FeaturePackSpec(
         id="reporting",
         name="PDF Reporting Pack",
-        description="WeasyPrint runtime for PDF report generation.",
+        description="WeasyPrint runtime used by PDF report generation.",
         modules=("weasyprint",),
         packages=("weasyprint",),
     ),
@@ -153,7 +153,7 @@ def default_release_asset_url(
     version: str = __version__,
     repository: str = "younglin90/NavierTwin",
 ) -> str:
-    """Return the expected GitHub Release download URL for a feature pack."""
+    """Return the expected GitHub Release download URL of a feature pack."""
     spec = get_feature_pack_spec(pack_id)
     tag = f"v{version}"
     return (
@@ -171,20 +171,23 @@ def recommended_pack_for_modules(modules: tuple[str, ...] | list[str]) -> str | 
     """Return the first feature pack that can satisfy one of ``modules``."""
     if "physicsnemo" in modules:
         return "physicsnemo"
-    for module in modules:
+    module_idx = 0
+    while module_idx < len(modules):
+        module = modules[module_idx]
         pack_id = MODULE_TO_PACK.get(module)
         if pack_id:
             return pack_id
+        module_idx += 1
     return None
 
 
 def installed_pack_dir(pack_id: str, root: Path | None = None) -> Path:
-    """Return the installation directory for ``pack_id``."""
+    """Return the installation directory of ``pack_id``."""
     return (root or default_feature_pack_root()) / pack_id
 
 
 def installed_site_dir(pack_id: str, root: Path | None = None) -> Path:
-    """Return the installed ``site`` directory for ``pack_id``."""
+    """Return the installed ``site`` directory of ``pack_id``."""
     return installed_pack_dir(pack_id, root) / "site"
 
 
@@ -197,50 +200,75 @@ def activate_installed_feature_packs(root: Path | None = None) -> list[Path]:
     팩들은 정상 활성화된다.
     """
     activated: list[Path] = []
-    for pack_root in feature_pack_roots(root):
+    roots = feature_pack_roots(root)
+    root_idx = 0
+    while root_idx < len(roots):
+        pack_root = roots[root_idx]
         try:
             if not pack_root.exists():
+                root_idx += 1
                 continue
         except OSError:
+            root_idx += 1
             continue
         # glob 자체가 PermissionError 를 raise 할 수 있어서 iterdir 로 풀어서 처리.
         try:
             children = list(pack_root.iterdir())
         except OSError:
+            root_idx += 1
             continue
-        for child in sorted(children):
+        children = sorted(children)
+        child_idx = 0
+        while child_idx < len(children):
+            child = children[child_idx]
             try:
                 site_dir = child / "site"
                 if not site_dir.is_dir():
+                    child_idx += 1
                     continue
             except OSError:
+                child_idx += 1
                 continue
             site_text = str(site_dir)
             if site_text not in sys.path:
                 sys.path.insert(0, site_text)
             _activate_dll_paths(site_dir)
             activated.append(site_dir)
+            child_idx += 1
+        root_idx += 1
     return activated
 
 
 def _activate_dll_paths(site_dir: Path) -> None:
-    """Expose common native-library directories for feature-pack packages."""
+    """Expose common native-library directories used by feature-pack packages."""
     candidates = [site_dir, site_dir / "torch" / "lib", site_dir / "nvidia"]
-    existing = [path for path in candidates if path.exists()]
+    existing = []
+    candidate_idx = 0
+    while candidate_idx < len(candidates):
+        path = candidates[candidate_idx]
+        if path.exists():
+            existing.append(path)
+        candidate_idx += 1
     if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
         handles = []
-        for path in existing:
+        path_idx = 0
+        while path_idx < len(existing):
+            path = existing[path_idx]
             try:
                 handles.append(os.add_dll_directory(str(path)))  # type: ignore[attr-defined]
             except OSError:
-                continue
-        # Keep directory handles alive for the process lifetime.
+                pass
+            path_idx += 1
+        # Keep directory handles alive through the process lifetime.
         globals().setdefault("_DLL_DIRECTORY_HANDLES", []).extend(handles)
     current_path = os.environ.get("PATH", "")
-    for path in reversed(existing):
+    path_idx = len(existing) - 1
+    while path_idx >= 0:
+        path = existing[path_idx]
         path_text = str(path)
         if path_text not in current_path.split(os.pathsep):
             current_path = f"{path_text}{os.pathsep}{current_path}" if current_path else path_text
+        path_idx -= 1
     os.environ["PATH"] = current_path
 
 
@@ -253,17 +281,24 @@ def _path_is_dir_safe(path: Path) -> bool:
 
 
 def feature_pack_status(pack_id: str, root: Path | None = None) -> dict[str, Any]:
-    """Return installation and module availability status for one pack.
+    """Return installation and module availability status of one pack.
 
     site 디렉토리가 권한 부족으로 읽히지 않는 경우 ``unreadable_paths`` 와
     ``readable=False`` 가 함께 표시되어 UI 가 명확한 안내를 띄울 수 있다.
     """
     spec = get_feature_pack_spec(pack_id)
-    pack_dirs = [installed_pack_dir(pack_id, candidate) for candidate in feature_pack_roots(root)]
+    pack_dirs = []
+    roots = feature_pack_roots(root)
+    root_idx = 0
+    while root_idx < len(roots):
+        pack_dirs.append(installed_pack_dir(pack_id, roots[root_idx]))
+        root_idx += 1
 
     installed_dirs: list[Path] = []
     unreadable_dirs: list[str] = []
-    for pack_dir in pack_dirs:
+    pack_idx = 0
+    while pack_idx < len(pack_dirs):
+        pack_dir = pack_dirs[pack_idx]
         site_dir = pack_dir / "site"
         manifest_path = pack_dir / "manifest.json"
         # site/manifest 의 존재 검사 자체가 PermissionError 가능 → 권한 부족 표시.
@@ -272,15 +307,23 @@ def feature_pack_status(pack_id: str, root: Path | None = None) -> dict[str, Any
             manifest_ok = manifest_path.exists()
         except PermissionError:
             unreadable_dirs.append(str(pack_dir))
+            pack_idx += 1
             continue
         except OSError:
+            pack_idx += 1
             continue
         if site_ok and manifest_ok:
             installed_dirs.append(pack_dir)
+        pack_idx += 1
 
     pack_dir = installed_dirs[0] if installed_dirs else pack_dirs[0]
     manifest_path = pack_dir / "manifest.json"
-    modules = {module: _module_available(module) for module in spec.modules}
+    modules = {}
+    module_idx = 0
+    while module_idx < len(spec.modules):
+        module = spec.modules[module_idx]
+        modules[module] = _module_available(module)
+        module_idx += 1
     manifest: dict[str, Any] | None = None
     try:
         if manifest_path.exists():
@@ -295,18 +338,45 @@ def feature_pack_status(pack_id: str, root: Path | None = None) -> dict[str, Any
         "installed": bool(installed_dirs),
         "readable": not unreadable_dirs or bool(installed_dirs),
         "path": str(pack_dir),
-        "installed_paths": [str(path) for path in installed_dirs],
+        "installed_paths": _stringify_paths(installed_dirs),
         "unreadable_paths": unreadable_dirs,
         "manifest": manifest,
         "modules": modules,
-        "missing_modules": [name for name, ok in modules.items() if not ok],
+        "missing_modules": _missing_module_names(modules),
         "download_url": default_release_asset_url(pack_id),
     }
 
 
 def all_feature_pack_statuses(root: Path | None = None) -> list[dict[str, Any]]:
-    """Return status dictionaries for all known feature packs."""
-    return [feature_pack_status(pack_id, root) for pack_id in FEATURE_PACKS]
+    """Return status dictionaries of all known feature packs."""
+    statuses: list[dict[str, Any]] = []
+    pack_ids = list(FEATURE_PACKS)
+    pack_idx = 0
+    while pack_idx < len(pack_ids):
+        statuses.append(feature_pack_status(pack_ids[pack_idx], root))
+        pack_idx += 1
+    return statuses
+
+
+def _stringify_paths(paths: list[Path]) -> list[str]:
+    values: list[str] = []
+    path_idx = 0
+    while path_idx < len(paths):
+        values.append(str(paths[path_idx]))
+        path_idx += 1
+    return values
+
+
+def _missing_module_names(modules: dict[str, bool]) -> list[str]:
+    names: list[str] = []
+    items = list(modules.items())
+    item_idx = 0
+    while item_idx < len(items):
+        name, ok = items[item_idx]
+        if not ok:
+            names.append(name)
+        item_idx += 1
+    return names
 
 
 def download_feature_pack(
@@ -358,7 +428,15 @@ def install_feature_pack_archive(
             raise ValueError(f"feature pack id mismatch: {pack_id} != {expected_pack_id}")
         if pack_id not in FEATURE_PACKS:
             raise ValueError(f"unknown feature pack id: {pack_id}")
-        if not any(name.startswith("site/") for name in names):
+        has_site_payload = False
+        archive_names = list(names)
+        name_idx = 0
+        while name_idx < len(archive_names):
+            if archive_names[name_idx].startswith("site/"):
+                has_site_payload = True
+                break
+            name_idx += 1
+        if not has_site_payload:
             raise ValueError("feature pack archive missing site/ payload")
 
         install_dir = installed_pack_dir(pack_id, root)
@@ -416,7 +494,7 @@ def install_feature_pack_online(
         site_dir.mkdir()
         exit_code = _run_pip_install(package_list, site_dir, log_path, index_urls)
         if exit_code != 0:
-            raise RuntimeError(f"pip install failed for feature pack '{pack_id}' ({exit_code})")
+            raise RuntimeError(f"pip install failed in feature pack '{pack_id}' ({exit_code})")
 
         manifest = build_archive_manifest(pack_id)
         manifest.update(
@@ -520,8 +598,11 @@ def _run_pip_install(
         "--target",
         str(target_site),
     ]
-    for url in extra_index_urls:
+    url_idx = 0
+    while url_idx < len(extra_index_urls):
+        url = extra_index_urls[url_idx]
         args.extend(["--extra-index-url", url])
+        url_idx += 1
     args.extend(packages)
     if log_file is None:
         return int(pip_main(args) or 0)
@@ -642,11 +723,13 @@ def build_archive_manifest(pack_id: str, *, version: str = __version__) -> dict[
 def _verify_sha256(path: Path, expected: str) -> None:
     hasher = hashlib.sha256()
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+        chunk = handle.read(1024 * 1024)
+        while chunk:
             hasher.update(chunk)
+            chunk = handle.read(1024 * 1024)
     digest = hasher.hexdigest()
     if digest.lower() != expected.lower():
-        raise ValueError(f"SHA256 mismatch for {path}: {digest} != {expected}")
+        raise ValueError(f"SHA256 mismatch at {path}: {digest} != {expected}")
 
 
 def _module_available(module: str) -> bool:
