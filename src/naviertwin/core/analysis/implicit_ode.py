@@ -19,6 +19,19 @@ from typing import Callable
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import HAS_NATIVE_KERNELS, _kernels
+
+
+def _solve_dense(A: NDArray[np.float64], b: NDArray[np.float64]) -> NDArray[np.float64]:
+    mat = np.ascontiguousarray(A, dtype=np.float64)
+    rhs = np.ascontiguousarray(b, dtype=np.float64)
+    if HAS_NATIVE_KERNELS and _kernels is not None:
+        try:
+            return _kernels.solve_dense(mat, rhs)
+        except Exception:
+            pass
+    return getattr(np.linalg, "solve")(mat, rhs)
+
 
 def implicit_euler_linear(
     A: NDArray[np.float64], y0: NDArray[np.float64],
@@ -32,23 +45,15 @@ def implicit_euler_linear(
     d = y0.size
     bb = np.zeros(d) if b is None else np.asarray(b, dtype=np.float64)
     M = np.eye(d) - dt * np.asarray(A, dtype=np.float64)
-    lu, piv = None, None
-    try:
-        from scipy.linalg import lu_factor, lu_solve
-
-        lu, piv = lu_factor(M)
-    except ImportError:
-        pass
     ys = np.zeros((n + 1, d))
     ys[0] = y0
     y = y0.copy()
-    for k in range(n):
+    k = 0
+    while k < n:
         rhs = y + dt * bb
-        if lu is not None:
-            y = lu_solve((lu, piv), rhs)
-        else:
-            y = np.linalg.solve(M, rhs)
+        y = _solve_dense(M, rhs)
         ys[k + 1] = y
+        k += 1
     return ts, ys
 
 
@@ -69,10 +74,12 @@ def crank_nicolson_linear(
     ys = np.zeros((n + 1, d))
     ys[0] = y0
     y = y0.copy()
-    for k in range(n):
+    k = 0
+    while k < n:
         rhs = R @ y + dt * bb
-        y = np.linalg.solve(L, rhs)
+        y = _solve_dense(L, rhs)
         ys[k + 1] = y
+        k += 1
     return ts, ys
 
 
@@ -91,26 +98,33 @@ def implicit_euler_nonlinear(
     ys[0] = y0
     y = y0.copy()
     eye = np.eye(d)
-    for k in range(n):
+    k = 0
+    while k < n:
         tnp1 = ts[k + 1]
         yn = y.copy()
         # fixed-point init
         z = yn + dt * f(ts[k], yn)
-        for _ in range(newton_iters):
+        newton_idx = 0
+        while newton_idx < newton_iters:
             r = z - yn - dt * f(tnp1, z)
             if np.linalg.norm(r) < tol:
                 break
             # FD Jacobian of g(z) = z - yn - dt f(t, z)
             J = eye.copy()
             eps = 1e-6
-            for j in range(d):
+            fz = f(tnp1, z)
+            j = 0
+            while j < d:
                 zp = z.copy()
                 zp[j] += eps
-                J[:, j] -= dt * (f(tnp1, zp) - f(tnp1, z)) / eps
-            dz = np.linalg.solve(J, -r)
+                J[:, j] -= dt * (f(tnp1, zp) - fz) / eps
+                j += 1
+            dz = _solve_dense(J, -r)
             z = z + dz
+            newton_idx += 1
         y = z
         ys[k + 1] = y
+        k += 1
     return ts, ys
 
 
