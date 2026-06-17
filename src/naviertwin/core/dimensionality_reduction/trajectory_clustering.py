@@ -64,9 +64,8 @@ def window_kmeans(
         raise ValueError(f"n_clusters > 0, got {n_clusters}")
 
     n_win = n_t - window + 1
-    features = np.zeros((n_win, n_modes))
-    for i in range(n_win):
-        features[i] = coeffs[i : i + window].mean(axis=0)
+    csum = np.vstack([np.zeros((1, n_modes)), np.cumsum(coeffs, axis=0)])
+    features = (csum[window:] - csum[:n_win]) / window
 
     return _kmeans(features, n_clusters, max_iter=max_iter, seed=seed)
 
@@ -86,14 +85,17 @@ def _kmeans(
     # k-means++
     centers = np.zeros((k, d))
     centers[0] = X[rng.integers(n)]
-    for c in range(1, k):
+    c = 1
+    while c < k:
         d_min = np.min(np.linalg.norm(X[:, None, :] - centers[None, :c, :], axis=2), axis=1)
         prob = d_min ** 2
         prob /= prob.sum() + 1e-30
         centers[c] = X[rng.choice(n, p=prob)]
+        c += 1
 
     labels = np.zeros(n, dtype=np.intp)
-    for _ in range(max_iter):
+    iter_idx = 0
+    while iter_idx < max_iter:
         # assignment
         dists = np.linalg.norm(X[:, None, :] - centers[None, :, :], axis=2)
         new_labels = np.argmin(dists, axis=1).astype(np.intp)
@@ -101,10 +103,12 @@ def _kmeans(
             break
         labels = new_labels
         # update
-        for c in range(k):
-            mask = labels == c
-            if mask.any():
-                centers[c] = X[mask].mean(axis=0)
+        sums = np.zeros_like(centers)
+        np.add.at(sums, labels, X)
+        counts = np.bincount(labels, minlength=k)
+        nonempty = counts > 0
+        centers[nonempty] = sums[nonempty] / counts[nonempty, np.newaxis]
+        iter_idx += 1
 
     return labels, centers
 
@@ -134,29 +138,25 @@ def trajectory_distance_matrix(
 
     D = np.zeros((N, N))
     if metric == "euclidean_avg":
-        means = np.array([t.mean(axis=0) for t in trajectories])
-        for i in range(N):
-            for j in range(i + 1, N):
-                D[i, j] = float(np.linalg.norm(means[i] - means[j]))
-                D[j, i] = D[i, j]
+        means = np.stack(tuple(map(lambda t: t.mean(axis=0), trajectories)))
+        D = np.linalg.norm(means[:, np.newaxis, :] - means[np.newaxis, :, :], axis=2)
     elif metric == "endpoint":
-        ends = np.array([t[-1] for t in trajectories])
-        for i in range(N):
-            for j in range(i + 1, N):
-                D[i, j] = float(np.linalg.norm(ends[i] - ends[j]))
-                D[j, i] = D[i, j]
+        ends = np.stack(tuple(map(lambda t: t[-1], trajectories)))
+        D = np.linalg.norm(ends[:, np.newaxis, :] - ends[np.newaxis, :, :], axis=2)
     else:  # frobenius
         # 모든 길이가 같다고 가정
         L = trajectories[0].shape
-        for t in trajectories:
+        idx = 0
+        while idx < N:
+            t = trajectories[idx]
             if t.shape != L:
                 raise ValueError(
-                    f"trajectories must all have same shape for frobenius; got {t.shape} vs {L}"
+                    f"trajectories must all have same shape with frobenius metric; got {t.shape} vs {L}"
                 )
-        for i in range(N):
-            for j in range(i + 1, N):
-                D[i, j] = float(np.linalg.norm(trajectories[i] - trajectories[j]))
-                D[j, i] = D[i, j]
+            idx += 1
+        arr = np.stack(trajectories)
+        diff = arr[:, np.newaxis, ...] - arr[np.newaxis, :, ...]
+        D = np.linalg.norm(diff.reshape(N, N, -1), axis=2)
     return D
 
 
@@ -189,26 +189,25 @@ def cluster_silhouette(
         return 0.0
 
     n = X.shape[0]
-    s_arr = np.zeros(n)
-    for i in range(n):
-        same = labels == labels[i]
-        same[i] = False
-        if same.sum() == 0:
-            continue
-        a_i = float(np.mean(np.linalg.norm(X[same] - X[i], axis=1)))
-        # b_i: 다른 클러스터 중 평균 거리 최소
-        b_vals = []
-        for c in unique:
-            if c == labels[i]:
-                continue
-            other = labels == c
-            if other.sum() == 0:
-                continue
-            b_vals.append(np.mean(np.linalg.norm(X[other] - X[i], axis=1)))
-        if not b_vals:
-            continue
-        b_i = float(min(b_vals))
-        s_arr[i] = (b_i - a_i) / max(a_i, b_i, 1e-30)
+    dists = np.linalg.norm(X[:, np.newaxis, :] - X[np.newaxis, :, :], axis=2)
+    same = labels[:, np.newaxis] == labels[np.newaxis, :]
+    same_counts = same.sum(axis=1) - 1
+    a_vals = np.divide(
+        (dists * same).sum(axis=1),
+        same_counts,
+        out=np.zeros(n, dtype=np.float64),
+        where=same_counts > 0,
+    )
+    cluster_mask = labels[:, np.newaxis] == unique[np.newaxis, :]
+    cluster_counts = cluster_mask.sum(axis=0)
+    cluster_means = (dists @ cluster_mask) / cluster_counts[np.newaxis, :]
+    own = labels[:, np.newaxis] == unique[np.newaxis, :]
+    cluster_means[own] = np.inf
+    b_vals = np.min(cluster_means, axis=1)
+    valid = (same_counts > 0) & np.isfinite(b_vals)
+    denom = np.maximum(np.maximum(a_vals, b_vals), 1e-30)
+    s_arr = np.zeros(n, dtype=np.float64)
+    s_arr[valid] = (b_vals[valid] - a_vals[valid]) / denom[valid]
 
     return float(s_arr.mean())
 
@@ -228,14 +227,10 @@ def label_runs(
     if len(labels) == 0:
         return []
     runs: list[tuple[int, int, int]] = []
-    current = int(labels[0])
-    start = 0
-    for i in range(1, len(labels)):
-        if labels[i] != current:
-            runs.append((current, start, i))
-            current = int(labels[i])
-            start = i
-    runs.append((current, start, len(labels)))
+    changes = np.flatnonzero(labels[1:] != labels[:-1]) + 1
+    starts = np.concatenate(([0], changes))
+    ends = np.concatenate((changes, [len(labels)]))
+    runs.extend(zip(map(int, labels[starts]), map(int, starts), map(int, ends)))
     return runs
 
 
