@@ -52,19 +52,26 @@ def set_dotted(cfg: dict[str, Any], dotted: str, value: Any) -> None:
     """cfg["a"]["b"]["c"] = value using 'a.b.c' notation."""
     keys = dotted.split(".")
     cur = cfg
-    for k in keys[:-1]:
+    key_idx = 0
+    while key_idx < len(keys) - 1:
+        k = keys[key_idx]
         if k not in cur or not isinstance(cur[k], dict):
             cur[k] = {}
         cur = cur[k]
+        key_idx += 1
     cur[keys[-1]] = value
 
 
 def get_dotted(cfg: dict[str, Any], dotted: str, default: Any = None) -> Any:
     cur: Any = cfg
-    for k in dotted.split("."):
+    keys = dotted.split(".")
+    key_idx = 0
+    while key_idx < len(keys):
+        k = keys[key_idx]
         if not isinstance(cur, dict) or k not in cur:
             return default
         cur = cur[k]
+        key_idx += 1
     return cur
 
 
@@ -73,12 +80,17 @@ def merge_overrides(
 ) -> dict[str, Any]:
     """'key=value' 또는 'nested.key=value' 리스트를 cfg 에 적용."""
     out: dict[str, Any] = json.loads(json.dumps(cfg))  # deep copy (JSON-safe)
-    for item in overrides or []:
+    items = overrides or []
+    item_idx = 0
+    while item_idx < len(items):
+        item = items[item_idx]
         if "=" not in item:
             logger.warning("override 무시 (no '='): %s", item)
+            item_idx += 1
             continue
         key, _, val = item.partition("=")
         set_dotted(out, key.strip(), _parse_scalar(val))
+        item_idx += 1
     return out
 
 
@@ -154,9 +166,22 @@ def save_config(cfg: dict[str, Any], path: str | Path) -> Path:
 
 def _write_toml(cfg: dict[str, Any], f: Any, prefix: str = "") -> None:
     """단순 TOML 직접 출력 (중첩 dict 는 섹션)."""
-    scalars = {k: v for k, v in cfg.items() if not isinstance(v, dict)}
-    sections = {k: v for k, v in cfg.items() if isinstance(v, dict)}
-    for k, v in scalars.items():
+    scalars: dict[str, Any] = {}
+    sections: dict[str, Any] = {}
+    items = list(cfg.items())
+    item_idx = 0
+    while item_idx < len(items):
+        k, v = items[item_idx]
+        if isinstance(v, dict):
+            sections[k] = v
+        else:
+            scalars[k] = v
+        item_idx += 1
+
+    scalar_items = list(scalars.items())
+    scalar_idx = 0
+    while scalar_idx < len(scalar_items):
+        k, v = scalar_items[scalar_idx]
         if isinstance(v, str):
             f.write(f'{k} = "{v}"\n')
         elif isinstance(v, bool):
@@ -165,10 +190,15 @@ def _write_toml(cfg: dict[str, Any], f: Any, prefix: str = "") -> None:
             pass
         else:
             f.write(f"{k} = {v}\n")
-    for name, sub in sections.items():
+        scalar_idx += 1
+    section_items = list(sections.items())
+    section_idx = 0
+    while section_idx < len(section_items):
+        name, sub = section_items[section_idx]
         full = f"{prefix}{name}" if prefix else name
         f.write(f"\n[{full}]\n")
         _write_toml(sub, f, prefix=full + ".")
+        section_idx += 1
 
 
 __all__ = [
