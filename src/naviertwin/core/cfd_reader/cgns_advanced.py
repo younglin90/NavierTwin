@@ -24,24 +24,41 @@ def has_h5py() -> bool:
 
 
 def iter_zones(path: str | Path) -> Iterator[tuple[str, str, dict[str, Any]]]:
-    """yield (base_name, zone_name, attrs) for each zone."""
+    """Yield (base_name, zone_name, attrs) per zone."""
     if not has_h5py():
         raise ImportError("h5py not installed")
     import h5py
     with h5py.File(str(path), "r") as f:
-        for base_name in f:
+        base_names = list(f.keys())
+        base_idx = 0
+        while base_idx < len(base_names):
+            base_name = base_names[base_idx]
             base = f[base_name]
             if not isinstance(base, h5py.Group):
+                base_idx += 1
                 continue
-            for zone_name in base:
+            zone_names = list(base.keys())
+            zone_idx = 0
+            while zone_idx < len(zone_names):
+                zone_name = zone_names[zone_idx]
                 zone = base[zone_name]
                 if isinstance(zone, h5py.Group):
                     attrs = dict(zone.attrs)
                     yield base_name, zone_name, attrs
+                zone_idx += 1
+            base_idx += 1
 
 
 def list_zones(path: str | Path) -> list[tuple[str, str]]:
-    return [(b, z) for b, z, _ in iter_zones(path)]
+    zones: list[tuple[str, str]] = []
+    zone_iter = iter_zones(path)
+    while True:
+        try:
+            base_name, zone_name, _ = next(zone_iter)
+        except StopIteration:
+            break
+        zones.append((base_name, zone_name))
+    return zones
 
 
 __all__ = ["has_h5py", "iter_zones", "list_zones"]
