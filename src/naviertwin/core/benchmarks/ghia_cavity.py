@@ -1,10 +1,10 @@
 """Ghia, Ghia & Shin (1982) lid-driven cavity reference data.
 
 Tabulated centerline velocity profiles from
-"High-Re Solutions for Incompressible Flow Using the Navier-Stokes Equations
+"High-Re Solutions using the Incompressible Flow Navier-Stokes Equations
 and a Multigrid Method", J. Comput. Phys. 48, 387-411 (1982).
 
-Only Re = 100 is bundled (public, single table excerpt) — sufficient for V&V
+Only Re = 100 is bundled (public, single table excerpt) — enough during V&V
 of the in-tree projection solver. For higher Re, fetch the full paper data
 into a separate dataset.
 
@@ -20,7 +20,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
-# y / L,  u / U_lid  along the vertical centerline (x=0.5) for Re=100
+# y / L,  u / U_lid  along the vertical centerline (x=0.5), Re=100
 _GHIA_RE100 = np.array([
     [1.0000, 1.00000],
     [0.9766, 0.84123],
@@ -43,7 +43,7 @@ _GHIA_RE100 = np.array([
 
 
 def ghia_u_centerline(Re: float = 100) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-    """Returns (y/L, u/U_lid) for the vertical-centerline u-profile."""
+    """Returns (y/L, u/U_lid) on the vertical-centerline u-profile."""
     if int(Re) != 100:
         raise ValueError(f"Only Re=100 bundled, got {Re}")
     return _GHIA_RE100[:, 0].copy(), _GHIA_RE100[:, 1].copy()
