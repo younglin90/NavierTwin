@@ -23,11 +23,20 @@ def fit_var(X: NDArray[np.float64], p: int = 1) -> list[NDArray[np.float64]]:
     X = np.asarray(X, dtype=np.float64)
     T, d = X.shape
     Y = X[p:]                 # (T-p, d)
-    Z_blocks = [X[p - k - 1:T - k - 1] for k in range(p)]
+    Z_blocks = []
+    k = 0
+    while k < p:
+        Z_blocks.append(X[p - k - 1:T - k - 1])
+        k += 1
     Z = np.hstack(Z_blocks)   # (T-p, p*d)
     A_full, *_ = np.linalg.lstsq(Z, Y, rcond=None)
     A_full = A_full.T  # (d, p*d)
-    return [A_full[:, k * d:(k + 1) * d] for k in range(p)]
+    blocks = []
+    k = 0
+    while k < p:
+        blocks.append(A_full[:, k * d:(k + 1) * d])
+        k += 1
+    return blocks
 
 
 __all__ = ["fit_var"]
