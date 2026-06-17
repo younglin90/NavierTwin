@@ -1,4 +1,4 @@
-"""Flow-analysis public API for customer-facing post-processing workflows."""
+"""Flow-analysis public API covering customer-facing post-processing workflows."""
 
 from __future__ import annotations
 
@@ -154,5 +154,5 @@ def __getattr__(name: str) -> Any:
 
 
 def __dir__() -> list[str]:
-    """Return stable public members for autocomplete and Sphinx."""
+    """Return stable public members used by autocomplete and Sphinx."""
     return sorted([*globals(), *__all__])
