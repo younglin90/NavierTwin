@@ -154,19 +154,27 @@ class BoTorchBayesianOpt:
         rng = np.random.default_rng(self.seed)
 
         X_init = self._sample(self.n_initial, rng)
-        for x in X_init:
+        init_idx = 0
+        while init_idx < X_init.shape[0]:
+            x = X_init[init_idx]
             self.X_.append(x)
             self.y_.append(float(f(x)))
+            init_idx += 1
 
-        for _ in range(self.max_iter):
+        iter_idx = 0
+        while iter_idx < self.max_iter:
             X_arr = np.vstack(self.X_)
             y_arr = np.asarray(self.y_, dtype=np.float64)
             gp = self._fit_gp(X_arr, y_arr)
             X_cand = self._optimize_af(gp, float(np.min(y_arr)))
-            for x_new in X_cand:
+            cand_idx = 0
+            while cand_idx < X_cand.shape[0]:
+                x_new = X_cand[cand_idx]
                 y_new = float(f(x_new))
                 self.X_.append(x_new)
                 self.y_.append(y_new)
+                cand_idx += 1
+            iter_idx += 1
 
         y_arr = np.asarray(self.y_, dtype=np.float64)
         idx = int(np.argmin(y_arr))
