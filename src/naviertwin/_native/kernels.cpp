@@ -4216,6 +4216,52 @@ static py::array_t<double> expected_improvement_native(ArrayD mu, ArrayD sigma, 
     return out;
 }
 
+static py::array_t<double> r_adapt_1d_native(ArrayD x_in, ArrayD weights, int n_iter) {
+    if (x_in.ndim() != 1 || weights.ndim() != 1 || x_in.shape(0) != weights.shape(0)) {
+        throw std::invalid_argument("x and weights must be matching 1D arrays");
+    }
+    const py::ssize_t n = x_in.shape(0);
+    std::vector<double> x(x_in.data(), x_in.data() + n);
+    const double* w = weights.data();
+    if (n == 0) {
+        return py::array_t<double>({static_cast<py::ssize_t>(0)});
+    }
+    std::vector<double> cw(static_cast<std::size_t>(n));
+    std::vector<double> x_new(static_cast<std::size_t>(n));
+    for (int iter = 0; iter < n_iter; ++iter) {
+        cw[0] = 0.0;
+        for (py::ssize_t i = 1; i < n; ++i) {
+            cw[static_cast<std::size_t>(i)] = cw[static_cast<std::size_t>(i - 1)] +
+                0.5 * (w[i - 1] + w[i]) * (x[static_cast<std::size_t>(i)] - x[static_cast<std::size_t>(i - 1)]);
+        }
+        const double total = cw[static_cast<std::size_t>(n - 1)];
+        py::ssize_t interval = 0;
+        for (py::ssize_t t_idx = 0; t_idx < n; ++t_idx) {
+            const double target = (n == 1) ? 0.0 : total * static_cast<double>(t_idx) / static_cast<double>(n - 1);
+            while (interval < n - 2 && cw[static_cast<std::size_t>(interval + 1)] < target) {
+                ++interval;
+            }
+            if (target <= cw[0]) {
+                x_new[static_cast<std::size_t>(t_idx)] = x[0];
+            } else if (target >= total) {
+                x_new[static_cast<std::size_t>(t_idx)] = x[static_cast<std::size_t>(n - 1)];
+            } else {
+                const double left = cw[static_cast<std::size_t>(interval)];
+                const double right = cw[static_cast<std::size_t>(interval + 1)];
+                const double frac = (target - left) / (right - left);
+                x_new[static_cast<std::size_t>(t_idx)] = x[static_cast<std::size_t>(interval)] +
+                    frac * (x[static_cast<std::size_t>(interval + 1)] - x[static_cast<std::size_t>(interval)]);
+            }
+        }
+        x_new[0] = x[0];
+        x_new[static_cast<std::size_t>(n - 1)] = x[static_cast<std::size_t>(n - 1)];
+        x.swap(x_new);
+    }
+    auto out = py::array_t<double>({n});
+    std::copy(x.begin(), x.end(), out.mutable_data());
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -4386,5 +4432,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("binary_erosion_2d", &binary_erosion_2d_native, py::arg("mask"), py::arg("iterations") = 1, py::arg("connectivity") = 1);
     m.def("connected_components_2d", &connected_components_2d_native, py::arg("mask"), py::arg("connectivity") = 1);
     m.def("expected_improvement", &expected_improvement_native, py::arg("mu"), py::arg("sigma"), py::arg("y_best"), py::arg("xi") = 0.0);
+    m.def("r_adapt_1d", &r_adapt_1d_native, py::arg("x"), py::arg("weights"), py::arg("n_iter") = 20);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
