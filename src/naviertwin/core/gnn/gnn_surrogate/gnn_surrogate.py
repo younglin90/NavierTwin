@@ -95,21 +95,31 @@ class GNNSurrogate(BaseOperator):
 
         layers: list[tuple[int, int]] = []
         prev = self.in_dim
-        for _ in range(self.n_layers - 1):
+        layer_idx = 0
+        while layer_idx < self.n_layers - 1:
             layers.append((prev, self.hidden))
             prev = self.hidden
+            layer_idx += 1
         layers.append((prev, self.out_dim))
 
         class _GCN(nn.Module):
             def __init__(self) -> None:
                 super().__init__()
-                self.convs = nn.ModuleList([GCNConv(a, b) for a, b in layers])
+                convs = nn.ModuleList()
+                conv_idx = 0
+                while conv_idx < len(layers):
+                    a, b = layers[conv_idx]
+                    convs.append(GCNConv(a, b))
+                    conv_idx += 1
+                self.convs = convs
 
             def forward(self, x: Any, edge_index: Any) -> Any:
-                for i, conv in enumerate(self.convs):
-                    x = conv(x, edge_index)
-                    if i < len(self.convs) - 1:
+                conv_idx = 0
+                while conv_idx < len(self.convs):
+                    x = self.convs[conv_idx](x, edge_index)
+                    if conv_idx < len(self.convs) - 1:
                         x = torch.relu(x)
+                    conv_idx += 1
                 return x
 
         return _GCN()
@@ -137,20 +147,24 @@ class GNNSurrogate(BaseOperator):
         Yt = torch.tensor(Y, device=self._device)
 
         self.train_losses_ = []
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             epoch_loss = 0.0
-            # 각 샘플을 개별 forward (동일 edge_index 공유)
-            # 미니배치가 크지 않으면 이 방식이 단순 & 충분
+            # Each sample shares edge_index.
             order = np.random.permutation(len(X))
-            for i in order:
+            order_idx = 0
+            while order_idx < len(order):
+                i = order[order_idx]
                 optim.zero_grad()
                 pred = self._model(Xt[i], self._edge)
                 loss = loss_fn(pred, Yt[i])
                 loss.backward()
                 optim.step()
                 epoch_loss += float(loss.item())
+                order_idx += 1
             epoch_loss /= max(len(X), 1)
             self.train_losses_.append(epoch_loss)
+            epoch_idx += 1
 
         self.n_epochs = self.max_epochs
         self.is_fitted = True
@@ -180,9 +194,11 @@ class GNNSurrogate(BaseOperator):
         preds: list[np.ndarray] = []
         xt = torch.tensor(x, device=self._device)
         with torch.no_grad():
-            for i in range(x.shape[0]):
+            i = 0
+            while i < x.shape[0]:
                 out = self._model(xt[i], edge_t)
                 preds.append(out.cpu().numpy())
+                i += 1
         arr = np.stack(preds)
         return arr[0] if squeeze else arr
 
