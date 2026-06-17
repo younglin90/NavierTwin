@@ -58,14 +58,21 @@ def _build_tucker_spectral_conv_2d(
             def _new(shape: tuple[int, ...]) -> Any:
                 return nn.Parameter(scale * torch.randn(*shape))
 
-            # 두 "코너" 블록 (FNO 2D 스타일) × 실/허수 = 4 쌍
-            for name in ("A", "B"):  # A=[:m1,:m2], B=[-m1:,:m2]
-                for part in ("r", "i"):
+            names = ("A", "B")  # A=[:m1,:m2], B=[-m1:,:m2]
+            parts = ("r", "i")
+            name_idx = 0
+            while name_idx < len(names):
+                name = names[name_idx]
+                part_idx = 0
+                while part_idx < len(parts):
+                    part = parts[part_idx]
                     setattr(self, f"core_{name}_{part}", _new((r, r, r, r)))
                     setattr(self, f"Ui_{name}_{part}", _new((in_c, r)))
                     setattr(self, f"Uo_{name}_{part}", _new((out_c, r)))
                     setattr(self, f"U1_{name}_{part}", _new((modes1, r)))
                     setattr(self, f"U2_{name}_{part}", _new((modes2, r)))
+                    part_idx += 1
+                name_idx += 1
 
         def _reassemble(self, name: str) -> Any:
             """Tucker 인자 → 복소 텐서 (in_c, out_c, modes1, modes2)."""
@@ -174,22 +181,26 @@ class TFNO2D(BaseOperator):
             def __init__(self) -> None:
                 super().__init__()
                 self.lift = nn.Linear(in_c, W)
-                self.specs = nn.ModuleList(
-                    [
-                        _build_tucker_spectral_conv_2d(W, W, M1, M2, R)
-                        for _ in range(n_layers)
-                    ]
-                )
-                self.ws = nn.ModuleList(
-                    [nn.Conv2d(W, W, 1) for _ in range(n_layers)]
-                )
+                specs = nn.ModuleList()
+                ws = nn.ModuleList()
+                layer_idx = 0
+                while layer_idx < n_layers:
+                    specs.append(_build_tucker_spectral_conv_2d(W, W, M1, M2, R))
+                    ws.append(nn.Conv2d(W, W, 1))
+                    layer_idx += 1
+                self.specs = specs
+                self.ws = ws
                 self.proj1 = nn.Linear(W, 4 * W)
                 self.proj2 = nn.Linear(4 * W, out_c)
 
             def forward(self, x: Any) -> Any:
                 x = self.lift(x).permute(0, 3, 1, 2)
-                for sp, w in zip(self.specs, self.ws):
-                    x = torch.nn.functional.gelu(sp(x) + w(x))
+                layer_idx = 0
+                while layer_idx < len(self.specs):
+                    x = torch.nn.functional.gelu(
+                        self.specs[layer_idx](x) + self.ws[layer_idx](x)
+                    )
+                    layer_idx += 1
                 x = x.permute(0, 2, 3, 1)
                 x = torch.nn.functional.gelu(self.proj1(x))
                 return self.proj2(x)
@@ -216,9 +227,15 @@ class TFNO2D(BaseOperator):
             shuffle=True,
         )
         self.train_losses_ = []
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             epoch_loss = 0.0
-            for xb, yb in loader:
+            batches = iter(loader)
+            while True:
+                try:
+                    xb, yb = next(batches)
+                except StopIteration:
+                    break
                 xb = xb.to(self._device)
                 yb = yb.to(self._device)
                 optim.zero_grad()
@@ -229,6 +246,7 @@ class TFNO2D(BaseOperator):
                 epoch_loss += float(loss.item()) * xb.shape[0]
             epoch_loss /= max(len(X), 1)
             self.train_losses_.append(epoch_loss)
+            epoch_idx += 1
 
         self.n_epochs = self.max_epochs
         self.is_fitted = True
@@ -254,7 +272,7 @@ class TFNO2D(BaseOperator):
         """현재 모델 파라미터 총수 (fit 이후에만 정확)."""
         if self._model is None:
             return 0
-        return sum(p.numel() for p in self._model.parameters())
+        return sum(map(lambda p: p.numel(), self._model.parameters()))
 
 
 __all__ = ["TFNO2D"]
