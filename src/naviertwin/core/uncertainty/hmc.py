@@ -22,13 +22,10 @@ from numpy.typing import NDArray
 def _fd_grad(
     f: Callable[[NDArray], float], x: NDArray, eps: float = 1e-5,
 ) -> NDArray:
-    g = np.zeros_like(x)
     f0 = f(x)
-    for i in range(x.size):
-        xp = x.copy()
-        xp[i] += eps
-        g[i] = (f(xp) - f0) / eps
-    return g
+    perturbed = x[None, :] + eps * np.eye(x.size, dtype=np.float64)
+    values = np.fromiter(map(f, perturbed), dtype=np.float64, count=x.size)
+    return (values - f0) / eps
 
 
 def hmc(
@@ -44,16 +41,19 @@ def hmc(
     out = np.zeros((n, d))
     grad = grad if grad is not None else (lambda x: _fd_grad(log_prob, x))
 
-    for i in range(n):
+    i = 0
+    while i < n:
         p = rng.standard_normal(d)
         q_new = q.copy()
         p_new = p.copy()
         # leapfrog
         p_new = p_new + 0.5 * step * grad(q_new)
-        for step_i in range(L):
+        step_i = 0
+        while step_i < L:
             q_new = q_new + step * p_new
             if step_i < L - 1:
                 p_new = p_new + step * grad(q_new)
+            step_i += 1
         p_new = p_new + 0.5 * step * grad(q_new)
         p_new = -p_new
 
@@ -62,6 +62,7 @@ def hmc(
         if np.log(rng.random()) < (current_H - new_H):
             q = q_new
         out[i] = q
+        i += 1
     return out
 
 
