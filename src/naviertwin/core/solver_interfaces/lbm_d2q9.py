@@ -71,8 +71,20 @@ class LBMD2Q9:
 
     def _stream(self) -> None:
         """Streaming step — 주기 경계 (np.roll)."""
-        for k in range(9):
-            self.f[k] = np.roll(self.f[k], shift=(int(_CY[k]), int(_CX[k])), axis=(0, 1))
+        self.f = np.stack(
+            (
+                self.f[0],
+                np.roll(self.f[1], shift=(0, 1), axis=(0, 1)),
+                np.roll(self.f[2], shift=(1, 0), axis=(0, 1)),
+                np.roll(self.f[3], shift=(0, -1), axis=(0, 1)),
+                np.roll(self.f[4], shift=(-1, 0), axis=(0, 1)),
+                np.roll(self.f[5], shift=(1, 1), axis=(0, 1)),
+                np.roll(self.f[6], shift=(1, -1), axis=(0, 1)),
+                np.roll(self.f[7], shift=(-1, -1), axis=(0, 1)),
+                np.roll(self.f[8], shift=(-1, 1), axis=(0, 1)),
+            ),
+            axis=0,
+        )
 
     def _collide(self) -> None:
         """LBGK 충돌 + macroscopic 재계산."""
@@ -99,11 +111,13 @@ class LBMD2Q9:
     ) -> NDArray[np.float64]:
         """스냅샷 리스트 반환: shape (n_records, ny, nx, 3) [rho, ux, uy]."""
         snaps: list[NDArray[np.float64]] = []
-        for t in range(1, n_steps + 1):
+        t = 1
+        while t <= n_steps:
             self.step()
             if t % record_every == 0:
                 snap = np.stack([self.rho.copy(), self.ux.copy(), self.uy.copy()], axis=-1)
                 snaps.append(snap)
+            t += 1
         logger.info(
             "LBM D2Q9 완료: nx=%d ny=%d tau=%.3f 스텝=%d 기록=%d",
             self.nx, self.ny, self.tau, n_steps, len(snaps),
