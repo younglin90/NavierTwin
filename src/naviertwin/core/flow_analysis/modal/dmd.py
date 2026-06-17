@@ -240,15 +240,11 @@ class DMDAnalyzer:
         eigs = self.eigenvalues         # (n_modes,)
         amps = self._dmd.amplitudes     # (n_modes,)
         modes = self.modes              # (n_features, n_modes)
+        t = np.asarray(t, dtype=np.float64)
 
         # 각 시간 t에서 재구성: Σ_r amplitude_r * mode_r * λ_r^(t/dt)
-        n_features = modes.shape[0]
-        n_times = len(t)
-        field = np.zeros((n_features, n_times), dtype=np.complex128)
-
-        for i, ti in enumerate(t):
-            exponents = eigs ** (ti / self.dt)  # (n_modes,)
-            field[:, i] = modes @ (amps * exponents)
+        exponents = eigs[:, np.newaxis] ** (t[np.newaxis, :] / self.dt)
+        field = modes @ (amps[:, np.newaxis] * exponents)
 
         return np.real(field).astype(np.float64)
 
