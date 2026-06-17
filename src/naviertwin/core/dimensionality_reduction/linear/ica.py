@@ -22,6 +22,7 @@ Examples:
 from __future__ import annotations
 
 import numpy as np
+from numpy.linalg import svd as _svd
 from numpy.typing import NDArray
 
 from naviertwin.utils.logger import get_logger
@@ -53,7 +54,7 @@ class FastICA:
         self.mean_ = X.mean(axis=0)
         Xc = X - self.mean_
         # PCA whitening
-        U, s, Vt = np.linalg.svd(Xc, full_matrices=False)
+        U, s, Vt = _svd(Xc, full_matrices=False)
         k = self.n_components
         self.whitening_ = (Vt[:k].T / (s[:k] + 1e-12)) * np.sqrt(Xc.shape[0])
         return Xc @ self.whitening_
@@ -91,23 +92,21 @@ class FastICA:
             dgx = 1.0 - gx ** 2
             return gx, dgx
 
-        for _ in range(self.max_iter):
-            W_new = np.zeros_like(W)
-            for i in range(n):
-                w = W[i]
-                wz = Z @ w
-                gw, dgw = g(wz)
-                w_new = (Z * gw[:, None]).mean(axis=0) - dgw.mean() * w
-                W_new[i] = w_new
+        iteration = 0
+        while iteration < self.max_iter:
+            wz = Z @ W.T
+            gw, dgw = g(wz)
+            W_new = (gw.T @ Z) / Z.shape[0] - dgw.mean(axis=0)[:, None] * W
 
             # Symmetric decorrelation
-            U, s, Vt = np.linalg.svd(W_new)
+            U, s, Vt = _svd(W_new)
             W_new = U @ Vt
 
             if np.max(np.abs(np.abs(np.sum(W_new * W, axis=1)) - 1.0)) < self.tol:
                 W = W_new
                 break
             W = W_new
+            iteration += 1
 
         self.W_ = W @ self.whitening_.T  # original-space unmixing
         self.is_fitted = True
