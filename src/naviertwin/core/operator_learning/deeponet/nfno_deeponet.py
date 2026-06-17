@@ -144,9 +144,15 @@ class NFNODeepONet(BaseOperator):
             shuffle=True,
         )
         self.train_losses_ = []
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             epoch = 0.0
-            for bxb, bub, yb in loader:
+            batches = iter(loader)
+            while True:
+                try:
+                    bxb, bub, yb = next(batches)
+                except StopIteration:
+                    break
                 bxb = bxb.to(self._device)
                 bub = bub.to(self._device)
                 yb = yb.to(self._device)
@@ -160,6 +166,7 @@ class NFNODeepONet(BaseOperator):
                 epoch += float(loss.item()) * bxb.shape[0]
             epoch /= max(len(Bx), 1)
             self.train_losses_.append(epoch)
+            epoch_idx += 1
 
         self._trunk_cache = T
         self.is_fitted = True
