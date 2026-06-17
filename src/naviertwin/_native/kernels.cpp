@@ -3213,6 +3213,61 @@ static py::array_t<double> cross_channel_correlation_native(ArrayD y_true, Array
     return out;
 }
 
+static py::array_t<double> svgd_step_update_native(Array2D x, Array2D grad_logp, double lr, double h) {
+    if (x.ndim() != 2 || grad_logp.ndim() != 2 || x.shape(0) != grad_logp.shape(0) || x.shape(1) != grad_logp.shape(1)) {
+        throw std::invalid_argument("x and grad_logp must be matching 2D arrays");
+    }
+    const py::ssize_t n = x.shape(0);
+    const py::ssize_t d = x.shape(1);
+    const double* xp = x.data();
+    const double* gp = grad_logp.data();
+
+    double bandwidth = h;
+    if (!(bandwidth > 0.0)) {
+        if (n > 1) {
+            std::vector<double> sq;
+            sq.reserve(static_cast<std::size_t>(n * n));
+            for (py::ssize_t i = 0; i < n; ++i) {
+                for (py::ssize_t j = 0; j < n; ++j) {
+                    double acc = 0.0;
+                    for (py::ssize_t k = 0; k < d; ++k) {
+                        const double diff = xp[i * d + k] - xp[j * d + k];
+                        acc += diff * diff;
+                    }
+                    sq.push_back(acc);
+                }
+            }
+            std::sort(sq.begin(), sq.end());
+            const std::size_t m = sq.size();
+            const double med = (m % 2 == 1) ? sq[m / 2] : 0.5 * (sq[m / 2 - 1] + sq[m / 2]);
+            bandwidth = std::max(med / std::log(static_cast<double>(std::max<py::ssize_t>(n, 2))), 1e-6);
+        } else {
+            bandwidth = std::max(1.0 / std::log(2.0), 1e-6);
+        }
+    }
+
+    auto out = py::array_t<double>({n, d});
+    double* op = out.mutable_data();
+    const double inv_n = 1.0 / static_cast<double>(std::max<py::ssize_t>(n, 1));
+    for (py::ssize_t i = 0; i < n; ++i) {
+        for (py::ssize_t k = 0; k < d; ++k) {
+            double phi = 0.0;
+            for (py::ssize_t j = 0; j < n; ++j) {
+                double sq = 0.0;
+                for (py::ssize_t q = 0; q < d; ++q) {
+                    const double diff = xp[i * d + q] - xp[j * d + q];
+                    sq += diff * diff;
+                }
+                const double kernel = std::exp(-sq / (2.0 * bandwidth));
+                phi += kernel * gp[j * d + k];
+                phi += ((xp[i * d + k] - xp[j * d + k]) / bandwidth) * kernel;
+            }
+            op[i * d + k] = xp[i * d + k] + lr * phi * inv_n;
+        }
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -3354,5 +3409,6 @@ PYBIND11_MODULE(_kernels, m) {
     );
     m.def("multi_output_r2_raw", &multi_output_r2_raw_native, py::arg("y_true"), py::arg("y_pred"));
     m.def("cross_channel_correlation", &cross_channel_correlation_native, py::arg("y_true"), py::arg("y_pred"));
+    m.def("svgd_step_update", &svgd_step_update_native, py::arg("x"), py::arg("grad_logp"), py::arg("lr") = 0.01, py::arg("h") = -1.0);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

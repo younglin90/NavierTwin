@@ -6,8 +6,7 @@ Examples:
     >>> rng = np.random.default_rng(0)
     >>> x = rng.standard_normal((20, 1))
     >>> def grad_logp(x): return -x  # standard normal target
-    >>> for _ in range(50):
-    ...     x = svgd_step(x, grad_logp, lr=0.05)
+    >>> x = svgd_step(x, grad_logp, lr=0.05)
 """
 
 from __future__ import annotations
@@ -16,6 +15,8 @@ from collections.abc import Callable
 
 import numpy as np
 from numpy.typing import NDArray
+
+from naviertwin._native import _kernels
 
 
 def _rbf_kernel(
@@ -42,11 +43,10 @@ def svgd_step(
 ) -> NDArray[np.float64]:
     """1 SVGD update."""
     X = np.asarray(X, dtype=np.float64)
-    n = X.shape[0]
-    K, gK = _rbf_kernel(X, h)
     glp = grad_logp(X)  # (n, d)
-    phi = (K @ glp + gK.sum(axis=0)) / n
-    return X + lr * phi
+    if _kernels is None:
+        raise ImportError("NavierTwin native kernels are required by svgd_step")
+    return _kernels.svgd_step_update(X, np.asarray(glp, dtype=np.float64), lr, -1.0 if h is None else h)
 
 
 __all__ = ["svgd_step"]
