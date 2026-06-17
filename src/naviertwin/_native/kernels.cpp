@@ -4262,6 +4262,25 @@ static py::array_t<double> r_adapt_1d_native(ArrayD x_in, ArrayD weights, int n_
     return out;
 }
 
+static py::list frequency_peak_dicts_native(ArrayD freqs, ArrayD amplitudes, ArrayI indices) {
+    if (freqs.ndim() != 1 || amplitudes.ndim() != 1 || indices.ndim() != 1 || freqs.shape(0) != amplitudes.shape(0)) {
+        throw std::invalid_argument("freqs, amplitudes, and indices must be compatible 1D arrays");
+    }
+    const double* fp = freqs.data();
+    const double* ap = amplitudes.data();
+    const long long* ip = indices.data();
+    py::list out;
+    for (py::ssize_t i = 0; i < indices.shape(0); ++i) {
+        const long long idx = ip[i];
+        py::dict item;
+        item["frequency"] = fp[idx];
+        item["amplitude"] = ap[idx];
+        item["strouhal"] = 0.0;
+        out.append(item);
+    }
+    return out;
+}
+
 static void schedule_berger_oliger_fill(int level, int max_level, int refine_ratio, std::vector<int>& out) {
     if (level >= max_level) {
         out.push_back(level);
@@ -4485,6 +4504,7 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("connected_components_2d", &connected_components_2d_native, py::arg("mask"), py::arg("connectivity") = 1);
     m.def("expected_improvement", &expected_improvement_native, py::arg("mu"), py::arg("sigma"), py::arg("y_best"), py::arg("xi") = 0.0);
     m.def("r_adapt_1d", &r_adapt_1d_native, py::arg("x"), py::arg("weights"), py::arg("n_iter") = 20);
+    m.def("frequency_peak_dicts", &frequency_peak_dicts_native, py::arg("freqs"), py::arg("amplitudes"), py::arg("indices"));
     m.def(
         "schedule_berger_oliger", &schedule_berger_oliger_native, py::arg("level") = 0,
         py::arg("max_level") = 2, py::arg("refine_ratio") = 2

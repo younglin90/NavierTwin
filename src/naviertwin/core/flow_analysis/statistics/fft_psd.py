@@ -26,6 +26,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
 from naviertwin.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -190,15 +191,13 @@ def find_dominant_frequencies(
 
     peak_indices = peak_indices[:n_peaks]
 
-    result: list[dict[str, float]] = []
-    for idx in peak_indices:
-        result.append(
-            {
-                "frequency": float(valid_freqs[idx]),
-                "amplitude": float(valid_amps[idx]),
-                "strouhal": 0.0,  # 특성 스케일 미지정
-            }
-        )
+    if _kernels is None:
+        raise ImportError("NavierTwin native kernels are required by find_dominant_frequencies")
+    result = _kernels.frequency_peak_dicts(
+        valid_freqs,
+        valid_amps,
+        np.asarray(peak_indices, dtype=np.int64),
+    )
 
     logger.debug(
         "find_dominant_frequencies: %d 피크 탐지", len(result)
