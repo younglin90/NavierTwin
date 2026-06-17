@@ -117,11 +117,13 @@ class UNet3D(BaseOperator):
         Y = np.asarray(dataset["outputs"], dtype=np.float32)
         if X.ndim != 5 or Y.ndim != 5:
             raise ValueError(f"(B,D,H,W,C) 5D 필요: {X.shape}, {Y.shape}")
-        for k in (1, 2, 3):
-            if X.shape[k] % 4:
+        dim_idx = 1
+        while dim_idx < 4:
+            if X.shape[dim_idx] % 4:
                 raise ValueError(
                     f"D, H, W 는 4의 배수여야 합니다 (2-level pooling): {X.shape[1:4]}"
                 )
+            dim_idx += 1
 
         self._device = self._resolve_device()
         self._model = self._build().to(self._device)
@@ -133,9 +135,15 @@ class UNet3D(BaseOperator):
             shuffle=True,
         )
         self.train_losses_ = []
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             epoch = 0.0
-            for xb, yb in loader:
+            batches = iter(loader)
+            while True:
+                try:
+                    xb, yb = next(batches)
+                except StopIteration:
+                    break
                 xb = xb.to(self._device)
                 yb = yb.to(self._device)
                 optim.zero_grad()
@@ -146,6 +154,7 @@ class UNet3D(BaseOperator):
                 epoch += float(loss.item()) * xb.shape[0]
             epoch /= max(len(X), 1)
             self.train_losses_.append(epoch)
+            epoch_idx += 1
 
         self.is_fitted = True
         logger.info("UNet3D 학습 완료: loss=%.6g", self.train_losses_[-1])
