@@ -15,7 +15,21 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import numpy as np
+from numpy.linalg import solve as _np_solve
 from numpy.typing import NDArray
+
+from naviertwin._native import HAS_NATIVE_KERNELS, _kernels
+
+
+def _right_solve(S: NDArray[np.float64], A: NDArray[np.float64]) -> NDArray[np.float64]:
+    native_solve = (
+        getattr(_kernels, "solve_dense", None)
+        if HAS_NATIVE_KERNELS
+        else None
+    )
+    if native_solve is not None and A.shape[0] == 1:
+        return native_solve(S.T, A.ravel()).reshape(1, -1)
+    return _np_solve(S.T, A.T).T
 
 
 def iekf_step(
@@ -38,16 +52,18 @@ def iekf_step(
     P_pred = Fk @ P @ Fk.T + Q
     # iterate update
     x_iter = x_pred.copy()
-    for _ in range(n_iter):
+    it = 0
+    while it < n_iter:
         Hk = H(x_iter)
         S = Hk @ P_pred @ Hk.T + R
-        K = P_pred @ Hk.T @ np.linalg.inv(S)
+        K = _right_solve(S, P_pred @ Hk.T)
         innov = z - h(x_iter) - Hk @ (x_pred - x_iter)
         x_new = x_pred + K @ innov
         if np.linalg.norm(x_new - x_iter) < tol:
             x_iter = x_new
             break
         x_iter = x_new
+        it += 1
     Hk = H(x_iter)
     P_new = (np.eye(len(x)) - K @ Hk) @ P_pred
     return x_iter, P_new
