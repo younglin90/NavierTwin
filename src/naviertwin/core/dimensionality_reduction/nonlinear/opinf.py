@@ -33,7 +33,7 @@ def opinf_fit(
     blocks = [Z]
     if quadratic:
         # Kronecker (unique pairs)
-        kron = np.array([np.outer(z, z).ravel() for z in Z])
+        kron = (Z[:, :, np.newaxis] * Z[:, np.newaxis, :]).reshape(T, r * r)
         blocks.append(kron)
     if U is not None:
         blocks.append(np.asarray(U).reshape(T, -1))
