@@ -20,6 +20,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin.core.linalg.svd_utils import truncated_svd
 from naviertwin.core.sampling.sparse_sensor import reconstruct, select_sensors
 from naviertwin.utils.logger import get_logger
 
@@ -63,9 +64,9 @@ class SensorDMDPipeline:
         r = min(self.n_modes, n_space, n_snap)
 
         # SVD → POD 모드
-        U, s, _ = np.linalg.svd(X - X.mean(axis=1, keepdims=True), full_matrices=False)
-        self.basis = U[:, :r]
-        self._singular_values = s[:r]
+        U, s, _ = truncated_svd(X - X.mean(axis=1, keepdims=True), k=r)
+        self.basis = U
+        self._singular_values = s
 
         # 센서 수 보정 (n_modes 이상 확보)
         n_sens = max(self.n_sensors, r)
