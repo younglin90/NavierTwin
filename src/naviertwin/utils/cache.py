@@ -70,8 +70,12 @@ class DiskCache:
         return value
 
     def clear(self) -> None:
-        for p in self.dir.glob("*.pkl"):
+        paths = list(self.dir.glob("*.pkl"))
+        idx = 0
+        while idx < len(paths):
+            p = paths[idx]
             p.unlink()
+            idx += 1
 
 
 __all__ = ["DiskCache"]
