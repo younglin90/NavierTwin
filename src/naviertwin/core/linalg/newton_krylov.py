@@ -13,8 +13,11 @@ def _jv(F: Callable, x: NDArray, v: NDArray, eps: float = 1e-7) -> NDArray:
 
 
 def gmres(
-    A_fn: Callable[[NDArray], NDArray], b: NDArray,
-    *, max_iter: int = 50, tol: float = 1e-8,
+    A_fn: Callable[[NDArray], NDArray],
+    b: NDArray,
+    *,
+    max_iter: int = 50,
+    tol: float = 1e-8,
 ) -> NDArray[np.float64]:
     n = b.size
     max_iter = int(min(max_iter, n))
@@ -26,12 +29,15 @@ def gmres(
     V = [r / beta]
     H = np.zeros((max_iter + 1, max_iter))
     k_last = 0
-    for k in range(max_iter):
+    k = 0
+    while k < max_iter:
         k_last = k + 1
         w = A_fn(V[k])
-        for i in range(k + 1):
+        i = 0
+        while i < k + 1:
             H[i, k] = V[i] @ w
             w = w - H[i, k] * V[i]
+            i += 1
         H[k + 1, k] = float(np.linalg.norm(w))
         if H[k + 1, k] < 1e-14:
             break
@@ -43,6 +49,7 @@ def gmres(
         if res < tol:
             V_mat = np.stack(V[:k + 1], axis=1)
             return x + V_mat @ y
+        k += 1
     e1 = np.zeros(k_last + 1)
     e1[0] = beta
     y, *_ = np.linalg.lstsq(H[:k_last + 1, :k_last], e1, rcond=None)
@@ -51,20 +58,28 @@ def gmres(
 
 
 def newton_krylov(
-    F: Callable[[NDArray], NDArray], x0: NDArray,
-    *, max_iter: int = 30, tol: float = 1e-8,
+    F: Callable[[NDArray], NDArray],
+    x0: NDArray,
+    *,
+    max_iter: int = 30,
+    tol: float = 1e-8,
     gmres_iter: int = 30,
 ) -> tuple[NDArray, dict]:
     x = np.asarray(x0, dtype=np.float64).ravel().copy()
-    for k in range(max_iter):
+    k = 0
+    while k < max_iter:
         fx = F(x)
         if np.linalg.norm(fx) < tol:
             return x, {"iters": k, "residual": float(np.linalg.norm(fx)), "converged": True}
-        dx = gmres(lambda v: _jv(F, x, v), -fx,
-                   max_iter=min(gmres_iter, x.size), tol=tol * 0.1)
+        dx = gmres(
+            lambda v: _jv(F, x, v),
+            -fx,
+            max_iter=min(gmres_iter, x.size),
+            tol=tol * 0.1,
+        )
         x = x + dx
-    return x, {"iters": max_iter, "residual": float(np.linalg.norm(F(x))),
-               "converged": False}
+        k += 1
+    return x, {"iters": max_iter, "residual": float(np.linalg.norm(F(x))), "converged": False}
 
 
 __all__ = ["gmres", "newton_krylov"]
