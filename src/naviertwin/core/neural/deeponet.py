@@ -19,8 +19,12 @@ def _torch():
 
 
 def DeepONet(
-    branch_input_dim: int, trunk_input_dim: int,
-    *, p: int = 32, hidden: int = 64, n_layers: int = 3,
+    branch_input_dim: int,
+    trunk_input_dim: int,
+    *,
+    p: int = 32,
+    hidden: int = 64,
+    n_layers: int = 3,
     activation: str = "relu",
 ):
     """
@@ -38,10 +42,12 @@ def DeepONet(
     def _mlp(in_d, out_d):
         layers = []
         prev = in_d
-        for _ in range(n_layers):
+        layer = 0
+        while layer < n_layers:
             layers.append(nn.Linear(prev, hidden))
             layers.append(Act())
             prev = hidden
+            layer += 1
         layers.append(nn.Linear(prev, out_d))
         return nn.Sequential(*layers)
 
