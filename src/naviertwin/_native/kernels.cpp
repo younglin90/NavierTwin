@@ -3312,6 +3312,28 @@ static py::tuple duct_modes_neumann_native(double L, double c, int n_modes, int 
     return py::make_tuple(freqs, modes);
 }
 
+static py::array_t<double> clenshaw_curtis_weights_native(int N) {
+    if (N < 2) {
+        throw std::invalid_argument("N >= 2");
+    }
+    auto w = py::array_t<double>({static_cast<py::ssize_t>(N + 1)});
+    double* wp = w.mutable_data();
+    constexpr double pi = 3.141592653589793238462643383279502884;
+    const double endpoint = 1.0 / (static_cast<double>(N) * static_cast<double>(N) - 1.0 + static_cast<double>(N % 2));
+    wp[0] = endpoint;
+    wp[N] = endpoint;
+    for (int j = 1; j < N; ++j) {
+        const double theta_j = pi * static_cast<double>(j) / static_cast<double>(N);
+        double s = 0.0;
+        for (int k = 1; k <= N / 2; ++k) {
+            const double b = (2 * k < N) ? 1.0 : 0.5;
+            s += b * std::cos(2.0 * static_cast<double>(k) * theta_j) / (4.0 * k * k - 1.0);
+        }
+        wp[j] = (2.0 / static_cast<double>(N)) * (1.0 - 2.0 * s);
+    }
+    return w;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -3456,5 +3478,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("svgd_step_update", &svgd_step_update_native, py::arg("x"), py::arg("grad_logp"), py::arg("lr") = 0.01, py::arg("h") = -1.0);
     m.def("duct_modes_dirichlet", &duct_modes_dirichlet_native, py::arg("L"), py::arg("c"), py::arg("n_modes") = 5, py::arg("n_points") = 128);
     m.def("duct_modes_neumann", &duct_modes_neumann_native, py::arg("L"), py::arg("c"), py::arg("n_modes") = 5, py::arg("n_points") = 128);
+    m.def("clenshaw_curtis_weights", &clenshaw_curtis_weights_native, py::arg("N"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

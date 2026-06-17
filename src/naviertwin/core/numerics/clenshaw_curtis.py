@@ -19,32 +19,14 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
 
 def clenshaw_curtis_weights(N: int) -> NDArray[np.float64]:
     """Clenshaw-Curtis weights on N+1 Chebyshev-Gauss-Lobatto nodes."""
-    if N < 2:
-        raise ValueError("N >= 2")
-    theta = np.pi * np.arange(N + 1) / N
-    w = np.zeros(N + 1)
-    for j in range(N + 1):
-        s = 0.0
-        for k in range(1, N // 2 + 1):
-            denom = (4 * k * k - 1)
-            s += (2.0 / denom) * np.cos(2 * k * theta[j])
-        b = 1.0 if (N % 2 == 1) else 1.0 - np.cos(N * theta[j]) / (N * N - 1 + 1e-30)
-        w[j] = (2.0 / N) * (1.0 - s - b * 0.0)  # approximation; use explicit form below
-
-    # use standard explicit form (Trefethen):
-    w = np.zeros(N + 1)
-    w[0] = 1.0 / (N * N - 1 + (N % 2))
-    w[N] = w[0]
-    for j in range(1, N):
-        s = 0.0
-        for k in range(1, N // 2 + 1):
-            b = 1.0 if (2 * k < N) else 0.5
-            s += b * np.cos(2 * k * theta[j]) / (4 * k * k - 1)
-        w[j] = (2.0 / N) * (1.0 - 2.0 * s)
-    return w
+    if _kernels is None:
+        raise ImportError("NavierTwin native kernels are required by clenshaw_curtis_weights")
+    return _kernels.clenshaw_curtis_weights(N)
 
 
 def integrate_cc(f_values: NDArray[np.float64], N: int) -> float:
