@@ -3464,6 +3464,48 @@ static py::array_t<bool> ewma_alarms_native(ArrayD residuals, double lam, double
     return out;
 }
 
+static py::array_t<bool> pareto_front_native(ArrayD objectives) {
+    if (objectives.ndim() != 2) {
+        throw std::invalid_argument("objectives must be a 2D array");
+    }
+    const py::ssize_t n = objectives.shape(0);
+    const py::ssize_t d = objectives.shape(1);
+    const double* obj = objectives.data();
+    auto out = py::array_t<bool>({n});
+    bool* keep = out.mutable_data();
+    for (py::ssize_t i = 0; i < n; ++i) {
+        keep[i] = true;
+    }
+    for (py::ssize_t i = 0; i < n; ++i) {
+        if (!keep[i]) {
+            continue;
+        }
+        for (py::ssize_t j = 0; j < n; ++j) {
+            if (i == j) {
+                continue;
+            }
+            bool all_le = true;
+            bool any_lt = false;
+            for (py::ssize_t k = 0; k < d; ++k) {
+                const double a = obj[j * d + k];
+                const double b = obj[i * d + k];
+                if (!(a <= b)) {
+                    all_le = false;
+                    break;
+                }
+                if (a < b) {
+                    any_lt = true;
+                }
+            }
+            if (all_le && any_lt) {
+                keep[i] = false;
+                break;
+            }
+        }
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -3614,5 +3656,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("lagrange_interp_1d", &lagrange_interp_1d_native, py::arg("x_known"), py::arg("y_known"), py::arg("x_new"));
     m.def("cusum_alarms", &cusum_alarms_native, py::arg("residuals"), py::arg("k") = 0.5, py::arg("h") = 5.0);
     m.def("ewma_alarms", &ewma_alarms_native, py::arg("residuals"), py::arg("lam") = 0.2, py::arg("k") = 3.0);
+    m.def("pareto_front", &pareto_front_native, py::arg("objectives"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
