@@ -72,10 +72,10 @@ def stft_fallback(
     step = n_window - n_overlap
     n_blocks = 1 + (len(signal) - n_window) // step
     win = np.hanning(n_window)
-    spec = np.zeros((n_window // 2 + 1, n_blocks), dtype=np.complex128)
-    for b in range(n_blocks):
-        start = b * step
-        spec[:, b] = np.fft.rfft(signal[start : start + n_window] * win)
+    windows = np.lib.stride_tricks.sliding_window_view(signal, n_window)[
+        ::step
+    ][:n_blocks]
+    spec = np.fft.rfft(windows * win[np.newaxis, :], axis=1).T
     freqs = np.fft.rfftfreq(n_window, d=dt)
     times = np.arange(n_blocks) * step * dt
     return {
