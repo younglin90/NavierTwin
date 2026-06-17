@@ -24,14 +24,17 @@ _TEMPLATE = """<?xml version="1.0"?>
 """
 
 
+def _grouped_row(entry: tuple[float, str, int, str]) -> str:
+    t, group, part, filename = entry
+    return f'    <DataSet timestep="{t}" group="{group}" part="{part}" file="{filename}"/>'
+
+
 def write_pvd_grouped(
-    path: str | Path, entries: list[tuple[float, str, int, str]],
+    path: str | Path,
+    entries: list[tuple[float, str, int, str]],
 ) -> None:
     """entries = [(time, group, part, file)]"""
-    rows = "\n".join(
-        f'    <DataSet timestep="{t}" group="{g}" part="{p}" file="{f}"/>'
-        for t, g, p, f in entries
-    )
+    rows = "\n".join(map(_grouped_row, entries))
     Path(path).write_text(_TEMPLATE.format(rows=rows))
 
 
