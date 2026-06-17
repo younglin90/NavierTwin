@@ -4,8 +4,8 @@ Examples:
     >>> import numpy as np
     >>> from naviertwin.core.data_assimilation.rls import RLS
     >>> rls = RLS(n_features=2, lam=0.99)
-    >>> for x, y in [(np.array([1, 1]), 2.0), (np.array([1, 0]), 1.0)]:
-    ...     rls.update(x, y)
+    >>> rls.update(np.array([1, 1]), 2.0)
+    >>> rls.update(np.array([1, 0]), 1.0)
     >>> rls.theta.shape
     (2,)
 """
