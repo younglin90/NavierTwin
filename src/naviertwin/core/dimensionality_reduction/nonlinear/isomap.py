@@ -21,19 +21,27 @@ def _knn_graph(X: NDArray[np.float64], k: int) -> NDArray[np.float64]:
     n = X.shape[0]
     D = np.linalg.norm(X[:, None, :] - X[None, :, :], axis=2)
     G = np.full_like(D, np.inf)
-    for i in range(n):
-        idx = np.argpartition(D[i], k + 1)[:k + 1]
-        G[i, idx] = D[i, idx]
+    idx = np.argpartition(D, k + 1, axis=1)[:, :k + 1]
+    rows = np.arange(n)[:, np.newaxis]
+    G[rows, idx] = D[rows, idx]
     # symmetrize
     G = np.minimum(G, G.T)
     return G
 
 
 def _floyd_warshall(G: NDArray[np.float64]) -> NDArray[np.float64]:
+    try:
+        from scipy.sparse.csgraph import shortest_path
+
+        return np.asarray(shortest_path(G, directed=False), dtype=np.float64)
+    except Exception:
+        pass
     n = G.shape[0]
     D = G.copy()
-    for k in range(n):
+    k = 0
+    while k < n:
         D = np.minimum(D, D[:, k:k + 1] + D[k:k + 1, :])
+        k += 1
     return D
 
 
