@@ -20,7 +20,7 @@ def _check(
     message: str | None = None,
     remediation: str | None = None,
 ) -> dict[str, Any]:
-    """Build a preflight check with stable remediation fields for non-ok status."""
+    """Build a preflight check with stable remediation fields on non-ok status."""
     payload: dict[str, Any] = {
         "name": name,
         "status": status,
@@ -39,7 +39,7 @@ def _check(
 
 
 def _final_status(checks: list[dict[str, Any]]) -> str:
-    statuses = {str(check.get("status", "error")) for check in checks}
+    statuses = set(map(lambda check: str(check.get("status", "error")), checks))
     if "error" in statuses:
         return "error"
     if "warn" in statuses:
@@ -50,12 +50,17 @@ def _final_status(checks: list[dict[str, Any]]) -> str:
 def _readiness_score(checks: list[dict[str, Any]]) -> int:
     if not checks:
         return 0
-    ok_count = sum(1 for check in checks if check.get("status") == "ok")
+    ok_count = list(map(lambda check: check.get("status"), checks)).count("ok")
     return round(100 * ok_count / len(checks))
 
 
 def _message_list(checks: list[dict[str, Any]], status: str) -> list[str]:
-    return [str(check.get("name", "unknown")) for check in checks if check.get("status") == status]
+    return list(
+        map(
+            lambda check: str(check.get("name", "unknown")),
+            filter(lambda check: check.get("status") == status, checks),
+        )
+    )
 
 
 def _field_array(dataset: CFDDataset, field_name: str) -> Any | None:
@@ -80,7 +85,10 @@ def _field_reports(dataset: CFDDataset, checks: list[dict[str, Any]]) -> dict[st
     field_sanity = import_module("naviertwin.core.validation.field_sanity")
 
     fields: dict[str, Any] = {}
-    for field_name in dataset.field_names:
+    field_names = list(dataset.field_names)
+    field_idx = 0
+    while field_idx < len(field_names):
+        field_name = field_names[field_idx]
         values = _field_array(dataset, field_name)
         if values is None:
             checks.append(
@@ -97,6 +105,7 @@ def _field_reports(dataset: CFDDataset, checks: list[dict[str, Any]]) -> dict[st
                 )
             )
             fields[field_name] = {"location": "unknown", "sanity": None}
+            field_idx += 1
             continue
         try:
             sanity = field_sanity.field_sanity_check(values)
@@ -107,7 +116,7 @@ def _field_reports(dataset: CFDDataset, checks: list[dict[str, Any]]) -> dict[st
                     "error",
                     details={"reason": str(exc)},
                     code="FIELD_SANITY_FAILED",
-                    message=f"Field {field_name!r} could not be checked for numeric sanity.",
+                    message=f"Field {field_name!r} failed numeric sanity checks.",
                     remediation=(
                         "Convert the field to a finite numeric array before training or ROM "
                         "reduction."
@@ -115,6 +124,7 @@ def _field_reports(dataset: CFDDataset, checks: list[dict[str, Any]]) -> dict[st
                 )
             )
             fields[field_name] = {"location": _field_location(dataset, field_name), "sanity": None}
+            field_idx += 1
             continue
 
         status = "ok" if sanity.get("all_finite") is True else "error"
@@ -140,6 +150,7 @@ def _field_reports(dataset: CFDDataset, checks: list[dict[str, Any]]) -> dict[st
             "location": _field_location(dataset, field_name),
             "sanity": sanity,
         }
+        field_idx += 1
     return fields
 
 
@@ -161,9 +172,9 @@ def _base_report(path: Path) -> dict[str, Any]:
 def _json_safe(value: Any) -> Any:
     """Convert arrays and paths in reader metadata to compact JSON-safe values."""
     if isinstance(value, dict):
-        return {str(key): _json_safe(item) for key, item in value.items()}
+        return dict(map(lambda item: (str(item[0]), _json_safe(item[1])), value.items()))
     if isinstance(value, (list, tuple)):
-        return [_json_safe(item) for item in value]
+        return list(map(_json_safe, value))
     if isinstance(value, Path):
         return str(value)
     if hasattr(value, "shape") and hasattr(value, "dtype"):
@@ -188,7 +199,7 @@ def _finalize(report: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_dataset_preflight_report(path: str | Path) -> dict[str, Any]:
-    """Build a JSON-compatible readiness report for a CFD input path."""
+    """Build a JSON-compatible readiness report describing a CFD input path."""
     input_path = Path(path)
     report = _base_report(input_path)
     checks: list[dict[str, Any]] = report["checks"]
@@ -305,9 +316,13 @@ def format_preflight_report(report: dict[str, Any]) -> str:
             f"cells={summary.get('n_cells', 0)}, "
             f"fields={len(summary.get('field_names', []))}"
         )
-    for check in report.get("checks", []):
+    checks = list(report.get("checks", []))
+    check_idx = 0
+    while check_idx < len(checks):
+        check = checks[check_idx]
         if isinstance(check, dict):
             lines.append(f"- {check.get('name', 'unknown')}: {check.get('status', 'unknown')}")
+        check_idx += 1
     return "\n".join(lines)
 
 
