@@ -84,7 +84,7 @@ def qq_data(
             (((d[0] * qq + d[1]) * qq + d[2]) * qq + d[3]) * qq + 1.0
         )
 
-    theoretical = np.array([_norm_inv(pi) for pi in p])
+    theoretical = np.fromiter(map(_norm_inv, p), dtype=np.float64, count=p.size)
     return sorted_r, theoretical
 
 
@@ -111,10 +111,8 @@ def residual_autocorrelation(
 
     rp = r - r.mean()
     var = float(np.dot(rp, rp)) + 1e-30
-    out = np.zeros(max_lag + 1)
+    out = np.correlate(rp, rp, mode="full")[n - 1 : n + max_lag] / var
     out[0] = 1.0
-    for lag in range(1, max_lag + 1):
-        out[lag] = float(np.dot(rp[: n - lag], rp[lag:])) / var
     return out
 
 
