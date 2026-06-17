@@ -86,7 +86,8 @@ def active_loop(
     X = np.array(X_init, dtype=np.float64)
     y = np.array(y_init, dtype=np.float64)
     mask = np.ones(len(pool), dtype=bool)
-    for _ in range(n_query):
+    query = 0
+    while query < n_query:
         model = model_factory()
         model.fit(X, y)
         remaining = np.where(mask)[0]
@@ -96,6 +97,7 @@ def active_loop(
         y_new = oracle(pool[pick])
         X = np.vstack([X, pool[pick : pick + 1]])
         y = np.append(y, y_new)
+        query += 1
     logger.info("active_loop 종료: 총 %d 샘플", len(X))
     return X, y
 
