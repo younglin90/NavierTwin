@@ -25,13 +25,10 @@ def bezier_eval(
     ctrl = np.asarray(ctrl, dtype=np.float64)
     t = np.asarray(t, dtype=np.float64)
     n = ctrl.shape[0] - 1
-    pts = np.zeros((t.size, ctrl.shape[1]))
-    for k, tk in enumerate(t):
-        pts[k] = sum(
-            ctrl[i] * comb(n, i) * (1 - tk) ** (n - i) * tk ** i
-            for i in range(n + 1)
-        )
-    return pts
+    powers = np.arange(n + 1)
+    coeffs = np.fromiter(map(lambda i: comb(n, int(i)), powers), dtype=np.float64)
+    basis = coeffs[None, :] * (1 - t[:, None]) ** (n - powers) * t[:, None] ** powers
+    return basis @ ctrl
 
 
 def optimize_bezier(
@@ -45,16 +42,21 @@ def optimize_bezier(
 ) -> NDArray[np.float64]:
     """Bezier 제어점에 대해 finite-diff gradient descent."""
     ctrl = np.asarray(ctrl0, dtype=np.float64).copy()
-    for _ in range(max_iter):
+    iter_idx = 0
+    while iter_idx < max_iter:
         g = np.zeros_like(ctrl)
         f0 = objective(ctrl)
-        rng_pts = range(1, len(ctrl) - 1) if fixed_endpoints else range(len(ctrl))
-        for i in rng_pts:
-            for j in range(ctrl.shape[1]):
-                ctrl[i, j] += eps
-                g[i, j] = (objective(ctrl) - f0) / eps
-                ctrl[i, j] -= eps
+        row_start = 1 if fixed_endpoints else 0
+        row_stop = len(ctrl) - 1 if fixed_endpoints else len(ctrl)
+        rows, cols = np.indices((row_stop - row_start, ctrl.shape[1]))
+        rows = rows.ravel() + row_start
+        cols = cols.ravel()
+        trials = np.repeat(ctrl[None, :, :], rows.size, axis=0)
+        trials[np.arange(rows.size), rows, cols] += eps
+        values = np.fromiter(map(objective, trials), dtype=np.float64, count=rows.size)
+        g[rows, cols] = (values - f0) / eps
         ctrl = ctrl - lr * g
+        iter_idx += 1
     return ctrl
 
 
