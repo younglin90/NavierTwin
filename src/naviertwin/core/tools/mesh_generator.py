@@ -197,10 +197,12 @@ def generate_airfoil(
 
     def _naca_surface(n: int) -> list[tuple[float, float]]:
         """NACA 4-digit 윤곽 점을 반환한다 (위/아래 통합, counter-clockwise)."""
-        x = [0.5 * (1 - math.cos(math.pi * i / n)) for i in range(n + 1)]
+        x = list(map(lambda i: 0.5 * (1 - math.cos(math.pi * i / n)), range(n + 1)))
         upper: list[tuple[float, float]] = []
         lower: list[tuple[float, float]] = []
-        for xi in x:
+        x_idx = 0
+        while x_idx < len(x):
+            xi = x[x_idx]
             yt = (t / 0.2) * (
                 0.2969 * math.sqrt(xi)
                 - 0.1260 * xi
@@ -225,10 +227,11 @@ def generate_airfoil(
             else:
                 upper.append((xi, yt))
                 lower.append((xi, -yt))
+            x_idx += 1
         # counter-clockwise: lower (back → front) + upper (front → back)
         return list(reversed(lower)) + upper[1:]
 
-    pts = [(x * chord, y * chord) for x, y in _naca_surface(n_points // 2)]
+    pts = list(map(lambda point: (point[0] * chord, point[1] * chord), _naca_surface(n_points // 2)))
 
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "airfoil.vtk"
@@ -241,16 +244,21 @@ def generate_airfoil(
             lc_far = farfield_radius * chord / 20.0
 
             airfoil_tags: list[int] = []
-            for x, y in pts:
+            point_idx = 0
+            while point_idx < len(pts):
+                x, y = pts[point_idx]
                 airfoil_tags.append(
                     gmsh.model.geo.addPoint(x, y, 0.0, lc_air)
                 )
+                point_idx += 1
 
             airfoil_lines: list[int] = []
-            for i in range(len(airfoil_tags)):
+            i = 0
+            while i < len(airfoil_tags):
                 a = airfoil_tags[i]
                 b = airfoil_tags[(i + 1) % len(airfoil_tags)]
                 airfoil_lines.append(gmsh.model.geo.addLine(a, b))
+                i += 1
 
             R = farfield_radius * chord
             cx, cy = 0.5 * chord, 0.0
