@@ -1,6 +1,6 @@
 """Rare-event probability — multilevel splitting (subset simulation lite).
 
-P(g(X) > b) for rare b.  Subset Simulation (Au & Beck 2001).
+P(g(X) > b) when b is rare.  Subset Simulation (Au & Beck 2001).
 
 Examples:
     >>> import numpy as np
@@ -33,7 +33,8 @@ def subset_simulation(
     rng = rng if rng is not None else np.random.default_rng(0)
     X = rng.standard_normal((n, d))
     levels = []
-    for _ in range(max_levels):
+    level = 0
+    while level < max_levels:
         gv = g(X)
         if np.mean(gv > b) > p0:
             return float(np.mean(gv > b)) * np.prod([p0] * len(levels))
@@ -55,6 +56,7 @@ def subset_simulation(
                 new_X.append(x)
             idx += 1
         X = np.asarray(new_X)
+        level += 1
     return p0 ** max_levels
 
 
