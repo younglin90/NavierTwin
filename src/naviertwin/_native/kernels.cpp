@@ -3742,6 +3742,57 @@ static py::list marching_squares_native(Array2D f, double level) {
     return segments;
 }
 
+static py::list augment_symmetric_native(ArrayD u, py::sequence axes) {
+    if (u.ndim() < 1) {
+        throw std::invalid_argument("U must have at least one dimension");
+    }
+    const py::ssize_t d = u.shape(u.ndim() - 1);
+    std::vector<int> axis_values;
+    axis_values.reserve(static_cast<std::size_t>(py::len(axes)));
+    for (py::handle item : axes) {
+        const int ax = py::cast<int>(item);
+        if (ax < 0 || ax >= d) {
+            throw std::invalid_argument("axis out of bounds");
+        }
+        axis_values.push_back(ax);
+    }
+    std::vector<std::vector<int>> masks(1);
+    for (int ax : axis_values) {
+        const std::size_t old_size = masks.size();
+        masks.reserve(old_size * 2);
+        for (std::size_t i = 0; i < old_size; ++i) {
+            std::vector<int> reflected = masks[i];
+            reflected.push_back(ax);
+            masks.push_back(std::move(reflected));
+        }
+    }
+
+    std::vector<py::ssize_t> shape;
+    shape.reserve(static_cast<std::size_t>(u.ndim()));
+    for (py::ssize_t axis = 0; axis < u.ndim(); ++axis) {
+        shape.push_back(u.shape(axis));
+    }
+    const double* up = u.data();
+    const py::ssize_t total = u.size();
+    py::list out;
+    for (const auto& mask : masks) {
+        auto arr = py::array_t<double>(shape);
+        double* ap = arr.mutable_data();
+        for (py::ssize_t idx = 0; idx < total; ++idx) {
+            const int component = static_cast<int>(idx % d);
+            int flips = 0;
+            for (int ax : mask) {
+                if (ax == component) {
+                    ++flips;
+                }
+            }
+            ap[idx] = (flips % 2 == 0) ? up[idx] : -up[idx];
+        }
+        out.append(arr);
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -3899,5 +3950,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("lumped_mass_2d", &lumped_mass_2d_native, py::arg("points"), py::arg("simplices"));
     m.def("p1_stiffness_2d", &p1_stiffness_2d_native, py::arg("points"), py::arg("simplices"));
     m.def("marching_squares", &marching_squares_native, py::arg("f"), py::arg("level") = 0.0);
+    m.def("augment_symmetric", &augment_symmetric_native, py::arg("U"), py::arg("axes"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

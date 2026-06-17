@@ -19,6 +19,8 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
 
 def galilean_shift(
     U: NDArray[np.float64], u_ref: NDArray[np.float64]
@@ -101,10 +103,9 @@ def augment_symmetric(
     Returns:
         2^len(axes) 개의 증강 필드 리스트.
     """
-    fields = [np.asarray(U, dtype=np.float64).copy()]
-    for ax in axes:
-        fields = [f for pair in ((ff, reflect(ff, ax)) for ff in fields) for f in pair]
-    return fields
+    if _kernels is None:
+        raise ImportError("NavierTwin native kernels are required by augment_symmetric")
+    return _kernels.augment_symmetric(np.asarray(U, dtype=np.float64), axes)
 
 
 __all__ = [
