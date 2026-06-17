@@ -51,11 +51,13 @@ def langevin_sample(
     x = np.asarray(x0, dtype=np.float64).copy()
     out = np.zeros((n_steps, *x.shape))
     sqrt_eps = np.sqrt(step_size)
-    for t in range(n_steps):
+    t = 0
+    while t < n_steps:
         noise = rng.standard_normal(x.shape)
         g = np.asarray(score_fn(x), dtype=np.float64)
         x = x + 0.5 * step_size * g + sqrt_eps * noise
         out[t] = x
+        t += 1
     logger.info("Langevin: %d steps, ε=%.4g", n_steps, step_size)
     return out
 
@@ -84,13 +86,15 @@ def euler_maruyama(
     traj[0] = x
     times = np.linspace(t0, tf, n_steps + 1)
     sqrt_dt = np.sqrt(dt)
-    for k in range(n_steps):
+    k = 0
+    while k < n_steps:
         t = times[k]
         dW = rng.standard_normal(x.shape) * sqrt_dt
         b = np.asarray(drift(t, x), dtype=np.float64)
         s = np.asarray(diffusion(t, x), dtype=np.float64)
         x = x + b * dt + s * dW
         traj[k + 1] = x
+        k += 1
     return times, traj
 
 
