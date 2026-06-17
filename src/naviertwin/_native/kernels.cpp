@@ -3087,6 +3087,66 @@ static py::array_t<double> box_filter_2d_native(ArrayD field, int width) {
     return out;
 }
 
+static double bilinear_sample_2d(const double* field, py::ssize_t ny, py::ssize_t nx, double x, double y, double Lx, double Ly) {
+    double fx = x / Lx * static_cast<double>(nx - 1);
+    double fy = y / Ly * static_cast<double>(ny - 1);
+    fx = std::min(static_cast<double>(nx - 1) - 1e-12, std::max(0.0, fx));
+    fy = std::min(static_cast<double>(ny - 1) - 1e-12, std::max(0.0, fy));
+    const py::ssize_t ix = static_cast<py::ssize_t>(std::floor(fx));
+    const py::ssize_t iy = static_cast<py::ssize_t>(std::floor(fy));
+    const double tx = fx - static_cast<double>(ix);
+    const double ty = fy - static_cast<double>(iy);
+    const double v00 = field[iy * nx + ix];
+    const double v10 = field[iy * nx + ix + 1];
+    const double v01 = field[(iy + 1) * nx + ix];
+    const double v11 = field[(iy + 1) * nx + ix + 1];
+    return (1.0 - tx) * (1.0 - ty) * v00 + tx * (1.0 - ty) * v10
+        + (1.0 - tx) * ty * v01 + tx * ty * v11;
+}
+
+static py::array_t<double> track_particles_2d_native(ArrayD u, ArrayD v, ArrayD seeds, double Lx, double Ly, double dt, int n_steps) {
+    if (u.ndim() != 2 || v.ndim() != 2 || u.shape(0) != v.shape(0) || u.shape(1) != v.shape(1)) {
+        throw std::invalid_argument("u and v must be matching 2D arrays");
+    }
+    if (seeds.ndim() != 2 || seeds.shape(1) != 2) {
+        throw std::invalid_argument("seeds must be (N, 2)");
+    }
+    const py::ssize_t ny = u.shape(0);
+    const py::ssize_t nx = u.shape(1);
+    const py::ssize_t n = seeds.shape(0);
+    auto trails = py::array_t<double>({n, static_cast<py::ssize_t>(n_steps + 1), static_cast<py::ssize_t>(2)});
+    double* tp = trails.mutable_data();
+    const double* up = u.data();
+    const double* vp = v.data();
+    const double* sp = seeds.data();
+    auto vel = [&](double px, double py) {
+        return std::array<double, 2>{
+            bilinear_sample_2d(up, ny, nx, px, py, Lx, Ly),
+            bilinear_sample_2d(vp, ny, nx, px, py, Lx, Ly),
+        };
+    };
+    for (py::ssize_t i = 0; i < n; ++i) {
+        double px = sp[2 * i];
+        double py = sp[2 * i + 1];
+        tp[(i * (n_steps + 1)) * 2] = px;
+        tp[(i * (n_steps + 1)) * 2 + 1] = py;
+        for (int k = 0; k < n_steps; ++k) {
+            const auto k1 = vel(px, py);
+            const auto k2 = vel(px + 0.5 * dt * k1[0], py + 0.5 * dt * k1[1]);
+            const auto k3 = vel(px + 0.5 * dt * k2[0], py + 0.5 * dt * k2[1]);
+            const auto k4 = vel(px + dt * k3[0], py + dt * k3[1]);
+            px += (dt / 6.0) * (k1[0] + 2.0 * k2[0] + 2.0 * k3[0] + k4[0]);
+            py += (dt / 6.0) * (k1[1] + 2.0 * k2[1] + 2.0 * k3[1] + k4[1]);
+            px = std::min(Lx, std::max(0.0, px));
+            py = std::min(Ly, std::max(0.0, py));
+            const py::ssize_t base = (i * (n_steps + 1) + k + 1) * 2;
+            tp[base] = px;
+            tp[base + 1] = py;
+        }
+    }
+    return trails;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -3222,5 +3282,9 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("metric_from_hessian_2d", &metric_from_hessian_2d_native, py::arg("H"), py::arg("h_min") = 1e-3, py::arg("h_max") = 1.0);
     m.def("edge_length_metric", &edge_length_metric_native, py::arg("M_a"), py::arg("M_b"), py::arg("a"), py::arg("b"));
     m.def("box_filter_2d", &box_filter_2d_native, py::arg("field"), py::arg("width") = 3);
+    m.def(
+        "track_particles_2d", &track_particles_2d_native, py::arg("u"), py::arg("v"), py::arg("seeds"),
+        py::arg("Lx") = 1.0, py::arg("Ly") = 1.0, py::arg("dt") = 0.01, py::arg("n_steps") = 100
+    );
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
