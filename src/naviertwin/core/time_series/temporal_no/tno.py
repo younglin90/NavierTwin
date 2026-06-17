@@ -6,7 +6,7 @@ FNO 인코더로 공간 주파수 특징 추출 + 시간 branch (MLP 또는 GRU)
 References:
     Temporal Neural Operator, Nature Sci. Rep. 2025 (concept).
 
-dataset 규약 (fit):
+input 규약 (fit):
     - ``"sequences"``: (N, T, spatial, 1) 시계열 필드.
     - ``"dt"``: float (선택)
     - ``"horizon"``: 예측할 미래 스텝 수.
@@ -94,10 +94,15 @@ class TNO:
                 super().__init__()
                 # history-step 입력: concat in channel 방향 (H * C)
                 self.lift = nn.Linear(H * C, W)
-                self.specs = nn.ModuleList(
-                    [_build_spectral_conv_1d(W, W, M) for _ in range(n_layers)]
-                )
-                self.ws = nn.ModuleList([nn.Conv1d(W, W, 1) for _ in range(n_layers)])
+                specs = nn.ModuleList()
+                ws = nn.ModuleList()
+                layer_idx = 0
+                while layer_idx < n_layers:
+                    specs.append(_build_spectral_conv_1d(W, W, M))
+                    ws.append(nn.Conv1d(W, W, 1))
+                    layer_idx += 1
+                self.specs = specs
+                self.ws = ws
                 # 시간 branch — horizon * C 만큼 동시 예측
                 self.proj = nn.Sequential(
                     nn.Linear(W, 4 * W), nn.GELU(),
@@ -109,8 +114,12 @@ class TNO:
                 B, H_, N, C_ = x.shape
                 x = x.permute(0, 2, 1, 3).reshape(B, N, H_ * C_)
                 x = self.lift(x).permute(0, 2, 1)  # (B, W, N)
-                for sp, wc in zip(self.specs, self.ws):
-                    x = torch.nn.functional.gelu(sp(x) + wc(x))
+                layer_idx = 0
+                while layer_idx < len(self.specs):
+                    x = torch.nn.functional.gelu(
+                        self.specs[layer_idx](x) + self.ws[layer_idx](x)
+                    )
+                    layer_idx += 1
                 x = x.permute(0, 2, 1)  # (B, N, W)
                 out = self.proj(x)  # (B, N, horizon * C)
                 return out.reshape(B, N, horizon, C_).permute(0, 2, 1, 3)  # (B, horizon, N, C)
@@ -132,14 +141,19 @@ class TNO:
         if S != self.spatial_size or C != self.channels:
             raise ValueError("spatial_size / channels 불일치")
 
-        X_list: list[np.ndarray] = []
-        Y_list: list[np.ndarray] = []
-        for i in range(N):
-            for t in range(T - self.history - self.horizon + 1):
-                X_list.append(seqs[i, t : t + self.history])
-                Y_list.append(seqs[i, t + self.history : t + self.history + self.horizon])
-        X = np.asarray(X_list, dtype=np.float32)
-        Y = np.asarray(Y_list, dtype=np.float32)
+        n_windows = T - self.history - self.horizon + 1
+        history_windows = np.lib.stride_tricks.sliding_window_view(
+            seqs, self.history, axis=1
+        )
+        target_windows = np.lib.stride_tricks.sliding_window_view(
+            seqs[:, self.history :, :, :], self.horizon, axis=1
+        )
+        X = np.moveaxis(history_windows[:, :n_windows], -1, 2).reshape(
+            -1, self.history, S, C
+        )
+        Y = np.moveaxis(target_windows[:, :n_windows], -1, 2).reshape(
+            -1, self.horizon, S, C
+        )
 
         self._device = self._resolve_device()
         self._model = self._build().to(self._device)
@@ -151,9 +165,15 @@ class TNO:
             shuffle=True,
         )
         self.train_losses_ = []
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             epoch = 0.0
-            for xb, yb in loader:
+            batches = iter(loader)
+            while True:
+                try:
+                    xb, yb = next(batches)
+                except StopIteration:
+                    break
                 xb = xb.to(self._device)
                 yb = yb.to(self._device)
                 optim.zero_grad()
@@ -164,6 +184,7 @@ class TNO:
                 epoch += float(loss.item()) * xb.shape[0]
             epoch /= max(len(X), 1)
             self.train_losses_.append(epoch)
+            epoch_idx += 1
 
         self.is_fitted = True
         logger.info("TNO 학습 완료: horizon=%d, loss=%.6g", self.horizon, self.train_losses_[-1])
