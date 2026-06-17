@@ -132,7 +132,10 @@ def _eval_node(node: Any, vars_: dict[str, Any]) -> Any:
     if isinstance(node, ast.Compare):
         left = _eval_node(node.left, vars_)
         result = None
-        for cmp_op, comp in zip(node.ops, node.comparators):
+        cmp_idx = 0
+        while cmp_idx < len(node.ops):
+            cmp_op = node.ops[cmp_idx]
+            comp = node.comparators[cmp_idx]
             right = _eval_node(comp, vars_)
             f = _CMP_OPS.get(type(cmp_op))
             if f is None:
@@ -140,18 +143,23 @@ def _eval_node(node: Any, vars_: dict[str, Any]) -> Any:
             this = f(left, right)
             result = this if result is None else result & this
             left = right
+            cmp_idx += 1
         return result
     if isinstance(node, ast.BoolOp):
-        values = [_eval_node(v, vars_) for v in node.values]
+        values = list(map(lambda v: _eval_node(v, vars_), node.values))
         if isinstance(node.op, ast.And):
             out = values[0]
-            for v in values[1:]:
-                out = out & v
+            value_idx = 1
+            while value_idx < len(values):
+                out = out & values[value_idx]
+                value_idx += 1
             return out
         if isinstance(node.op, ast.Or):
             out = values[0]
-            for v in values[1:]:
-                out = out | v
+            value_idx = 1
+            while value_idx < len(values):
+                out = out | values[value_idx]
+                value_idx += 1
             return out
         raise ExpressionError(f"unsupported bool op: {type(node.op).__name__}")
     if isinstance(node, ast.Call):
@@ -160,9 +168,9 @@ def _eval_node(node: Any, vars_: dict[str, Any]) -> Any:
         fname = node.func.id
         if fname not in _FUNCS:
             raise ExpressionError(f"unknown function: {fname}")
-        args = [_eval_node(a, vars_) for a in node.args]
+        args = list(map(lambda a: _eval_node(a, vars_), node.args))
         if node.keywords:
-            kwargs = {kw.arg: _eval_node(kw.value, vars_) for kw in node.keywords}
+            kwargs = dict(map(lambda kw: (kw.arg, _eval_node(kw.value, vars_)), node.keywords))
             return _FUNCS[fname](*args, **kwargs)
         return _FUNCS[fname](*args)
     if isinstance(node, ast.IfExp):
