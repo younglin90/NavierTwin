@@ -103,14 +103,21 @@ class HAMLET(BaseOperator):
                 super().__init__()
                 self.in_proj = nn.Linear(in_d, d)
                 self.pos_proj = nn.Linear(pos_d, d)
-                self.blocks = nn.ModuleList([_Block() for _ in range(nL)])
+                blocks = nn.ModuleList()
+                block_idx = 0
+                while block_idx < nL:
+                    blocks.append(_Block())
+                    block_idx += 1
+                self.blocks = blocks
                 self.out_proj = nn.Linear(d, out_d)
 
             def forward(self, x: Any, pos: Any) -> Any:
                 # x: (B, N, in_d), pos: (N, pos_d)
                 emb = self.in_proj(x) + self.pos_proj(pos)[None, :, :]
-                for blk in self.blocks:
-                    emb = blk(emb)
+                block_idx = 0
+                while block_idx < len(self.blocks):
+                    emb = self.blocks[block_idx](emb)
+                    block_idx += 1
                 return self.out_proj(emb)
 
         return _HAMLET(self.in_dim, self.out_dim, self.pos_dim)
@@ -141,9 +148,15 @@ class HAMLET(BaseOperator):
             shuffle=True,
         )
         self.train_losses_ = []
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             epoch = 0.0
-            for xb, yb in loader:
+            batch_iter = iter(loader)
+            while True:
+                try:
+                    xb, yb = next(batch_iter)
+                except StopIteration:
+                    break
                 xb = xb.to(self._device)
                 yb = yb.to(self._device)
                 optim.zero_grad()
@@ -154,6 +167,7 @@ class HAMLET(BaseOperator):
                 epoch += float(loss.item()) * xb.shape[0]
             epoch /= max(len(X), 1)
             self.train_losses_.append(epoch)
+            epoch_idx += 1
 
         self.is_fitted = True
         logger.info("HAMLET 학습 완료: loss=%.6g", self.train_losses_[-1])
