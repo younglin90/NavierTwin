@@ -76,15 +76,19 @@ def phase_average(
     sig_shape = signal.shape[1:]
     mean = np.zeros((n_bins,) + sig_shape, dtype=signal.dtype)
     rms = np.zeros((n_bins,) + sig_shape, dtype=signal.dtype)
-    counts = np.zeros(n_bins, dtype=int)
-
-    for b in range(n_bins):
-        mask = bin_idx == b
-        if mask.any():
-            sub = signal[mask]
-            mean[b] = sub.mean(axis=0)
-            rms[b] = sub.std(axis=0)
-            counts[b] = int(mask.sum())
+    flat = signal.reshape(signal.shape[0], -1)
+    sums = np.zeros((n_bins, flat.shape[1]), dtype=np.float64)
+    sums_sq = np.zeros_like(sums)
+    np.add.at(sums, bin_idx, flat)
+    np.add.at(sums_sq, bin_idx, flat * flat)
+    counts = np.bincount(bin_idx, minlength=n_bins).astype(np.float64)
+    valid = counts > 0
+    mean_flat = mean.reshape(n_bins, -1)
+    rms_flat = rms.reshape(n_bins, -1)
+    mean_flat[valid] = sums[valid] / counts[valid, np.newaxis]
+    var_flat = np.zeros_like(sums)
+    var_flat[valid] = sums_sq[valid] / counts[valid, np.newaxis] - mean_flat[valid] ** 2
+    rms_flat[valid] = np.sqrt(np.maximum(var_flat[valid], 0.0))
 
     bin_centers = (np.arange(n_bins) + 0.5) / n_bins * 2.0 * np.pi
     logger.debug("phase_average: n_bins=%d, total samples=%d", n_bins, len(t))
@@ -129,7 +133,7 @@ def cycle_extract(
     n_full = int((t_end - t_start) // period)
     if n_full < 1:
         raise ValueError(
-            f"signal too short for one full cycle (period={period})"
+            f"signal too short to contain one full cycle (period={period})"
         )
 
     if n_cycles is None:
@@ -138,15 +142,10 @@ def cycle_extract(
 
     phase_grid = np.linspace(0.0, 2.0 * np.pi, n_phase, endpoint=False)
     out_shape = (n_cycles, n_phase) + signal.shape[1:]
-    cycles = np.zeros(out_shape, dtype=signal.dtype)
-
-    for c in range(n_cycles):
-        t_cycle_start = t_start + c * period
-        t_query = t_cycle_start + (phase_grid / (2.0 * np.pi)) * period
-        for k, tq in enumerate(t_query):
-            # 가장 가까운 시간점 사용
-            idx = int(np.argmin(np.abs(t - tq)))
-            cycles[c, k] = signal[idx]
+    cycle_starts = t_start + np.arange(n_cycles) * period
+    t_query = cycle_starts[:, np.newaxis] + (phase_grid / (2.0 * np.pi)) * period
+    idx = np.argmin(np.abs(t_query[:, :, np.newaxis] - t[np.newaxis, np.newaxis, :]), axis=2)
+    cycles = signal[idx].reshape(out_shape)
 
     return phase_grid, cycles
 
@@ -189,19 +188,19 @@ def fundamental_period_from_acf(
     max_lag = min(max_lag, n - 1)
     min_lag = max(1, int(min_period / dt))
 
-    acf = np.zeros(max_lag + 1)
-    acf[0] = 1.0
-    for lag in range(1, max_lag + 1):
-        acf[lag] = float(np.dot(sig0[:-lag], sig0[lag:])) / var
+    corr = np.correlate(sig0, sig0, mode="full")
+    acf = corr[n - 1:n + max_lag] / var
 
     # 첫 번째 로컬 최대값 (음수 → 양수 전환 후의 피크)
     # 단순: 첫 번째로 acf가 0 아래로 떨어졌다가 다시 올라가서 로컬 max 인 위치
-    crossed = False
-    for k in range(min_lag, max_lag):
-        if acf[k] < 0:
-            crossed = True
-        if crossed and acf[k] > acf[k - 1] and acf[k] > acf[k + 1]:
-            return k * dt
+    neg = np.flatnonzero(acf[min_lag:max_lag] < 0.0)
+    if neg.size:
+        start = min_lag + int(neg[0]) + 1
+        if start < max_lag:
+            center = acf[start:max_lag]
+            local = np.flatnonzero((center > acf[start - 1:max_lag - 1]) & (center > acf[start + 1:max_lag + 1]))
+            if local.size:
+                return (start + int(local[0])) * dt
     # 폴백: 가장 큰 acf 위치 (lag>0)
     return int(np.argmax(acf[max(min_lag, 1):]) + max(min_lag, 1)) * dt
 
