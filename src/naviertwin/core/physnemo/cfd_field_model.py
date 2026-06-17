@@ -4,10 +4,10 @@ The intended digital-twin training layout is:
 
 ``coordinates + operating parameters -> selected CFD output fields``.
 
-For steady-state parameter sweeps, pass multiple CFD datasets plus a parameter
-table where each row corresponds to one case. For time-series data, each
+Steady-state parameter sweeps can pass multiple CFD datasets plus a parameter
+table where each row corresponds to one case. Time-series data maps each
 timestep is treated as one case unless an explicit parameter table is supplied.
-Vector fields are converted to magnitude for immediate contour display.
+Vector fields are converted to magnitude to support immediate contour display.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from numpy.typing import NDArray
 
 @dataclass(frozen=True)
 class CFDFieldTrainingData:
-    """Prepared tensors for supervised CFD field fitting."""
+    """Prepared tensors used by supervised CFD field fitting."""
 
     coords: NDArray[np.float64]
     values: NDArray[np.float64]
@@ -35,7 +35,7 @@ class CFDFieldTrainingData:
 
     @property
     def field_name(self) -> str:
-        """Comma-separated output field label for legacy callers."""
+        """Comma-separated output field label used by legacy callers."""
         return ",".join(self.field_names)
 
     @property
@@ -204,24 +204,28 @@ class PhysicsNeMoCFDFieldModel:
         ty = torch.tensor(y_train_n, dtype=torch.float32, device=self._device)
 
         self.train_losses_ = []
-        for _ in range(self.max_epochs):
+        epoch = 0
+        while epoch < self.max_epochs:
             optim.zero_grad()
             pred = self._model(tx)
             loss = mse(pred, ty)
             loss.backward()
             optim.step()
             self.train_losses_.append(float(loss.item()))
+            epoch += 1
 
         pred_val = self._predict_matrix(X_val_n)
         pred_val = pred_val * self._y_std + self._y_mean
         self.validation_metrics = _regression_metrics(y_val, pred_val)
-        per_field = {
-            field: _regression_metrics(
+        per_field = {}
+        index = 0
+        while index < len(self.field_names):
+            field = self.field_names[index]
+            per_field[field] = _regression_metrics(
                 y_val[:, index : index + 1],
                 pred_val[:, index : index + 1],
             )
-            for index, field in enumerate(self.field_names)
-        }
+            index += 1
         self.is_fitted = True
         self.training_metadata = {
             "source": "cfd_dataset",
@@ -248,7 +252,7 @@ class PhysicsNeMoCFDFieldModel:
         }
 
     def predict(self, params: NDArray[np.float64]) -> NDArray[np.float64]:
-        """Predict full scalar output fields for each operating parameter row."""
+        """Predict full scalar output fields per operating parameter row."""
         if not self.is_fitted or self._model is None or self._coords is None:
             raise RuntimeError("PhysicsNeMoCFDFieldModel.fit_datasets() 먼저 호출")
         params_arr = np.asarray(params, dtype=np.float64)
@@ -260,31 +264,29 @@ class PhysicsNeMoCFDFieldModel:
                 f"got {params_arr.shape[1]}"
             )
 
-        columns = []
-        for row in params_arr:
-            repeated = np.repeat(row.reshape(1, -1), self._coords.shape[0], axis=0)
-            X = np.hstack([self._coords, repeated]).astype(np.float32, copy=False)
-            assert self._x_mean is not None
-            assert self._x_std is not None
-            assert self._y_mean is not None
-            assert self._y_std is not None
-            X_n = (X - self._x_mean) / self._x_std
-            y = self._predict_matrix(X_n) * self._y_std + self._y_mean
-            columns.append(_flatten_field_major(y))
-        return np.stack(columns, axis=1)
+        n_rows = params_arr.shape[0]
+        n_locations = self._coords.shape[0]
+        coords = np.tile(self._coords, (n_rows, 1))
+        repeated = np.repeat(params_arr, n_locations, axis=0)
+        X = np.hstack([coords, repeated]).astype(np.float32, copy=False)
+        assert self._x_mean is not None
+        assert self._x_std is not None
+        assert self._y_mean is not None
+        assert self._y_std is not None
+        X_n = (X - self._x_mean) / self._x_std
+        y = self._predict_matrix(X_n) * self._y_std + self._y_mean
+        y_blocks = y.reshape(n_rows, n_locations, len(self.field_names))
+        return y_blocks.transpose(0, 2, 1).reshape(n_rows, -1).T
 
     def _build_training_matrix(
         self,
         data: CFDFieldTrainingData,
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         n_steps, n_locations, _n_outputs = data.values.shape
-        X_parts = []
-        y_parts = []
-        for step in range(n_steps):
-            params = np.repeat(data.params[step : step + 1], n_locations, axis=0)
-            X_parts.append(np.hstack([data.coords, params]))
-            y_parts.append(data.values[step])
-        return np.vstack(X_parts), np.vstack(y_parts)
+        coords = np.tile(data.coords, (n_steps, 1))
+        params = np.repeat(data.params, n_locations, axis=0)
+        values = data.values.reshape(n_steps * n_locations, _n_outputs)
+        return np.hstack([coords, params]), values
 
     def _sample_indices(
         self,
@@ -312,8 +314,10 @@ class PhysicsNeMoCFDFieldModel:
         import torch.nn as nn
 
         layers: list[nn.Module] = [nn.Linear(input_dim, self.hidden), nn.Tanh()]
-        for _ in range(max(0, self.n_layers - 1)):
+        layer_idx = 0
+        while layer_idx < max(0, self.n_layers - 1):
             layers.extend([nn.Linear(self.hidden, self.hidden), nn.Tanh()])
+            layer_idx += 1
         layers.append(nn.Linear(self.hidden, output_dim))
         return nn.Sequential(*layers)
 
@@ -332,7 +336,7 @@ def prepare_cfd_field_training_data(
     *,
     field_name: str,
 ) -> CFDFieldTrainingData:
-    """Extract one field from a CFDDataset for legacy callers."""
+    """Extract one field from a CFDDataset used by legacy callers."""
     return prepare_cfd_field_training_data_from_datasets(
         [dataset],
         field_names=[field_name],
@@ -350,7 +354,7 @@ def prepare_cfd_field_training_data_from_datasets(
     dataset_list = list(datasets)
     if not dataset_list:
         raise ValueError("at least one CFD dataset is required")
-    fields = [str(field).strip() for field in field_names if str(field).strip()]
+    fields = list(filter(None, map(lambda field: str(field).strip(), field_names)))
     if not fields:
         raise ValueError("at least one output field is required")
 
@@ -360,7 +364,9 @@ def prepare_cfd_field_training_data_from_datasets(
     components_ref: list[int] | None = None
     total_snapshots = 0
 
-    for dataset_index, dataset in enumerate(dataset_list):
+    dataset_index = 0
+    while dataset_index < len(dataset_list):
+        dataset = dataset_list[dataset_index]
         coords, location, values, components = _extract_dataset_outputs(
             dataset,
             fields,
@@ -383,6 +389,7 @@ def prepare_cfd_field_training_data_from_datasets(
                 raise ValueError("selected field component layout differs across cases")
         values_blocks.append(values)
         total_snapshots += values.shape[0]
+        dataset_index += 1
 
     assert coords_ref is not None
     assert location_ref is not None
@@ -402,11 +409,11 @@ def prepare_cfd_field_training_data_from_datasets(
             raise ValueError(
                 f"params row count mismatch: {params_arr.shape[0]} vs "
                 f"CFD snapshots {total_snapshots}"
-            )
+        )
         param_names = (
-            [str(name) for name in parameter_names]
+            list(map(str, parameter_names))
             if parameter_names is not None
-            else [f"param_{index}" for index in range(params_arr.shape[1])]
+            else list(map(lambda index: f"param_{index}", range(params_arr.shape[1])))
         )
     if len(param_names) != params_arr.shape[1]:
         raise ValueError("parameter_names length must match params dimension")
@@ -443,12 +450,12 @@ def load_parameter_table(
 
     df = pd.read_csv(path)
     if columns:
-        names = [str(column).strip() for column in columns if str(column).strip()]
+        names = list(filter(None, map(lambda column: str(column).strip(), columns)))
         missing = sorted(set(names) - set(map(str, df.columns)))
         if missing:
             raise ValueError(f"params CSV missing columns: {', '.join(missing)}")
     else:
-        names = [str(column) for column in df.select_dtypes(include=["number"]).columns]
+        names = list(map(str, df.select_dtypes(include=["number"]).columns))
     if not names:
         raise ValueError("params CSV must contain at least one numeric input column")
     values = df[names].to_numpy(dtype=np.float64)
@@ -461,14 +468,17 @@ def load_parameter_table(
 
 
 def count_dataset_snapshots(datasets: Sequence[Any], field_names: Sequence[str]) -> int:
-    """Count total training snapshots for selected fields."""
+    """Count total training snapshots across selected fields."""
     total = 0
-    for dataset in datasets:
+    dataset_list = list(datasets)
+    dataset_index = 0
+    while dataset_index < len(dataset_list):
         _coords, _location, values, _components = _extract_dataset_outputs(
-            dataset,
+            dataset_list[dataset_index],
             field_names,
         )
         total += int(values.shape[0])
+        dataset_index += 1
     return total
 
 
@@ -482,7 +492,10 @@ def _extract_dataset_outputs(
     components: list[int] = []
     n_steps_ref: int | None = None
 
-    for field_name in field_names:
+    field_index = 0
+    field_list = list(field_names)
+    while field_index < len(field_list):
+        field_name = field_list[field_index]
         raw, location = _extract_raw_field(dataset, field_name)
         coords = _coords_for_location(dataset.mesh, location)
         values, source_components = _field_to_scalar_snapshots(raw)
@@ -502,6 +515,7 @@ def _extract_dataset_outputs(
                 raise ValueError("selected output fields have different snapshot counts")
         values_by_field.append(values)
         components.append(source_components)
+        field_index += 1
 
     assert coords_ref is not None
     assert location_ref is not None
@@ -592,9 +606,14 @@ def _build_output_field_specs(
     components: Sequence[int],
     n_locations: int,
 ) -> list[dict[str, object]]:
+    if len(field_names) != len(components):
+        raise ValueError("field_names and components must have the same length")
     specs: list[dict[str, object]] = []
     start = 0
-    for field_name, n_components in zip(field_names, components, strict=True):
+    spec_index = 0
+    while spec_index < len(field_names):
+        field_name = field_names[spec_index]
+        n_components = components[spec_index]
         display_name = f"{field_name}_mag" if int(n_components) > 1 else str(field_name)
         end = start + n_locations
         specs.append(
@@ -609,6 +628,7 @@ def _build_output_field_specs(
             }
         )
         start = end
+        spec_index += 1
     return specs
 
 
@@ -616,7 +636,7 @@ def _flatten_field_major(values: NDArray[np.float32]) -> NDArray[np.float32]:
     arr = np.asarray(values, dtype=np.float32)
     if arr.ndim != 2:
         raise ValueError(f"prediction values must be 2D, got shape {arr.shape}")
-    return np.concatenate([arr[:, index] for index in range(arr.shape[1])])
+    return arr.T.reshape(-1)
 
 
 def _regression_metrics(
