@@ -29,13 +29,13 @@ def _build_sliding_windows(
     seqs: np.ndarray, lookback: int
 ) -> tuple[np.ndarray, np.ndarray]:
     """(n_seq, T, F) → (N, lookback, F), (N, F) 슬라이딩 윈도우."""
-    X: list[np.ndarray] = []
-    Y: list[np.ndarray] = []
-    for s in seqs:
-        T = s.shape[0]
-        for t in range(T - lookback):
-            X.append(s[t : t + lookback])
-            Y.append(s[t + lookback])
+    n_seq, time_steps, n_features = seqs.shape
+    n_windows = time_steps - lookback
+    windows = np.lib.stride_tricks.sliding_window_view(seqs, lookback, axis=1)
+    X = np.moveaxis(windows[:, :n_windows], -1, 2).reshape(
+        n_seq * n_windows, lookback, n_features
+    )
+    Y = seqs[:, lookback:, :].reshape(n_seq * n_windows, n_features)
     return np.asarray(X, dtype=np.float32), np.asarray(Y, dtype=np.float32)
 
 
@@ -127,9 +127,15 @@ class LSTMForecaster(BaseTimeSeries):
             shuffle=True,
         )
         self.train_losses_ = []
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             epoch_loss = 0.0
-            for xb, yb in loader:
+            batches = iter(loader)
+            while True:
+                try:
+                    xb, yb = next(batches)
+                except StopIteration:
+                    break
                 xb = xb.to(self._device)
                 yb = yb.to(self._device)
                 optim.zero_grad()
@@ -140,6 +146,7 @@ class LSTMForecaster(BaseTimeSeries):
                 epoch_loss += float(loss.item()) * xb.shape[0]
             epoch_loss /= max(len(X), 1)
             self.train_losses_.append(epoch_loss)
+            epoch_idx += 1
 
         self.is_fitted = True
         logger.info(
@@ -167,12 +174,14 @@ class LSTMForecaster(BaseTimeSeries):
         window = state[-self.lookback :].copy()
 
         preds: list[np.ndarray] = []
-        for _ in range(n_steps):
+        step = 0
+        while step < n_steps:
             x = torch.tensor(window[None, :, :], device=self._device)
             with torch.no_grad():
                 yhat = self._model(x).cpu().numpy()[0]
             preds.append(yhat)
             window = np.concatenate([window[1:], yhat[None, :]], axis=0)
+            step += 1
         return np.stack(preds)
 
 
