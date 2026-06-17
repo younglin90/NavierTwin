@@ -58,9 +58,12 @@ def mc_multivariate(
     d = len(bounds)
     X = np.zeros((n, d))
     vol = 1.0
-    for i, (a, b) in enumerate(bounds):
+    i = 0
+    while i < d:
+        a, b = bounds[i]
         X[:, i] = rng.uniform(a, b, n)
         vol *= (b - a)
+        i += 1
     y = np.asarray(f(X), dtype=np.float64)
     mean = float(y.mean())
     se = float(y.std(ddof=1) / np.sqrt(n))
