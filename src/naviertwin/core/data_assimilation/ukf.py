@@ -25,9 +25,9 @@ def _sigma_points(x: NDArray, P: NDArray, alpha: float = 1e-3,
     sqrtP = np.linalg.cholesky((n + lam) * (P + 1e-12 * np.eye(n)))
     pts = np.zeros((2 * n + 1, n))
     pts[0] = x
-    for i in range(n):
-        pts[1 + i] = x + sqrtP[:, i]
-        pts[1 + n + i] = x - sqrtP[:, i]
+    offsets = sqrtP.T
+    pts[1 : 1 + n] = x[None, :] + offsets
+    pts[1 + n :] = x[None, :] - offsets
     Wm = np.full(2 * n + 1, 1.0 / (2 * (n + lam)))
     Wm[0] = lam / (n + lam)
     Wc = Wm.copy()
@@ -47,12 +47,12 @@ def ukf_step(
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     pts, Wm, Wc = _sigma_points(x, P)
     # propagate
-    pts_p = np.array([f(p) for p in pts])
+    pts_p = np.stack(tuple(map(f, pts)))
     x_pred = (Wm[:, None] * pts_p).sum(axis=0)
     diff = pts_p - x_pred
     P_pred = (Wc[:, None, None] * diff[:, :, None] * diff[:, None, :]).sum(axis=0) + Q
     # measurement
-    pts_m = np.array([h(p) for p in pts_p])
+    pts_m = np.stack(tuple(map(h, pts_p)))
     z_pred = (Wm[:, None] * pts_m).sum(axis=0)
     diff_z = pts_m - z_pred
     S = (Wc[:, None, None] * diff_z[:, :, None] * diff_z[:, None, :]).sum(axis=0) + R
