@@ -45,9 +45,12 @@ def assert_kills_mutant(
     test_inputs: list[tuple],
 ) -> bool:
     """Returns True if at least one input produces different output → mutant killed."""
-    for args in test_inputs:
+    idx = 0
+    while idx < len(test_inputs):
+        args = test_inputs[idx]
         if fn_under_test(*args) != mutated_fn(*args):
             return True
+        idx += 1
     return False
 
 
