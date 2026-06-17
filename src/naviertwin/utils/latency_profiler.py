@@ -17,13 +17,17 @@ from typing import Any
 def profile_call(
     fn: Callable[[], Any], *, n: int = 50, warmup: int = 5,
 ) -> dict[str, float]:
-    for _ in range(warmup):
+    warmup_idx = 0
+    while warmup_idx < warmup:
         fn()
+        warmup_idx += 1
     samples = []
-    for _ in range(n):
+    sample_idx = 0
+    while sample_idx < n:
         t0 = time.perf_counter()
         fn()
         samples.append((time.perf_counter() - t0) * 1000.0)
+        sample_idx += 1
     samples.sort()
     return {
         "p50": samples[n // 2],
