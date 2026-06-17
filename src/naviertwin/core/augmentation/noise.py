@@ -65,10 +65,9 @@ def augment_batch(
 ) -> NDArray[np.float64]:
     """X 에 Gaussian 노이즈 버전 n_copies 개 붙여 [X, X+n1, X+n2, ...] 반환."""
     rng = np.random.default_rng(seed)
-    out = [X]
-    for _ in range(n_copies):
-        out.append(X + rng.normal(0.0, sigma, size=X.shape))
-    return np.concatenate(out, axis=-1)
+    noise = rng.normal(0.0, sigma, size=(n_copies,) + X.shape)
+    noisy = X[np.newaxis, ...] + noise
+    return np.concatenate((X,) + tuple(noisy), axis=-1)
 
 
 __all__ = [
