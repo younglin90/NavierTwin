@@ -17,17 +17,20 @@ Examples:
 from __future__ import annotations
 
 import numpy as np
+from numpy.linalg import svd as _svd
 from numpy.typing import NDArray
 
 
 def _kron_z(z: NDArray[np.float64]) -> NDArray[np.float64]:
     """unique pairs of z (z_i z_j, i<=j) — symmetric Kronecker."""
-    r = z.shape[0]
-    pairs = []
-    for i in range(r):
-        for j in range(i, r):
-            pairs.append(z[i] * z[j])
-    return np.asarray(pairs)
+    rows, cols = np.triu_indices(z.shape[0])
+    return np.asarray(z[rows] * z[cols])
+
+
+def _kron_z_columns(Z: NDArray[np.float64]) -> NDArray[np.float64]:
+    """Column-wise symmetric Kronecker feature matrix."""
+    rows, cols = np.triu_indices(Z.shape[0])
+    return Z[rows, :] * Z[cols, :]
 
 
 class QuadraticManifold:
@@ -39,14 +42,13 @@ class QuadraticManifold:
     def fit(self, X: NDArray[np.float64]) -> "QuadraticManifold":
         X = np.asarray(X, dtype=np.float64)
         # POD basis Φ
-        U, _, _ = np.linalg.svd(X, full_matrices=False)
+        U, _, _ = _svd(X, full_matrices=False)
         self.Phi = U[:, : self.rank]
         Z = self.Phi.T @ X  # (r, m)
         # residual after linear fit
         R = X - self.Phi @ Z
         # build feature matrix Z ⊗ Z (unique)
-        m = Z.shape[1]
-        Zk = np.array([_kron_z(Z[:, i]) for i in range(m)]).T  # (p, m)
+        Zk = _kron_z_columns(Z)  # (p, m)
         # least-squares: H Zk ≈ R
         H, *_ = np.linalg.lstsq(Zk.T, R.T, rcond=None)
         self.H = H.T  # (n, p)
@@ -61,7 +63,7 @@ class QuadraticManifold:
         Z = np.asarray(Z, dtype=np.float64)
         if Z.ndim == 1:
             Z = Z[:, None]
-        Zk = np.array([_kron_z(Z[:, i]) for i in range(Z.shape[1])]).T
+        Zk = _kron_z_columns(Z)
         return self.Phi @ Z + self.H @ Zk
 
 
