@@ -2993,6 +2993,70 @@ static py::array_t<double> bl_grid_native(ArrayD wall_pts, ArrayD wall_normals, 
     return out;
 }
 
+static py::array_t<double> metric_from_hessian_2d_native(ArrayD H, double h_min, double h_max) {
+    if (H.ndim() < 2 || H.shape(H.ndim() - 1) != 2 || H.shape(H.ndim() - 2) != 2) {
+        throw std::invalid_argument("H must have trailing shape (2, 2)");
+    }
+    const py::ssize_t n = H.size() / 4;
+    auto out = py::array_t<double>(H.request().shape);
+    const double* hp = H.data();
+    double* op = out.mutable_data();
+    const double lo = 1.0 / (h_max * h_max);
+    const double hi = 1.0 / (h_min * h_min);
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const double h00 = hp[4 * i];
+        const double h01 = 0.5 * (hp[4 * i + 1] + hp[4 * i + 2]);
+        const double h11 = hp[4 * i + 3];
+        const double tr = h00 + h11;
+        const double diff = h00 - h11;
+        const double disc = std::sqrt(0.25 * diff * diff + h01 * h01);
+        const double lam1 = 0.5 * tr + disc;
+        const double lam2 = 0.5 * tr - disc;
+        const double mu1 = std::min(hi, std::max(lo, std::abs(lam1)));
+        const double mu2 = std::min(hi, std::max(lo, std::abs(lam2)));
+        double v0 = h01;
+        double v1 = lam1 - h00;
+        double norm = std::sqrt(v0 * v0 + v1 * v1);
+        if (norm < 1e-30) {
+            v0 = 1.0;
+            v1 = 0.0;
+            norm = 1.0;
+        }
+        v0 /= norm;
+        v1 /= norm;
+        const double w0 = -v1;
+        const double w1 = v0;
+        op[4 * i] = mu1 * v0 * v0 + mu2 * w0 * w0;
+        op[4 * i + 1] = mu1 * v0 * v1 + mu2 * w0 * w1;
+        op[4 * i + 2] = op[4 * i + 1];
+        op[4 * i + 3] = mu1 * v1 * v1 + mu2 * w1 * w1;
+    }
+    return out;
+}
+
+static double edge_length_metric_native(ArrayD M_a, ArrayD M_b, ArrayD a, ArrayD b) {
+    if (M_a.ndim() != 2 || M_b.ndim() != 2 || M_a.shape(0) != M_a.shape(1) || M_b.shape(0) != M_b.shape(1) || M_a.shape(0) != M_b.shape(0)) {
+        throw std::invalid_argument("M_a and M_b must be square matrices of the same size");
+    }
+    const py::ssize_t n = M_a.shape(0);
+    if (a.size() != n || b.size() != n) {
+        throw std::invalid_argument("a and b must match metric dimension");
+    }
+    const double* Map = M_a.data();
+    const double* Mbp = M_b.data();
+    const double* ap = a.data();
+    const double* bp = b.data();
+    double q = 0.0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const double ei = bp[i] - ap[i];
+        for (py::ssize_t j = 0; j < n; ++j) {
+            const double ej = bp[j] - ap[j];
+            q += ei * 0.5 * (Map[i * n + j] + Mbp[i * n + j]) * ej;
+        }
+    }
+    return std::sqrt(std::max(q, 0.0));
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -3125,5 +3189,7 @@ PYBIND11_MODULE(_kernels, m) {
         "bl_grid", &bl_grid_native, py::arg("wall_pts"), py::arg("wall_normals"), py::arg("n_layers"),
         py::arg("first"), py::arg("growth")
     );
+    m.def("metric_from_hessian_2d", &metric_from_hessian_2d_native, py::arg("H"), py::arg("h_min") = 1e-3, py::arg("h_max") = 1.0);
+    m.def("edge_length_metric", &edge_length_metric_native, py::arg("M_a"), py::arg("M_b"), py::arg("a"), py::arg("b"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

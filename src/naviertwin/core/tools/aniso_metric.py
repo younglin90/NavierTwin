@@ -17,21 +17,17 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required by anisotropic metrics")
+
 
 def metric_from_hessian(
     H: NDArray[np.float64], *, h_min: float = 1e-3, h_max: float = 1.0,
 ) -> NDArray[np.float64]:
     """|H| 의 spectrum 을 [1/h_max², 1/h_min²] 에 clip → metric tensor."""
-    H = np.asarray(H, dtype=np.float64)
-    flat = H.reshape(-1, H.shape[-2], H.shape[-1])
-    out = np.zeros_like(flat)
-    lo, hi = 1.0 / (h_max * h_max), 1.0 / (h_min * h_min)
-    for i in range(flat.shape[0]):
-        Hs = 0.5 * (flat[i] + flat[i].T)
-        w, V = np.linalg.eigh(Hs)
-        w_abs = np.clip(np.abs(w), lo, hi)
-        out[i] = V @ np.diag(w_abs) @ V.T
-    return out.reshape(H.shape)
+    return _kernels.metric_from_hessian_2d(np.asarray(H, dtype=np.float64), float(h_min), float(h_max))
 
 
 def edge_length_metric(
@@ -39,9 +35,14 @@ def edge_length_metric(
     a: NDArray[np.float64], b: NDArray[np.float64],
 ) -> float:
     """metric-induced edge length (mid-point average metric)."""
-    M = 0.5 * (M_a + M_b)
-    e = b - a
-    return float(np.sqrt(e @ M @ e))
+    return float(
+        _kernels.edge_length_metric(
+            np.asarray(M_a, dtype=np.float64),
+            np.asarray(M_b, dtype=np.float64),
+            np.asarray(a, dtype=np.float64),
+            np.asarray(b, dtype=np.float64),
+        ),
+    )
 
 
 __all__ = ["edge_length_metric", "metric_from_hessian"]
