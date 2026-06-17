@@ -4281,6 +4281,41 @@ static py::list frequency_peak_dicts_native(ArrayD freqs, ArrayD amplitudes, Arr
     return out;
 }
 
+static py::array_t<double> delta_criterion_3x3_native(ArrayD grad) {
+    if (grad.ndim() < 2 || grad.shape(grad.ndim() - 1) != 3 || grad.shape(grad.ndim() - 2) != 3) {
+        throw std::invalid_argument("grad must end with shape (3, 3)");
+    }
+    py::ssize_t n = 1;
+    std::vector<py::ssize_t> out_shape;
+    for (py::ssize_t axis = 0; axis < grad.ndim() - 2; ++axis) {
+        out_shape.push_back(grad.shape(axis));
+        n *= grad.shape(axis);
+    }
+    if (out_shape.empty()) {
+        out_shape.push_back(1);
+    }
+    auto out = py::array_t<double>(out_shape);
+    double* op = out.mutable_data();
+    const double* gp = grad.data();
+    for (py::ssize_t idx = 0; idx < n; ++idx) {
+        const double* a = gp + idx * 9;
+        const double a00 = a[0], a01 = a[1], a02 = a[2];
+        const double a10 = a[3], a11 = a[4], a12 = a[5];
+        const double a20 = a[6], a21 = a[7], a22 = a[8];
+        const double tr_a2 =
+            a00 * a00 + a11 * a11 + a22 * a22 +
+            2.0 * (a01 * a10 + a02 * a20 + a12 * a21);
+        const double q = -0.5 * tr_a2;
+        const double det =
+            a00 * (a11 * a22 - a12 * a21) -
+            a01 * (a10 * a22 - a12 * a20) +
+            a02 * (a10 * a21 - a11 * a20);
+        const double r = -det;
+        op[idx] = std::pow(q / 3.0, 3.0) + std::pow(r / 2.0, 2.0);
+    }
+    return out;
+}
+
 static void schedule_berger_oliger_fill(int level, int max_level, int refine_ratio, std::vector<int>& out) {
     if (level >= max_level) {
         out.push_back(level);
@@ -4505,6 +4540,7 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("expected_improvement", &expected_improvement_native, py::arg("mu"), py::arg("sigma"), py::arg("y_best"), py::arg("xi") = 0.0);
     m.def("r_adapt_1d", &r_adapt_1d_native, py::arg("x"), py::arg("weights"), py::arg("n_iter") = 20);
     m.def("frequency_peak_dicts", &frequency_peak_dicts_native, py::arg("freqs"), py::arg("amplitudes"), py::arg("indices"));
+    m.def("delta_criterion_3x3", &delta_criterion_3x3_native, py::arg("grad"));
     m.def(
         "schedule_berger_oliger", &schedule_berger_oliger_native, py::arg("level") = 0,
         py::arg("max_level") = 2, py::arg("refine_ratio") = 2
