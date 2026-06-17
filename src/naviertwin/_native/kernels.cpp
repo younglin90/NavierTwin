@@ -4,6 +4,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <pybind11/numpy.h>
@@ -3575,6 +3576,58 @@ static py::array_t<double> ray_march_native(ArrayD volume, int n_steps, int axis
     return out;
 }
 
+static py::array_t<long long> boundary_faces_tet_native(ArrayI tets) {
+    if (tets.ndim() != 2 || tets.shape(1) != 4) {
+        throw std::invalid_argument("tets must have shape (M, 4)");
+    }
+    const py::ssize_t n = tets.shape(0);
+    const long long* tp = tets.data();
+    constexpr int face_idx[4][3] = {{0, 1, 2}, {0, 1, 3}, {0, 2, 3}, {1, 2, 3}};
+    std::vector<std::array<long long, 3>> faces;
+    std::vector<int> counts;
+    std::unordered_map<std::string, std::size_t> first_seen;
+    faces.reserve(static_cast<std::size_t>(4 * n));
+    counts.reserve(static_cast<std::size_t>(4 * n));
+    for (py::ssize_t row = 0; row < n; ++row) {
+        for (int f = 0; f < 4; ++f) {
+            std::array<long long, 3> tri = {
+                tp[row * 4 + face_idx[f][0]],
+                tp[row * 4 + face_idx[f][1]],
+                tp[row * 4 + face_idx[f][2]],
+            };
+            std::sort(tri.begin(), tri.end());
+            const std::string key = std::to_string(tri[0]) + "," + std::to_string(tri[1]) + "," + std::to_string(tri[2]);
+            auto it = first_seen.find(key);
+            if (it == first_seen.end()) {
+                first_seen.emplace(key, faces.size());
+                faces.push_back(tri);
+                counts.push_back(1);
+            } else {
+                counts[it->second] += 1;
+            }
+        }
+    }
+    py::ssize_t boundary_count = 0;
+    for (int c : counts) {
+        if (c == 1) {
+            ++boundary_count;
+        }
+    }
+    auto out = py::array_t<long long>({boundary_count, static_cast<py::ssize_t>(3)});
+    long long* op = out.mutable_data();
+    py::ssize_t out_row = 0;
+    for (std::size_t i = 0; i < faces.size(); ++i) {
+        if (counts[i] != 1) {
+            continue;
+        }
+        op[out_row * 3] = faces[i][0];
+        op[out_row * 3 + 1] = faces[i][1];
+        op[out_row * 3 + 2] = faces[i][2];
+        ++out_row;
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -3728,5 +3781,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("pareto_front", &pareto_front_native, py::arg("objectives"));
     m.def("arrow_segments", &arrow_segments_native, py::arg("points"), py::arg("vectors"), py::arg("scale") = 1.0);
     m.def("ray_march", &ray_march_native, py::arg("volume"), py::arg("n_steps") = 32, py::arg("axis") = 2, py::arg("alpha") = 0.1);
+    m.def("boundary_faces_tet", &boundary_faces_tet_native, py::arg("tets"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

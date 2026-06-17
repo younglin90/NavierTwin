@@ -16,18 +16,14 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
-_TET_FACES = ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3))
+from naviertwin._native import _kernels
 
 
 def boundary_faces_tet(tets: NDArray[np.int_]) -> NDArray[np.int_]:
     """tet (M, 4) → boundary triangle faces (K, 3)."""
-    tets = np.asarray(tets)
-    counts: dict[tuple[int, int, int], int] = {}
-    for t in tets:
-        for f in _TET_FACES:
-            tri = tuple(sorted((int(t[f[0]]), int(t[f[1]]), int(t[f[2]]))))
-            counts[tri] = counts.get(tri, 0) + 1
-    return np.array([list(k) for k, c in counts.items() if c == 1], dtype=int)
+    if _kernels is None:
+        raise ImportError("NavierTwin native kernels are required by boundary_faces_tet")
+    return _kernels.boundary_faces_tet(np.asarray(tets, dtype=np.int64))
 
 
 __all__ = ["boundary_faces_tet"]
