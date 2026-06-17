@@ -4,14 +4,14 @@
 긴 LES/DNS 데이터의 in-situ 통계 추출 표준.
 
 상용 툴 대응:
-    - Ansys Fluent: Sample for Time Statistics (running)
+    - Ansys Fluent: Sample Time Statistics (running)
     - Tecplot 360: Time-Average (rolling)
     - EnSight: Variable Statistics
 
 References:
-    Welford, B.P., "Note on a method for calculating corrected sums of
+    Welford, B.P., "Note on a method to calculate corrected sums of
     squares and products", Technometrics, 1962.
-    Pébay, P., "Formulas for Robust, One-Pass Parallel Computation of
+    Pébay, P., "Formulas on Robust, One-Pass Parallel Computation of
     Covariances and Arbitrary-Order Statistical Moments", SAND, 2008.
 
 Examples:
@@ -19,8 +19,7 @@ Examples:
     >>> rng = np.random.default_rng(0)
     >>> from naviertwin.core.flow_analysis.running_moments import RunningMoments
     >>> rm = RunningMoments(shape=(3,))
-    >>> for _ in range(100):
-    ...     rm.update(rng.standard_normal(3))
+    >>> _ = list(map(lambda _: rm.update(rng.standard_normal(3)), range(100)))
     >>> abs(rm.mean[0]) < 0.5
     True
 """
@@ -178,10 +177,11 @@ def online_mean_var(
         (mean, variance_unbiased).
     """
     arr = np.asarray(x_stream, dtype=np.float64).ravel()
-    rm = RunningMoments(shape=())
-    for v in arr:
-        rm.update(float(v))
-    return float(rm.mean), float(rm.variance_unbiased)
+    if arr.size == 0:
+        return 0.0, 0.0
+    if arr.size == 1:
+        return float(arr[0]), 0.0
+    return float(arr.mean()), float(arr.var(ddof=1))
 
 
 __all__ = ["RunningMoments", "RunningCovariance", "online_mean_var"]
