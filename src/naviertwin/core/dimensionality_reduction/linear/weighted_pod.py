@@ -15,6 +15,7 @@ Examples:
 from __future__ import annotations
 
 import numpy as np
+from numpy.linalg import svd as _svd
 from numpy.typing import NDArray
 
 
@@ -58,7 +59,7 @@ def compressed_pod(
     S = rng.standard_normal((compress, n))
     Y = S @ X  # (compress, N)
     # SVD on smaller matrix
-    U_s, sv, Vt = np.linalg.svd(Y, full_matrices=False)
+    _U_s, sv, Vt = _svd(Y, full_matrices=False)
     # reconstruct approximate full modes
     k = int(min(k, sv.size))
     # modes = X V / σ
