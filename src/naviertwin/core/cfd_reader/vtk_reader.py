@@ -122,7 +122,9 @@ class VTKReader(BaseReader):
 
         meshes: list[Any] = []
         resolved_entries: list[tuple[float, Path]] = []
-        for time_value, file_name in entries:
+        entry_idx = 0
+        while entry_idx < len(entries):
+            time_value, file_name = entries[entry_idx]
             snapshot_path = (path.parent / file_name).resolve()
             if not snapshot_path.exists():
                 raise FileNotFoundError(
@@ -131,32 +133,51 @@ class VTKReader(BaseReader):
             raw_mesh = pv.read(str(snapshot_path))
             meshes.append(self._to_unstructured_grid(raw_mesh))
             resolved_entries.append((time_value, snapshot_path))
+            entry_idx += 1
 
         meshes_with_entries = sorted(
             zip(resolved_entries, meshes, strict=True),
             key=lambda item: item[0][0],
         )
-        resolved_entries = [entry for entry, _ in meshes_with_entries]
-        meshes = [mesh for _, mesh in meshes_with_entries]
+        resolved_entries = []
+        meshes = []
+        pair_idx = 0
+        while pair_idx < len(meshes_with_entries):
+            entry, mesh = meshes_with_entries[pair_idx]
+            resolved_entries.append(entry)
+            meshes.append(mesh)
+            pair_idx += 1
 
         base_mesh = meshes[0].copy(deep=True)
         self._validate_same_topology(meshes, resolved_entries)
 
         field_locations = self._common_time_series_fields(meshes)
         time_series_fields: dict[str, Any] = {}
-        for field_name, location in field_locations.items():
+        field_items = list(field_locations.items())
+        field_idx = 0
+        while field_idx < len(field_items):
+            field_name, location = field_items[field_idx]
             series = []
-            for mesh in meshes:
+            mesh_idx = 0
+            while mesh_idx < len(meshes):
+                mesh = meshes[mesh_idx]
                 container = mesh.point_data if location == "point" else mesh.cell_data
                 series.append(np.asarray(container[field_name], dtype=float))
+                mesh_idx += 1
             time_series_fields[field_name] = np.stack(series, axis=0)
 
             base_container = (
                 base_mesh.point_data if location == "point" else base_mesh.cell_data
             )
             base_container[field_name] = series[0]
+            field_idx += 1
 
-        time_steps = [float(time_value) for time_value, _ in resolved_entries]
+        time_steps = []
+        entry_idx = 0
+        while entry_idx < len(resolved_entries):
+            time_value, _ = resolved_entries[entry_idx]
+            time_steps.append(float(time_value))
+            entry_idx += 1
         field_names = sorted(field_locations)
 
         logger.debug(
@@ -174,7 +195,7 @@ class VTKReader(BaseReader):
             metadata={
                 "reader": "VTKReader",
                 "source_file": str(path),
-                "source_files": [str(file_path) for _, file_path in resolved_entries],
+                "source_files": self._resolved_entry_paths(resolved_entries),
                 "time_series_fields": time_series_fields,
                 "time_series_locations": dict(field_locations),
                 "original_type": "PVDCollection",
@@ -185,11 +206,16 @@ class VTKReader(BaseReader):
         """PVD XML에서 ``(timestep, file)`` 항목을 추출한다."""
         root = ET.parse(path).getroot()
         entries: list[tuple[float, str]] = []
-        for index, data_set in enumerate(root.iter()):
+        nodes = list(root.iter())
+        index = 0
+        while index < len(nodes):
+            data_set = nodes[index]
             if self._strip_xml_namespace(data_set.tag) != "DataSet":
+                index += 1
                 continue
             file_name = data_set.attrib.get("file", "").strip()
             if not file_name:
+                index += 1
                 continue
             timestep_text = data_set.attrib.get("timestep")
             if timestep_text is None or timestep_text == "":
@@ -203,7 +229,18 @@ class VTKReader(BaseReader):
                         f"{timestep_text!r}"
                     ) from exc
             entries.append((timestep, file_name))
+            index += 1
         return entries
+
+    @staticmethod
+    def _resolved_entry_paths(entries: list[tuple[float, Path]]) -> list[str]:
+        paths: list[str] = []
+        entry_idx = 0
+        while entry_idx < len(entries):
+            _, file_path = entries[entry_idx]
+            paths.append(str(file_path))
+            entry_idx += 1
+        return paths
 
     @staticmethod
     def _strip_xml_namespace(tag: str) -> str:
@@ -219,7 +256,9 @@ class VTKReader(BaseReader):
         first = meshes[0]
         first_n_points = int(first.n_points)
         first_n_cells = int(first.n_cells)
-        for index, mesh in enumerate(meshes[1:], start=1):
+        index = 1
+        while index < len(meshes):
+            mesh = meshes[index]
             same_points = int(mesh.n_points) == first_n_points
             same_cells = int(mesh.n_cells) == first_n_cells
             if not same_points or not same_cells:
@@ -227,24 +266,40 @@ class VTKReader(BaseReader):
                     "PVD time-series 는 모든 스냅샷의 point/cell 개수가 같아야 "
                     f"합니다: {entries[index][1]}"
                 )
+            index += 1
 
     @staticmethod
     def _common_time_series_fields(meshes: list[Any]) -> dict[str, str]:
         """모든 스냅샷에 공통으로 존재하는 필드와 위치를 반환한다."""
         first = meshes[0]
-        field_locations: dict[str, str] = {
-            str(name): "point" for name in first.point_data.keys()
-        }
-        for name in first.cell_data.keys():
-            field_locations.setdefault(str(name), "cell")
+        field_locations: dict[str, str] = {}
+        point_names = list(first.point_data.keys())
+        point_idx = 0
+        while point_idx < len(point_names):
+            field_locations[str(point_names[point_idx])] = "point"
+            point_idx += 1
 
-        for mesh in meshes[1:]:
-            field_locations = {
-                field_name: location
-                for field_name, location in field_locations.items()
-                if field_name
-                in (mesh.point_data if location == "point" else mesh.cell_data)
-            }
+        cell_names = list(first.cell_data.keys())
+        cell_idx = 0
+        while cell_idx < len(cell_names):
+            name = cell_names[cell_idx]
+            field_locations.setdefault(str(name), "cell")
+            cell_idx += 1
+
+        mesh_idx = 1
+        while mesh_idx < len(meshes):
+            mesh = meshes[mesh_idx]
+            retained: dict[str, str] = {}
+            items = list(field_locations.items())
+            item_idx = 0
+            while item_idx < len(items):
+                field_name, location = items[item_idx]
+                container = mesh.point_data if location == "point" else mesh.cell_data
+                if field_name in container:
+                    retained[field_name] = location
+                item_idx += 1
+            field_locations = retained
+            mesh_idx += 1
         return field_locations
 
     # ------------------------------------------------------------------
@@ -294,9 +349,9 @@ class VTKReader(BaseReader):
         names: set[str] = set()
 
         if hasattr(mesh, "point_data"):
-            names.update(str(k) for k in mesh.point_data.keys())
+            names.update(map(str, mesh.point_data.keys()))
 
         if hasattr(mesh, "cell_data"):
-            names.update(str(k) for k in mesh.cell_data.keys())
+            names.update(map(str, mesh.cell_data.keys()))
 
         return sorted(names)
