@@ -226,10 +226,7 @@ def metadata_compatible(
     """
     if keys is None:
         keys = ["schema_version", "n_modes", "n_space"]
-    for k in keys:
-        if expected.get(k) != actual.get(k):
-            return False
-    return True
+    return all(map(lambda k: expected.get(k) == actual.get(k), keys))
 
 
 __all__ = [
