@@ -24,12 +24,14 @@ _TEMPLATE = """<?xml version="1.0"?>
 """
 
 
+def _dataset_row(entry: tuple[float, str]) -> str:
+    t, filename = entry
+    return f'    <DataSet timestep="{t}" group="" part="0" file="{filename}"/>'
+
+
 def write_pvd(path: str | Path, entries: list[tuple[float, str]]) -> None:
     """entries = [(time, filename), ...]"""
-    rows = "\n".join(
-        f'    <DataSet timestep="{t}" group="" part="0" file="{f}"/>'
-        for t, f in entries
-    )
+    rows = "\n".join(map(_dataset_row, entries))
     Path(path).write_text(_TEMPLATE.format(rows=rows))
 
 
