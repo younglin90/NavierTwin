@@ -268,19 +268,13 @@ def running_statistics(
     if n == 0:
         return {"mean": np.zeros_like(u), "rms": np.zeros_like(u)}
 
-    mean = np.zeros_like(u)
-    M2 = np.zeros(u.shape[1:], dtype=np.float64)
-    rms_arr = np.zeros_like(u)
-
-    cur_mean = np.zeros(u.shape[1:], dtype=np.float64)
-    for t in range(n):
-        delta = u[t] - cur_mean
-        cur_mean = cur_mean + delta / (t + 1)
-        delta2 = u[t] - cur_mean
-        M2 = M2 + delta * delta2
-        mean[t] = cur_mean
-        if t > 0:
-            rms_arr[t] = np.sqrt(M2 / (t + 1))
+    counts = np.arange(1, n + 1, dtype=np.float64).reshape((n,) + (1,) * (u.ndim - 1))
+    csum = np.cumsum(u, axis=0)
+    mean = csum / counts
+    csum2 = np.cumsum(u * u, axis=0)
+    var = np.maximum(csum2 / counts - mean * mean, 0.0)
+    rms_arr = np.sqrt(var)
+    rms_arr[0] = 0.0
     return {"mean": mean, "rms": rms_arr}
 
 
