@@ -31,13 +31,18 @@ logger = get_logger(__name__)
 
 def _is_table_like(result: dict[str, Any]) -> bool:
     """결과가 1D ndarray 키 위주면 테이블로 export 가능."""
-    arr_keys = [
-        k for k, v in result.items()
-        if isinstance(v, np.ndarray) and v.ndim == 1
-    ]
+    arr_keys = list(
+        map(
+            lambda item: item[0],
+            filter(
+                lambda item: isinstance(item[1], np.ndarray) and item[1].ndim == 1,
+                result.items(),
+            ),
+        )
+    )
     if not arr_keys:
         return False
-    lengths = {result[k].shape[0] for k in arr_keys}
+    lengths = set(map(lambda k: result[k].shape[0], arr_keys))
     return len(lengths) == 1
 
 
@@ -52,35 +57,48 @@ def result_to_csv_text(result: dict[str, Any]) -> str:
     Returns:
         CSV 문자열 (header + rows).
     """
-    arr_keys = [
-        k for k, v in result.items()
-        if isinstance(v, np.ndarray) and v.ndim == 1 and v.size > 0
-    ]
+    arr_keys = list(
+        map(
+            lambda item: item[0],
+            filter(
+                lambda item: (
+                    isinstance(item[1], np.ndarray)
+                    and item[1].ndim == 1
+                    and item[1].size > 0
+                ),
+                result.items(),
+            ),
+        )
+    )
     if not arr_keys:
         # 스칼라/dict만 있는 경우
         out = io.StringIO()
         w = csv.writer(out)
         w.writerow(["key", "value"])
-        for k, v in result.items():
+        def write_scalar(item: tuple[str, Any]) -> None:
+            k, v = item
             if isinstance(v, (int, float, str, bool)):
                 w.writerow([k, v])
             elif isinstance(v, np.ndarray) and v.size <= 1:
                 w.writerow([k, float(v.flatten()[0]) if v.size == 1 else ""])
+        tuple(map(write_scalar, result.items()))
         return out.getvalue()
 
-    max_len = max(result[k].shape[0] for k in arr_keys)
+    max_len = max(map(lambda k: result[k].shape[0], arr_keys))
     out = io.StringIO()
     w = csv.writer(out)
     w.writerow(arr_keys)
-    for i in range(max_len):
-        row = []
-        for k in arr_keys:
+    i = 0
+    while i < max_len:
+        def cell(k: str) -> float | str:
             arr = result[k]
             if i < arr.shape[0]:
-                row.append(float(arr[i]))
-            else:
-                row.append("")
+                return float(arr[i])
+            return ""
+
+        row = list(map(cell, arr_keys))
         w.writerow(row)
+        i += 1
     return out.getvalue()
 
 
@@ -124,9 +142,9 @@ def _to_json_compat(value: Any) -> Any:
     if isinstance(value, (np.bool_,)):
         return bool(value)
     if isinstance(value, dict):
-        return {k: _to_json_compat(v) for k, v in value.items()}
+        return dict(map(lambda item: (item[0], _to_json_compat(item[1])), value.items()))
     if isinstance(value, (list, tuple)):
-        return [_to_json_compat(v) for v in value]
+        return list(map(_to_json_compat, value))
     return value
 
 
@@ -170,7 +188,8 @@ def save_npz(result: dict[str, Any], path: str | Path) -> Path:
     p = Path(path).resolve()
     p.parent.mkdir(parents=True, exist_ok=True)
     arrs: dict[str, NDArray] = {}
-    for k, v in result.items():
+    def collect_array(item: tuple[str, Any]) -> None:
+        k, v = item
         if isinstance(v, np.ndarray):
             arrs[k] = v
         elif isinstance(v, (int, float, np.integer, np.floating)):
@@ -180,6 +199,8 @@ def save_npz(result: dict[str, Any], path: str | Path) -> Path:
                 arrs[k] = np.asarray(v)
             except (ValueError, TypeError):
                 pass
+
+    tuple(map(collect_array, result.items()))
     if not arrs:
         raise ValueError("저장 가능한 ndarray/scalar 없음")
     np.savez_compressed(str(p), **arrs)
@@ -202,19 +223,19 @@ def run_category(
     Returns:
         {op_name: result} dict (실패 시 {"error": str}).
     """
-    out: dict[str, dict[str, Any]] = {}
-    for op in facade.list_operations():
+    def run_op(op: str) -> tuple[str, dict[str, Any]] | None:
         info = facade.describe(op)
         if info["category"] != category:
-            continue
+            return None
         kwargs = (smoke_kwargs or {}).get(op)
         if kwargs is None:
-            continue
+            return None
         try:
-            out[op] = facade.run(op, **kwargs)
+            return op, facade.run(op, **kwargs)
         except Exception as e:  # noqa: BLE001
-            out[op] = {"_error": str(e)}
-    return out
+            return op, {"_error": str(e)}
+
+    return dict(filter(None, map(run_op, facade.list_operations())))
 
 
 def run_all(
@@ -222,42 +243,48 @@ def run_all(
     smoke_kwargs: dict[str, dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
     """모든 op 일괄 실행 (smoke_kwargs 정의된 op만)."""
-    out: dict[str, dict[str, Any]] = {}
-    for op in facade.list_operations():
+    def run_op(op: str) -> tuple[str, dict[str, Any]] | None:
         kwargs = smoke_kwargs.get(op)
         if kwargs is None:
-            continue
+            return None
         try:
-            out[op] = facade.run(op, **kwargs)
+            return op, facade.run(op, **kwargs)
         except Exception as e:  # noqa: BLE001
-            out[op] = {"_error": str(e)}
-    return out
+            return op, {"_error": str(e)}
+
+    return dict(filter(None, map(run_op, facade.list_operations())))
 
 
 def bulk_summary_markdown(bulk_results: dict[str, dict[str, Any]]) -> str:
     """일괄 실행 결과 → markdown 요약."""
     lines = ["# Bulk Post-Process Summary", ""]
     n_total = len(bulk_results)
-    n_failed = sum(1 for r in bulk_results.values() if "_error" in r)
+    n_failed = sum(map(lambda r: int("_error" in r), bulk_results.values()))
     lines.append(f"- 총 op: {n_total}")
     lines.append(f"- 실패: {n_failed}")
     lines.append(f"- 성공: {n_total - n_failed}")
     lines.append("")
-    for op, result in sorted(bulk_results.items()):
-        lines.append(f"## {op}")
+
+    def result_line(item: tuple[str, Any]) -> str:
+        k, v = item
+        if isinstance(v, np.ndarray):
+            return f"  - {k}: shape={v.shape}, mean={float(v.mean()):.4g}"
+        if isinstance(v, (int, float)):
+            return f"  - {k}: {v}"
+        return f"  - {k}: {type(v).__name__}"
+
+    def section(item: tuple[str, dict[str, Any]]) -> list[str]:
+        op, result = item
+        section_lines = [f"## {op}"]
         if "_error" in result:
-            lines.append(f"- ❌ 실패: {result['_error']}")
+            section_lines.append(f"- ❌ 실패: {result['_error']}")
         else:
-            lines.append(f"- ✅ 성공 ({len(result)} 출력 키)")
-            for k, v in result.items():
-                if isinstance(v, np.ndarray):
-                    lines.append(f"  - {k}: shape={v.shape}, "
-                                  f"mean={float(v.mean()):.4g}")
-                elif isinstance(v, (int, float)):
-                    lines.append(f"  - {k}: {v}")
-                else:
-                    lines.append(f"  - {k}: {type(v).__name__}")
-        lines.append("")
+            section_lines.append(f"- ✅ 성공 ({len(result)} 출력 키)")
+            section_lines.extend(map(result_line, result.items()))
+        section_lines.append("")
+        return section_lines
+
+    tuple(map(lambda block: lines.extend(block), map(section, sorted(bulk_results.items()))))
     return "\n".join(lines)
 
 
