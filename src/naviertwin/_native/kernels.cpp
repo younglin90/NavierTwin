@@ -2919,6 +2919,32 @@ static py::tuple fd_heat_2d_evolve(ArrayD u0, int n_steps, double cx, double cy,
     return py::make_tuple(t, U);
 }
 
+static py::array_t<double> kep_flux_native(ArrayD UL, ArrayD UR, double gamma) {
+    if (UL.ndim() != 1 || UR.ndim() != 1 || UL.shape(0) < 3 || UR.shape(0) < 3) {
+        throw std::invalid_argument("UL and UR must be 1D conservative states with at least three entries");
+    }
+    const double* L = UL.data();
+    const double* R = UR.data();
+    const double rL = L[0];
+    const double uL = L[1] / std::max(rL, 1e-30);
+    const double pL = (gamma - 1.0) * (L[2] - 0.5 * rL * uL * uL);
+    const double HL = (L[2] + pL) / std::max(rL, 1e-30);
+    const double rR = R[0];
+    const double uR = R[1] / std::max(rR, 1e-30);
+    const double pR = (gamma - 1.0) * (R[2] - 0.5 * rR * uR * uR);
+    const double HR = (R[2] + pR) / std::max(rR, 1e-30);
+    const double rho_bar = 0.5 * (rL + rR);
+    const double u_bar = 0.5 * (uL + uR);
+    const double p_bar = 0.5 * (pL + pR);
+    const double H_bar = 0.5 * (HL + HR);
+    auto out = py::array_t<double>({static_cast<py::ssize_t>(3)});
+    double* op = out.mutable_data();
+    op[0] = rho_bar * u_bar;
+    op[1] = rho_bar * u_bar * u_bar + p_bar;
+    op[2] = rho_bar * u_bar * H_bar;
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -3041,5 +3067,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("mean_std_axis0", &mean_std_axis0_native, py::arg("values"));
     m.def("winslow_smooth", &winslow_smooth_native, py::arg("X"), py::arg("Y"), py::arg("n_iter") = 30);
     m.def("fd_heat_2d_evolve", &fd_heat_2d_evolve, py::arg("u0"), py::arg("n_steps"), py::arg("cx"), py::arg("cy"), py::arg("dt"));
+    m.def("kep_flux", &kep_flux_native, py::arg("UL"), py::arg("UR"), py::arg("gamma") = 1.4);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
