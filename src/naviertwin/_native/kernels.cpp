@@ -4621,6 +4621,65 @@ static py::array_t<double> solve_dense_native(Array2D A, ArrayD b) {
     return out;
 }
 
+static py::array_t<double> eigvalsh_symmetric_native(Array2D A) {
+    const py::ssize_t n = A.shape(0);
+    if (A.shape(1) != n) {
+        throw std::invalid_argument("A must be square");
+    }
+    std::vector<double> a(A.data(), A.data() + n * n);
+    const int max_iter = static_cast<int>(std::max<py::ssize_t>(32, 100 * n * n));
+    for (int iter = 0; iter < max_iter; ++iter) {
+        py::ssize_t p = 0;
+        py::ssize_t q = 1;
+        double max_off = 0.0;
+        for (py::ssize_t i = 0; i < n; ++i) {
+            for (py::ssize_t j = i + 1; j < n; ++j) {
+                const double value = std::abs(a[static_cast<size_t>(i * n + j)]);
+                if (value > max_off) {
+                    max_off = value;
+                    p = i;
+                    q = j;
+                }
+            }
+        }
+        if (max_off < 1e-14) {
+            break;
+        }
+        const double app = a[static_cast<size_t>(p * n + p)];
+        const double aqq = a[static_cast<size_t>(q * n + q)];
+        const double apq = a[static_cast<size_t>(p * n + q)];
+        const double tau = (aqq - app) / (2.0 * apq);
+        const double t = (tau >= 0.0 ? 1.0 : -1.0) / (std::abs(tau) + std::sqrt(1.0 + tau * tau));
+        const double c = 1.0 / std::sqrt(1.0 + t * t);
+        const double s = t * c;
+        for (py::ssize_t k = 0; k < n; ++k) {
+            if (k == p || k == q) {
+                continue;
+            }
+            const double akp = a[static_cast<size_t>(k * n + p)];
+            const double akq = a[static_cast<size_t>(k * n + q)];
+            const double new_kp = c * akp - s * akq;
+            const double new_kq = s * akp + c * akq;
+            a[static_cast<size_t>(k * n + p)] = new_kp;
+            a[static_cast<size_t>(p * n + k)] = new_kp;
+            a[static_cast<size_t>(k * n + q)] = new_kq;
+            a[static_cast<size_t>(q * n + k)] = new_kq;
+        }
+        a[static_cast<size_t>(p * n + p)] = app - t * apq;
+        a[static_cast<size_t>(q * n + q)] = aqq + t * apq;
+        a[static_cast<size_t>(p * n + q)] = 0.0;
+        a[static_cast<size_t>(q * n + p)] = 0.0;
+    }
+    std::vector<double> eig(static_cast<size_t>(n), 0.0);
+    for (py::ssize_t i = 0; i < n; ++i) {
+        eig[static_cast<size_t>(i)] = a[static_cast<size_t>(i * n + i)];
+    }
+    std::sort(eig.begin(), eig.end());
+    auto out = py::array_t<double>({n});
+    std::copy(eig.begin(), eig.end(), out.mutable_data());
+    return out;
+}
+
 static void schedule_berger_oliger_fill(int level, int max_level, int refine_ratio, std::vector<int>& out) {
     if (level >= max_level) {
         out.push_back(level);
@@ -4852,6 +4911,7 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("lcs_ftle_from_flow_map", &lcs_ftle_from_flow_map_native, py::arg("X"), py::arg("Y"), py::arg("dx"), py::arg("dy"), py::arg("T"));
     m.def("derivative_2d", &derivative_2d_native, py::arg("U"), py::arg("spacing"), py::arg("axis"), py::arg("order") = 1);
     m.def("solve_dense", &solve_dense_native, py::arg("A"), py::arg("b"));
+    m.def("eigvalsh_symmetric", &eigvalsh_symmetric_native, py::arg("A"));
     m.def(
         "schedule_berger_oliger", &schedule_berger_oliger_native, py::arg("level") = 0,
         py::arg("max_level") = 2, py::arg("refine_ratio") = 2

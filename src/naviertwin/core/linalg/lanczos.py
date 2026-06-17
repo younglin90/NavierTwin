@@ -14,6 +14,8 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
 
 def lanczos(
     A: NDArray[np.float64], b: NDArray[np.float64], k: int,
@@ -30,7 +32,8 @@ def lanczos(
     Q[:, 0] = q
     q_prev = np.zeros(n)
     beta_prev = 0.0
-    for j in range(k):
+    j = 0
+    while j < k:
         v = A @ Q[:, j] - beta_prev * q_prev
         a = float(Q[:, j] @ v)
         v = v - a * Q[:, j]
@@ -44,6 +47,7 @@ def lanczos(
         q_prev = Q[:, j]
         beta_prev = nrm
         Q[:, j + 1] = v / nrm
+        j += 1
     return Q, alpha, beta
 
 
@@ -54,7 +58,9 @@ def ritz_values_sym(
     _, alpha, beta = lanczos(A, b, k)
     m = alpha.size
     T = np.diag(alpha) + np.diag(beta[:m - 1], 1) + np.diag(beta[:m - 1], -1)
-    return np.linalg.eigvalsh(T)
+    if _kernels is None:
+        raise ImportError("naviertwin._native._kernels is required by ritz_values_sym")
+    return _kernels.eigvalsh_symmetric(T)
 
 
 __all__ = ["lanczos", "ritz_values_sym"]
