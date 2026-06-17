@@ -19,11 +19,7 @@ def annotate_heatmap(
     M: NDArray[np.float64], *, fmt: str = "{:.2f}",
 ) -> dict[tuple[int, int], str]:
     M = np.asarray(M)
-    out = {}
-    for i in range(M.shape[0]):
-        for j in range(M.shape[1]):
-            out[(i, j)] = fmt.format(float(M[i, j]))
-    return out
+    return dict(map(lambda ij: (ij, fmt.format(float(M[ij]))), np.ndindex(M.shape)))
 
 
 __all__ = ["annotate_heatmap"]
