@@ -1,4 +1,4 @@
-"""Model FLOPs counter — analytic for common layers.
+"""Model FLOPs counter — analytic over common layers.
 
 Examples:
     >>> from naviertwin.utils.flops_counter import linear_flops, conv2d_flops
