@@ -1,4 +1,4 @@
-"""Nonlinear MPC — finite-horizon optimization via gradient descent on u sequence.
+"""Nonlinear MPC - finite-horizon optimization via gradient descent on u sequence.
 
 Examples:
     >>> import numpy as np
@@ -36,20 +36,28 @@ def nmpc_solve(
     def total_cost(us):
         x = x0.copy()
         c = 0.0
-        for k in range(N):
+        k = 0
+        while k < N:
             c += stage_cost(x, us[k])
             x = dynamics(x, us[k])
+            k += 1
         return c
 
-    for _ in range(n_iter):
+    flat_u = u_seq.ravel()
+    g = np.zeros_like(u_seq)
+    flat_g = g.ravel()
+    it = 0
+    while it < n_iter:
         c0 = total_cost(u_seq)
-        g = np.zeros_like(u_seq)
-        for k in range(N):
-            for j in range(n_u):
-                u_seq[k, j] += eps
-                g[k, j] = (total_cost(u_seq) - c0) / eps
-                u_seq[k, j] -= eps
+        flat_g.fill(0.0)
+        idx = 0
+        while idx < flat_u.size:
+            flat_u[idx] += eps
+            flat_g[idx] = (total_cost(u_seq) - c0) / eps
+            flat_u[idx] -= eps
+            idx += 1
         u_seq -= lr * g
+        it += 1
     return u_seq
 
 
