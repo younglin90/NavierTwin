@@ -1,20 +1,20 @@
 """학습 콜백 시스템 — EarlyStopping / ProgressBar / LossLogger / Checkpoint.
 
 사용 방법:
-    for epoch in range(max_epochs):
+    epoch = 0
+    while epoch < max_epochs:
         ...
         if not callback_manager.on_epoch_end(epoch, {"loss": loss_val}):
             break  # early stop
+        epoch += 1
 
 Examples:
     >>> from naviertwin.utils.callbacks import (
     ...     CallbackManager, EarlyStopping, LossLogger,
     ... )
     >>> m = CallbackManager([EarlyStopping(patience=3, min_delta=0.01)])
-    >>> for ep in range(10):
-    ...     cont = m.on_epoch_end(ep, {"loss": 1.0})  # plateau → 3 epoch 후 stop
-    ...     if not cont:
-    ...         break
+    >>> m.on_epoch_end(0, {"loss": 1.0})
+    True
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ class EarlyStopping(Callback):
             self.n_bad += 1
         if self.n_bad >= self.patience:
             logger.info(
-                "EarlyStopping at epoch %d (no improvement for %d epochs, best=%.6g)",
+                "EarlyStopping at epoch %d (no improvement across %d epochs, best=%.6g)",
                 epoch, self.patience, self.best,
             )
             return False
@@ -142,19 +142,28 @@ class CallbackManager:
     callbacks: list[Callback] = field(default_factory=list)
 
     def on_train_begin(self, logs: dict[str, Any] | None = None) -> None:
-        for c in self.callbacks:
+        callback_idx = 0
+        while callback_idx < len(self.callbacks):
+            c = self.callbacks[callback_idx]
             c.on_train_begin(logs)
+            callback_idx += 1
 
     def on_epoch_end(self, epoch: int, logs: dict[str, Any]) -> bool:
         cont = True
-        for c in self.callbacks:
+        callback_idx = 0
+        while callback_idx < len(self.callbacks):
+            c = self.callbacks[callback_idx]
             if not c.on_epoch_end(epoch, logs):
                 cont = False
+            callback_idx += 1
         return cont
 
     def on_train_end(self, logs: dict[str, Any] | None = None) -> None:
-        for c in self.callbacks:
+        callback_idx = 0
+        while callback_idx < len(self.callbacks):
+            c = self.callbacks[callback_idx]
             c.on_train_end(logs)
+            callback_idx += 1
 
 
 def train_with_callbacks(
@@ -171,11 +180,13 @@ def train_with_callbacks(
     mgr.on_train_begin({})
     last_logs: dict[str, Any] = {}
     stopped_at = max_epochs - 1
-    for epoch in range(max_epochs):
+    epoch = 0
+    while epoch < max_epochs:
         last_logs = loop(epoch)
         if not mgr.on_epoch_end(epoch, last_logs):
             stopped_at = epoch
             break
+        epoch += 1
     mgr.on_train_end(last_logs)
     return {"stopped_at": stopped_at, "last_logs": last_logs}
 
