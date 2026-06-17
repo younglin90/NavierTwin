@@ -48,9 +48,7 @@ def slice_axis_aligned(
     """
     field = np.asarray(field, dtype=np.float64)
     if axis < 0 or axis >= field.ndim:
-        raise ValueError(
-            f"axis {axis} out of range for field shape {field.shape}"
-        )
+        raise ValueError(f"axis {axis} outside field shape {field.shape}")
     if position < 0 or position >= field.shape[axis]:
         raise ValueError(
             f"position {position} out of range [0, {field.shape[axis]})"
@@ -161,12 +159,11 @@ def _nearest_neighbor(
     queries: NDArray[np.float64],
 ) -> NDArray[np.float64]:
     """단순 최근접 (작은 데이터용)."""
-    out_shape = (queries.shape[0],) + field.shape[1:]
-    out = np.zeros(out_shape, dtype=field.dtype)
-    for i, q in enumerate(queries):
-        d = np.linalg.norm(points - q, axis=1)
-        out[i] = field[int(d.argmin())]
-    return out
+    distances = np.linalg.norm(
+        points[np.newaxis, :, :] - queries[:, np.newaxis, :],
+        axis=2,
+    )
+    return field[np.argmin(distances, axis=1)]
 
 
 def _idw(
@@ -177,23 +174,33 @@ def _idw(
     p: float = 2.0,
 ) -> NDArray[np.float64]:
     """Inverse-Distance Weighted (IDW) 보간."""
-    out_shape = (queries.shape[0],) + field.shape[1:]
-    out = np.zeros(out_shape, dtype=field.dtype)
     n_pts = points.shape[0]
     k = min(k, n_pts)
-    for i, q in enumerate(queries):
-        d = np.linalg.norm(points - q, axis=1)
-        idx = np.argpartition(d, k - 1)[:k]
-        d_k = d[idx]
-        if d_k.min() < 1e-30:
-            out[i] = field[idx[d_k.argmin()]]
-            continue
-        w = 1.0 / (d_k ** p)
-        w = w / w.sum()
+
+    distances = np.linalg.norm(
+        points[np.newaxis, :, :] - queries[:, np.newaxis, :],
+        axis=2,
+    )
+    idx = np.argpartition(distances, k - 1, axis=1)[:, :k]
+    d_k = np.take_along_axis(distances, idx, axis=1)
+    zero_mask = d_k < 1e-30
+    exact = np.any(zero_mask, axis=1)
+    out_shape = (queries.shape[0],) + field.shape[1:]
+    out = np.empty(out_shape, dtype=field.dtype)
+
+    if np.any(~exact):
+        active = ~exact
+        weights = 1.0 / (d_k[active] ** p)
+        weights = weights / weights.sum(axis=1, keepdims=True)
+        values = field[idx[active]]
         if field.ndim == 1:
-            out[i] = float(np.dot(w, field[idx]))
+            out[active] = np.sum(weights * values, axis=1)
         else:
-            out[i] = w[:, None] @ field[idx] if False else (w @ field[idx])
+            out[active] = np.einsum("qk,qk...->q...", weights, values)
+
+    if np.any(exact):
+        exact_idx = np.argmax(zero_mask[exact], axis=1)
+        out[exact] = field[idx[exact, exact_idx]]
     return out
 
 
