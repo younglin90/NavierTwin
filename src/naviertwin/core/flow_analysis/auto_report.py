@@ -221,21 +221,29 @@ def to_markdown(report: dict[str, Any]) -> str:
     # 시계열 features
     if "features" in report:
         lines.append("## 시계열 특성")
-        for k, v in report["features"].items():
+        feature_items = list(report["features"].items())
+        idx = 0
+        while idx < len(feature_items):
+            k, v = feature_items[idx]
             if isinstance(v, float):
                 lines.append(f"- **{k}**: {v:.6g}")
             else:
                 lines.append(f"- **{k}**: {v}")
+            idx += 1
         lines.append("")
 
     # box stats
     if "box_stats" in report:
         lines.append("## Statistics (Box Plot)")
-        for k, v in report["box_stats"].items():
+        box_items = list(report["box_stats"].items())
+        idx = 0
+        while idx < len(box_items):
+            k, v = box_items[idx]
             if isinstance(v, float):
                 lines.append(f"- {k}: {v:.6g}")
             else:
                 lines.append(f"- {k}: {v}")
+            idx += 1
         lines.append("")
 
     # PSD
@@ -279,7 +287,8 @@ def to_markdown(report: dict[str, Any]) -> str:
         lines.append("## POD Decomposition")
         pod = report["pod"]
         lines.append(f"- 모드 수: {pod['n_modes']}")
-        lines.append(f"- 모드별 에너지: {[f'{e:.4g}' for e in pod['energy_per_mode']]}")
+        energy = list(map(lambda e: f"{e:.4g}", pod["energy_per_mode"]))
+        lines.append(f"- 모드별 에너지: {energy}")
         lines.append(f"- 누적 에너지: {pod['cumulative_energy']:.4g}")
         lines.append("")
 
@@ -294,8 +303,12 @@ def to_markdown(report: dict[str, Any]) -> str:
     if "statistics" in report:
         lines.append("## Spatial Statistics")
         st = report["statistics"]
-        for k, v in st.items():
+        stat_items = list(st.items())
+        idx = 0
+        while idx < len(stat_items):
+            k, v = stat_items[idx]
             lines.append(f"- {k}: {v:.6g}")
+            idx += 1
         lines.append("")
 
     return "\n".join(lines)
