@@ -10,6 +10,7 @@ Examples:
 from __future__ import annotations
 
 import numpy as np
+from numpy.linalg import solve as _solve
 from numpy.typing import NDArray
 
 
@@ -33,7 +34,7 @@ def rbf_fd_weights_1d(
         rhs = (-2 * eps + 4 * eps * eps * diff ** 2) * _rbf(diff ** 2, eps)
     else:
         raise NotImplementedError("order ≤ 2")
-    w = np.linalg.solve(A, rhs)
+    w = _solve(A, rhs)
     _ = n
     return w
 
