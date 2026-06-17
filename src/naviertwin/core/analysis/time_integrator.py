@@ -57,9 +57,11 @@ def integrate_ode(
     y = np.asarray(y0, dtype=np.float64).copy()
     ys = np.zeros((n + 1, y.size), dtype=np.float64)
     ys[0] = y
-    for i in range(n):
+    i = 0
+    while i < n:
         y = step(f, ts[i], y, dt)
         ys[i + 1] = y
+        i += 1
     return ts, ys
 
 
