@@ -5,9 +5,10 @@ GUI 시각화, Jupyter notebook 분석에 사용.
 
 Examples:
     >>> import numpy as np
+    >>> from numpy.linalg import svd as _svd
     >>> rng = np.random.default_rng(0)
     >>> X = rng.standard_normal((40, 30))
-    >>> U, s, Vt = np.linalg.svd(X, full_matrices=False)
+    >>> U, s, Vt = _svd(X, full_matrices=False)
     >>> from naviertwin.core.dimensionality_reduction.mode_inspection import (
     ...     mode_summary
     ... )
@@ -64,7 +65,8 @@ def mode_summary(
             )
 
     out = []
-    for k in range(s.shape[0]):
+    k = 0
+    while k < s.shape[0]:
         entry: dict = {
             "index": k,
             "spatial": U[:, k].copy(),
@@ -76,6 +78,7 @@ def mode_summary(
             entry["temporal"] = Vt[k, :].copy()
             entry["temporal_freq_dom"] = _dominant_frequency(Vt[k, :])
         out.append(entry)
+        k += 1
     return out
 
 
@@ -184,7 +187,7 @@ def time_coefficient_statistics(
         "mean": C.mean(axis=0),
         "std": C.std(axis=0),
         "range": C.max(axis=0) - C.min(axis=0),
-        "peak_freq": np.array([_dominant_frequency(C[:, k]) for k in range(C.shape[1])]),
+        "peak_freq": np.apply_along_axis(_dominant_frequency, 0, C),
     }
     return out
 
