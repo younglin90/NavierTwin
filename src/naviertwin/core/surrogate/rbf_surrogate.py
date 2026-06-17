@@ -104,13 +104,13 @@ class RBFSurrogate(BaseSurrogate):
         try:
             from smt.surrogate_models import RBF  # type: ignore[import]
 
-            models = []
-            for i in range(y.shape[1]):
+            def _fit_output(i: int) -> object:
                 sm = RBF(d0=self.d0, print_global=False)
                 sm.set_training_values(X, y[:, i])
                 sm.train()
-                models.append(sm)
-            self._model = models
+                return sm
+
+            self._model = list(map(_fit_output, range(y.shape[1])))
             return True
         except ImportError:
             logger.warning("smt 미설치 — sklearn LinearRegression으로 폴백합니다.")
@@ -168,7 +168,7 @@ class RBFSurrogate(BaseSurrogate):
 
         if self._backend == "smt":
             preds = np.column_stack(
-                [sm.predict_values(X).ravel() for sm in self._model]
+                tuple(map(lambda sm: sm.predict_values(X).ravel(), self._model))
             )
         elif self._backend == "sklearn":
             preds = self._model.predict(X)
