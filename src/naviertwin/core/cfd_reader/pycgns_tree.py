@@ -51,8 +51,10 @@ def walk_tree(tree: Any, depth: int = 0, max_depth: int = 10) -> list[str]:
         names.append(f"{'  ' * level}{name} [{ntype}]")
         children = node[2]
         if isinstance(children, list):
-            for c in children:
-                _recurse(c, level + 1)
+            child_idx = 0
+            while child_idx < len(children):
+                _recurse(children[child_idx], level + 1)
+                child_idx += 1
 
     _recurse(tree, depth)
     return names
@@ -64,14 +66,24 @@ def list_zones(tree: Any) -> list[str]:
     if not isinstance(tree, list) or len(tree) < 3:
         return zones
 
-    for base in tree[2] if isinstance(tree[2], list) else []:
+    bases = tree[2] if isinstance(tree[2], list) else []
+    base_idx = 0
+    while base_idx < len(bases):
+        base = bases[base_idx]
         if not (isinstance(base, list) and len(base) >= 4):
+            base_idx += 1
             continue
         if base[3] != "CGNSBase_t":
+            base_idx += 1
             continue
-        for z in base[2] if isinstance(base[2], list) else []:
+        zone_nodes = base[2] if isinstance(base[2], list) else []
+        zone_idx = 0
+        while zone_idx < len(zone_nodes):
+            z = zone_nodes[zone_idx]
             if isinstance(z, list) and len(z) >= 4 and z[3] == "Zone_t":
                 zones.append(z[0])
+            zone_idx += 1
+        base_idx += 1
     return zones
 
 
@@ -81,16 +93,30 @@ def list_solutions(tree: Any) -> list[tuple[str, str]]:
     if not isinstance(tree, list) or len(tree) < 3:
         return out
 
-    for base in tree[2] if isinstance(tree[2], list) else []:
+    bases = tree[2] if isinstance(tree[2], list) else []
+    base_idx = 0
+    while base_idx < len(bases):
+        base = bases[base_idx]
         if not (isinstance(base, list) and base[3] == "CGNSBase_t"):
+            base_idx += 1
             continue
-        for z in base[2] if isinstance(base[2], list) else []:
+        zone_nodes = base[2] if isinstance(base[2], list) else []
+        zone_idx = 0
+        while zone_idx < len(zone_nodes):
+            z = zone_nodes[zone_idx]
             if not (isinstance(z, list) and z[3] == "Zone_t"):
+                zone_idx += 1
                 continue
             zone_name = z[0]
-            for s in z[2] if isinstance(z[2], list) else []:
+            solution_nodes = z[2] if isinstance(z[2], list) else []
+            sol_idx = 0
+            while sol_idx < len(solution_nodes):
+                s = solution_nodes[sol_idx]
                 if isinstance(s, list) and s[3] == "FlowSolution_t":
                     out.append((zone_name, s[0]))
+                sol_idx += 1
+            zone_idx += 1
+        base_idx += 1
     return out
 
 
@@ -99,18 +125,37 @@ def get_coordinates(tree: Any, zone_name: str) -> dict[str, Any]:
     import numpy as np
 
     coords: dict[str, Any] = {}
-    for base in tree[2] if isinstance(tree[2], list) else []:
+    bases = tree[2] if isinstance(tree[2], list) else []
+    base_idx = 0
+    while base_idx < len(bases):
+        base = bases[base_idx]
         if base[3] != "CGNSBase_t":
+            base_idx += 1
             continue
-        for z in base[2] if isinstance(base[2], list) else []:
+        zone_nodes = base[2] if isinstance(base[2], list) else []
+        zone_idx = 0
+        while zone_idx < len(zone_nodes):
+            z = zone_nodes[zone_idx]
             if z[3] != "Zone_t" or z[0] != zone_name:
+                zone_idx += 1
                 continue
-            for gc in z[2] if isinstance(z[2], list) else []:
+            grid_nodes = z[2] if isinstance(z[2], list) else []
+            grid_idx = 0
+            while grid_idx < len(grid_nodes):
+                gc = grid_nodes[grid_idx]
                 if gc[3] != "GridCoordinates_t":
+                    grid_idx += 1
                     continue
-                for c in gc[2] if isinstance(gc[2], list) else []:
+                coord_nodes = gc[2] if isinstance(gc[2], list) else []
+                coord_idx = 0
+                while coord_idx < len(coord_nodes):
+                    c = coord_nodes[coord_idx]
                     if c[3] == "DataArray_t":
                         coords[c[0]] = np.asarray(c[1])
+                    coord_idx += 1
+                grid_idx += 1
+            zone_idx += 1
+        base_idx += 1
     return coords
 
 
