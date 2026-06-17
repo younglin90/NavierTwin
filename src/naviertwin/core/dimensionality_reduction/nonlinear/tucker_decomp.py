@@ -20,6 +20,7 @@ Examples:
 from __future__ import annotations
 
 import numpy as np
+from numpy.linalg import svd as _svd
 from numpy.typing import NDArray
 
 from naviertwin.utils.logger import get_logger
@@ -34,7 +35,7 @@ def _unfold(T: NDArray[np.float64], mode: int) -> NDArray[np.float64]:
 
 def _fold(mat: NDArray[np.float64], mode: int, shape: tuple[int, ...]) -> NDArray[np.float64]:
     """_unfold 의 역."""
-    full_shape = [shape[mode]] + [shape[i] for i in range(len(shape)) if i != mode]
+    full_shape = [shape[mode]] + list(np.delete(np.asarray(shape, dtype=int), mode))
     return np.moveaxis(mat.reshape(full_shape), 0, mode)
 
 
@@ -77,37 +78,53 @@ class TuckerDecomposition:
 
         # HOSVD 초기 factors
         factors: list[NDArray[np.float64]] = []
-        for mode in range(X.ndim):
-            U, _, _ = np.linalg.svd(_unfold(X, mode), full_matrices=False)
+        mode = 0
+        while mode < X.ndim:
+            U, _, _ = _svd(_unfold(X, mode), full_matrices=False)
             factors.append(U[:, : self.ranks[mode]])
+            mode += 1
 
         # HOOI
         prev_err = np.inf
         self.errors_ = []
-        for _ in range(self.max_iter):
-            for mode in range(X.ndim):
+        iteration = 0
+        while iteration < self.max_iter:
+            mode = 0
+            while mode < X.ndim:
                 Y = X
-                for n, F in enumerate(factors):
+                n = 0
+                while n < len(factors):
+                    F = factors[n]
                     if n == mode:
+                        n += 1
                         continue
                     Y = _mode_product(Y, F.T, n)
-                U, _, _ = np.linalg.svd(_unfold(Y, mode), full_matrices=False)
+                    n += 1
+                U, _, _ = _svd(_unfold(Y, mode), full_matrices=False)
                 factors[mode] = U[:, : self.ranks[mode]]
+                mode += 1
 
             # core 계산
             core = X
-            for n, F in enumerate(factors):
+            n = 0
+            while n < len(factors):
+                F = factors[n]
                 core = _mode_product(core, F.T, n)
+                n += 1
 
             # 재구성 오차
             T_rec = core
-            for n, F in enumerate(factors):
+            n = 0
+            while n < len(factors):
+                F = factors[n]
                 T_rec = _mode_product(T_rec, F, n)
+                n += 1
             err = float(np.linalg.norm(X - T_rec))
             self.errors_.append(err)
             if abs(prev_err - err) / max(prev_err, 1e-30) < self.tol:
                 break
             prev_err = err
+            iteration += 1
 
         self.factors_ = factors
         self.core_ = core
@@ -122,21 +139,20 @@ class TuckerDecomposition:
         if not self.is_fitted or self.core_ is None:
             raise RuntimeError("fit() 먼저 호출하세요")
         T = self.core_
-        for n, F in enumerate(self.factors_):
+        n = 0
+        while n < len(self.factors_):
+            F = self.factors_[n]
             T = _mode_product(T, F, n)
+            n += 1
         return T
 
     def compression_ratio(self, original_shape: tuple[int, ...]) -> float:
         """원본 대비 압축률 (원본 / tucker 파라미터)."""
         if not self.is_fitted:
             return 0.0
-        n_orig = 1
-        for s in original_shape:
-            n_orig *= s
-        n_core = 1
-        for r in self.ranks:
-            n_core *= r
-        n_factor = sum(s * r for s, r in zip(original_shape, self.ranks))
+        n_orig = int(np.prod(original_shape))
+        n_core = int(np.prod(self.ranks))
+        n_factor = sum(map(lambda pair: pair[0] * pair[1], zip(original_shape, self.ranks)))
         return n_orig / (n_core + n_factor)
 
 
