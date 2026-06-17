@@ -8,8 +8,10 @@ Examples:
     >>> x0 = np.array([1.0, 0.0])
     >>> A_true = np.array([[0.9, 0.1], [-0.1, 0.9]])
     >>> traj = [x0]
-    >>> for _ in range(50):
+    >>> step = 0
+    >>> while step < 50:
     ...     traj.append(A_true @ traj[-1])
+    ...     step += 1
     >>> X = np.array(traj).T
     >>> A_hat = fit_linear_dynamics(X)
     >>> np.allclose(A_hat, A_true, atol=1e-8)
@@ -17,6 +19,8 @@ Examples:
 """
 
 from __future__ import annotations
+
+from itertools import accumulate, repeat
 
 import numpy as np
 from numpy.typing import NDArray
@@ -42,11 +46,8 @@ def rollout_linear(
 ) -> NDArray[np.float64]:
     """x_{k+1} = A x_k 로 전개 → (n_states, n_steps+1)."""
     x0 = np.asarray(x0, dtype=np.float64).ravel()
-    out = np.zeros((x0.size, n_steps + 1), dtype=np.float64)
-    out[:, 0] = x0
-    for i in range(n_steps):
-        out[:, i + 1] = A @ out[:, i]
-    return out
+    states = accumulate(repeat(A, n_steps), lambda state, matrix: matrix @ state, initial=x0)
+    return np.column_stack(tuple(states))
 
 
 def eigenanalysis(A: NDArray[np.float64]) -> dict[str, NDArray]:
