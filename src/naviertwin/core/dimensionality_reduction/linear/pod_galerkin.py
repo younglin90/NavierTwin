@@ -16,8 +16,10 @@ Examples:
     >>> A = np.diag([0.99, 0.97, 0.95])
     >>> X = np.zeros((3, 50))
     >>> X[:, 0] = [1, 1, 1]
-    >>> for k in range(49):
+    >>> k = 0
+    >>> while k < 49:
     ...     X[:, k + 1] = A @ X[:, k]
+    ...     k += 1
     >>> rom = PODGalerkinROM(n_modes=3)
     >>> rom.fit(X)
     >>> a0 = rom.encode(X[:, 0:1])
@@ -29,6 +31,7 @@ Examples:
 from __future__ import annotations
 
 import numpy as np
+from numpy.linalg import svd as _svd
 from numpy.typing import NDArray
 
 from naviertwin.utils.logger import get_logger
@@ -62,7 +65,7 @@ class PODGalerkinROM:
 
         self.mean_ = X.mean(axis=1)
         Xc = X - self.mean_[:, None]
-        U, s, _ = np.linalg.svd(Xc, full_matrices=False)
+        U, s, _ = _svd(Xc, full_matrices=False)
         r = min(self.n_modes, U.shape[1])
         self.modes_ = U[:, :r]
 
@@ -117,7 +120,8 @@ class PODGalerkinROM:
             raise RuntimeError("fit() 먼저 호출")
         a = np.asarray(a0, dtype=np.float64).ravel()
         out = np.zeros((n_steps, a.size))
-        for k in range(n_steps):
+        k = 0
+        while k < n_steps:
             if self.B_hat_ is not None and inputs is not None:
                 u = np.asarray(inputs, dtype=np.float64)
                 if u.ndim == 1:
@@ -126,6 +130,7 @@ class PODGalerkinROM:
             else:
                 a = self.A_hat_ @ a
             out[k] = a
+            k += 1
         return out
 
 
