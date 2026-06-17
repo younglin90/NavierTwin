@@ -15,6 +15,7 @@ Examples:
 from __future__ import annotations
 
 import numpy as np
+from numpy.linalg import svd as _svd
 from numpy.typing import NDArray
 
 
@@ -27,7 +28,7 @@ def tangent_space(
     d = np.linalg.norm(X - p, axis=1)
     nn = np.argsort(d)[:k]
     Y = X[nn] - p
-    U, _, _ = np.linalg.svd(Y.T, full_matrices=False)
+    U, _, _ = _svd(Y.T, full_matrices=False)
     return U[:, :dim]
 
 
