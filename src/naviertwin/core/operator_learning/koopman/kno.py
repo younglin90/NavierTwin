@@ -105,14 +105,8 @@ class KNO(BaseTimeSeries):
         if seqs.ndim != 3:
             raise ValueError(f"sequences (N,T,F) 3D 필요: {seqs.shape}")
 
-        X: list[np.ndarray] = []
-        Y: list[np.ndarray] = []
-        for s in seqs:
-            for t in range(s.shape[0] - 1):
-                X.append(s[t])
-                Y.append(s[t + 1])
-        Xa = np.asarray(X, dtype=np.float32)
-        Ya = np.asarray(Y, dtype=np.float32)
+        Xa = np.ascontiguousarray(seqs[:, :-1, :]).reshape(-1, self.n_features)
+        Ya = np.ascontiguousarray(seqs[:, 1:, :]).reshape(-1, self.n_features)
 
         self._device = self._resolve_device()
         self._build()
@@ -134,9 +128,15 @@ class KNO(BaseTimeSeries):
             shuffle=True,
         )
         self.train_losses_ = []
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             epoch_loss = 0.0
-            for xb, yb in loader:
+            batches = iter(loader)
+            while True:
+                try:
+                    xb, yb = next(batches)
+                except StopIteration:
+                    break
                 xb = xb.to(self._device)
                 yb = yb.to(self._device)
                 optim.zero_grad()
@@ -153,6 +153,7 @@ class KNO(BaseTimeSeries):
                 epoch_loss += float(loss.item()) * xb.shape[0]
             epoch_loss /= max(len(Xa), 1)
             self.train_losses_.append(epoch_loss)
+            epoch_idx += 1
 
         self.is_fitted = True
         logger.info(
@@ -172,10 +173,12 @@ class KNO(BaseTimeSeries):
         preds: list[np.ndarray] = []
         with torch.no_grad():
             z = self._enc(torch.tensor(x0[None, :], device=self._device))
-            for _ in range(n_steps):
+            step = 0
+            while step < n_steps:
                 z = self._K(z)
                 x = self._dec(z).cpu().numpy()[0]
                 preds.append(x.copy())
+                step += 1
         return np.stack(preds)
 
     def koopman_matrix(self) -> np.ndarray:
