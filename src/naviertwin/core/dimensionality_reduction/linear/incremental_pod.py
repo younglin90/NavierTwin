@@ -12,9 +12,11 @@ Examples:
     >>> rng = np.random.default_rng(0)
     >>> from naviertwin.core.dimensionality_reduction.linear.incremental_pod import IncrementalPOD
     >>> pod = IncrementalPOD(n_modes=5)
-    >>> for _ in range(10):
+    >>> step = 0
+    >>> while step < 10:
     ...     snap = rng.standard_normal(50)
     ...     pod.update(snap)
+    ...     step += 1
     >>> pod.basis.shape
     (50, 5)
 """
@@ -22,6 +24,7 @@ Examples:
 from __future__ import annotations
 
 import numpy as np
+from numpy.linalg import svd as _svd
 from numpy.typing import NDArray
 
 from naviertwin.utils.logger import get_logger
@@ -144,7 +147,7 @@ class IncrementalPOD:
             K[:, -1] = m
 
         # K의 SVD
-        Uk, sk, _ = np.linalg.svd(K, full_matrices=False)
+        Uk, sk, _ = _svd(K, full_matrices=False)
 
         # 기저 갱신
         if p_hat is not None:
@@ -175,12 +178,16 @@ class IncrementalPOD:
         # 첫 업데이트 시 공간 차원 추정
         if S.shape[0] > S.shape[1]:
             # (n_space, n_snap) 형식
-            for j in range(S.shape[1]):
+            j = 0
+            while j < S.shape[1]:
                 self.update(S[:, j])
+                j += 1
         else:
             # (n_snap, n_space) 형식
-            for j in range(S.shape[0]):
+            j = 0
+            while j < S.shape[0]:
                 self.update(S[j, :])
+                j += 1
 
     def project(self, field: NDArray[np.float64]) -> NDArray[np.float64]:
         """필드를 현재 POD 기저에 투영해 계수를 반환한다.
@@ -220,10 +227,9 @@ class IncrementalPOD:
             raise ValueError(f"snapshots must be 1D/2D, got {X.shape}")
 
         if X.shape[0] == n_space:
-            coeffs = np.column_stack([self.project(X[:, j]) for j in range(X.shape[1])])
-            return coeffs.T
+            return self.project(X).T
         if X.shape[1] == n_space:
-            return np.vstack([self.project(X[j, :]) for j in range(X.shape[0])])
+            return self.project(X.T).T
         raise ValueError(f"snapshot shape {X.shape} incompatible with n_space={n_space}")
 
     def decode(self, coeffs: NDArray[np.float64]) -> NDArray[np.float64]:
