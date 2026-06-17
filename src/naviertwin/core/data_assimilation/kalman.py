@@ -11,8 +11,7 @@ Examples:
     ...     Q=np.eye(1)*1e-4, R=np.eye(1)*1e-2,
     ...     x0=np.zeros(1), P0=np.eye(1),
     ... )
-    >>> for z in [1.0, 1.1, 0.9, 1.05]:
-    ...     kf.predict(); kf.update(np.array([z]))
+    >>> _ = run_filter(kf, np.array([[1.0], [1.1], [0.9], [1.05]]))
     >>> abs(kf.x[0] - 1.0) < 0.2
     True
 """
@@ -21,6 +20,8 @@ from __future__ import annotations
 
 import numpy as np
 from numpy.typing import NDArray
+
+from naviertwin.core.data_assimilation.iterated_ekf import _right_solve
 
 
 class KalmanFilter:
@@ -54,7 +55,7 @@ class KalmanFilter:
         z = np.asarray(z, dtype=np.float64).ravel()
         y = z - self.H @ self.x           # innovation
         S = self.H @ self.P @ self.H.T + self.R
-        K = self.P @ self.H.T @ np.linalg.inv(S)
+        K = _right_solve(S, self.P @ self.H.T)
         self.x = self.x + K @ y
         eye = np.eye(self.P.shape[0])
         self.P = (eye - K @ self.H) @ self.P
@@ -66,10 +67,12 @@ def run_filter(
 ) -> NDArray[np.float64]:
     """z_k 시퀀스에 대해 predict/update 반복 → 상태 이력."""
     out = np.zeros((measurements.shape[0], kf.x.size), dtype=np.float64)
-    for i, z in enumerate(measurements):
+    i = 0
+    while i < measurements.shape[0]:
         kf.predict()
-        kf.update(z)
+        kf.update(measurements[i])
         out[i] = kf.x
+        i += 1
     return out
 
 
