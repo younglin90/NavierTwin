@@ -75,37 +75,41 @@ class SurrogateOptimizer:
         self, f: Callable[[NDArray[np.float64]], float]
     ) -> tuple[NDArray[np.float64], float]:
         rng = np.random.default_rng(self.seed)
-        for x in self._sample(self.n_initial, rng):
-            self.X_.append(x)
-            self.y_.append(float(f(x)))
+        initial = self._sample(self.n_initial, rng)
+        self.X_.extend(initial)
+        self.y_.extend(map(lambda x: float(f(x)), initial))
 
         lows = self.bounds[:, 0]
         highs = self.bounds[:, 1]
 
-        for _ in range(self.max_iter):
+        iter_idx = 0
+        while iter_idx < self.max_iter:
             sur = self._fit_surrogate()
 
             def surrogate_val(x: np.ndarray) -> float:
                 return float(sur.predict(np.asarray(x).reshape(1, -1))[0])
 
             # 다중 시작점 로컬 탐색
-            best_x = None
-            best_val = np.inf
-            for x0 in self._sample(5, rng):
-                res = minimize(
-                    surrogate_val, x0,
-                    method="L-BFGS-B",
-                    bounds=list(zip(lows, highs)),
+            starts = self._sample(5, rng)
+            results = tuple(
+                map(
+                    lambda x0: minimize(
+                        surrogate_val,
+                        x0,
+                        method="L-BFGS-B",
+                        bounds=list(zip(lows, highs)),
+                    ),
+                    starts,
                 )
-                if res.fun < best_val:
-                    best_val = float(res.fun)
-                    best_x = res.x
-
-            if best_x is None:
-                break
+            )
+            vals = np.fromiter(
+                map(lambda res: float(res.fun), results), dtype=np.float64, count=len(results)
+            )
+            best_x = results[int(np.argmin(vals))].x
             y_new = float(f(best_x))
             self.X_.append(best_x)
             self.y_.append(y_new)
+            iter_idx += 1
 
         y_arr = np.asarray(self.y_, dtype=np.float64)
         idx = int(np.argmin(y_arr))
