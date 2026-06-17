@@ -20,35 +20,32 @@ from numpy.typing import NDArray
 def _legendre_basis(xi: NDArray[np.float64], order: int) -> NDArray[np.float64]:
     """각 차원에 대해 Legendre P_0..P_order. xi ∈ [-1,1]."""
     n, d = xi.shape
-    # 각 차원별 (n, order+1)
-    cols = []
-    for j in range(d):
-        z = xi[:, j]
-        basis = np.ones((n, order + 1))
-        if order >= 1:
-            basis[:, 1] = z
-        for k in range(2, order + 1):
-            basis[:, k] = ((2 * k - 1) * z * basis[:, k - 1] - (k - 1) * basis[:, k - 2]) / k
-        cols.append(basis)
-    # total-degree tensor product 는 작게 구성 (최대 order 까지 단일 차원의 합)
-    # 단순 버전: additive (각 차원 legendre 만)
-    # → 다차원 구조는 full tensor 로 대체하면 차원 저주. 여기서는 concat.
-    return np.concatenate([c for c in cols], axis=1)
+    basis = np.ones((d, n, order + 1))
+    z = xi.T
+    if order >= 1:
+        basis[:, :, 1] = z
+    k = 2
+    while k <= order:
+        basis[:, :, k] = (
+            (2 * k - 1) * z * basis[:, :, k - 1]
+            - (k - 1) * basis[:, :, k - 2]
+        ) / k
+        k += 1
+    return basis.transpose(1, 0, 2).reshape(n, d * (order + 1))
 
 
 def _hermite_basis(xi: NDArray[np.float64], order: int) -> NDArray[np.float64]:
     """probabilist's Hermite (He_n). xi ~ N(0,1)."""
     n, d = xi.shape
-    cols = []
-    for j in range(d):
-        z = xi[:, j]
-        basis = np.ones((n, order + 1))
-        if order >= 1:
-            basis[:, 1] = z
-        for k in range(2, order + 1):
-            basis[:, k] = z * basis[:, k - 1] - (k - 1) * basis[:, k - 2]
-        cols.append(basis)
-    return np.concatenate(cols, axis=1)
+    basis = np.ones((d, n, order + 1))
+    z = xi.T
+    if order >= 1:
+        basis[:, :, 1] = z
+    k = 2
+    while k <= order:
+        basis[:, :, k] = z * basis[:, :, k - 1] - (k - 1) * basis[:, :, k - 2]
+        k += 1
+    return basis.transpose(1, 0, 2).reshape(n, d * (order + 1))
 
 
 class PCESimple:
