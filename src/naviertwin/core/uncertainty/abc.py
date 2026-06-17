@@ -32,13 +32,15 @@ def abc_rejection(
 ) -> NDArray:
     rng = rng if rng is not None else np.random.default_rng(0)
     accepted: list[Any] = []
-    for _ in range(max_iter):
+    it = 0
+    while it < max_iter:
         if len(accepted) >= n_target:
             break
         theta = prior(rng)
         y = simulator(theta)
         if abs(y - y_obs) < eps:
             accepted.append(theta)
+        it += 1
     return np.asarray(accepted)
 
 
