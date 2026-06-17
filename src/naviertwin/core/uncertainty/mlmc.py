@@ -29,13 +29,20 @@ def mlmc_estimate(
     levels[l] = 해당 레벨 샘플 수.
     """
     rng = rng if rng is not None else np.random.default_rng(0)
-    est = 0.0
-    var = 0.0
-    for lvl, n_l in enumerate(levels):
-        samples = np.array([level_sampler(lvl, rng) for _ in range(n_l)])
-        est += samples.mean()
-        var += samples.var(ddof=1) / max(n_l, 1)
-    return float(est), float(var)
+
+    def _level_stats(item: tuple[int, int]) -> tuple[float, float]:
+        lvl, n_l = item
+        samples = np.fromiter(
+            map(lambda _: level_sampler(lvl, rng), range(n_l)),
+            dtype=np.float64,
+            count=n_l,
+        )
+        return float(samples.mean()), float(samples.var(ddof=1) / max(n_l, 1))
+
+    stats = np.asarray(tuple(map(_level_stats, enumerate(levels))), dtype=np.float64)
+    if stats.size == 0:
+        return 0.0, 0.0
+    return float(stats[:, 0].sum()), float(stats[:, 1].sum())
 
 
 __all__ = ["mlmc_estimate"]
