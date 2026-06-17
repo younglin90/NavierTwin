@@ -60,8 +60,7 @@ class PILatentNO(LDeepONet):
 
         self._device = self._resolve_device()
         self._build()
-        for m in (self._enc, self._dec, self._op):
-            m.to(self._device)
+        tuple(map(lambda m: m.to(self._device), (self._enc, self._dec, self._op)))
 
         params = (
             list(self._enc.parameters())
@@ -80,10 +79,16 @@ class PILatentNO(LDeepONet):
         self.data_losses_ = []
         self.phys_losses_ = []
 
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             epoch_data = 0.0
             epoch_phys = 0.0
-            for xb, yb in loader:
+            batches = iter(loader)
+            while True:
+                try:
+                    xb, yb = next(batches)
+                except StopIteration:
+                    break
                 xb = xb.to(self._device)
                 yb = yb.to(self._device)
                 optim.zero_grad()
@@ -111,6 +116,7 @@ class PILatentNO(LDeepONet):
             self.train_losses_.append(
                 self.data_losses_[-1] + self.physics_weight * self.phys_losses_[-1]
             )
+            epoch_idx += 1
 
         self.is_fitted = True
         logger.info(
