@@ -140,9 +140,15 @@ class SequentialDeepONet(BaseOperator):
             shuffle=True,
         )
         self.train_losses_ = []
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             epoch = 0.0
-            for bb, yb in loader:
+            batches = iter(loader)
+            while True:
+                try:
+                    bb, yb = next(batches)
+                except StopIteration:
+                    break
                 bb = bb.to(self._device)
                 yb = yb.to(self._device)
                 optim.zero_grad()
@@ -155,6 +161,7 @@ class SequentialDeepONet(BaseOperator):
                 epoch += float(loss.item()) * bb.shape[0]
             epoch /= max(len(B), 1)
             self.train_losses_.append(epoch)
+            epoch_idx += 1
 
         self._trunk_cache = T
         self.is_fitted = True
