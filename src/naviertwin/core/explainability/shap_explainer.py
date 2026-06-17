@@ -71,22 +71,29 @@ class KernelSHAP:
         M = self.background.shape[0]
         phi = np.zeros((N, d))
 
-        for n in range(N):
+        n = 0
+        while n < N:
             x = X[n]
             contrib = np.zeros((d, self.n_samples))
-            for s in range(self.n_samples):
+            s = 0
+            while s < self.n_samples:
                 perm = self.rng.permutation(d)
                 # 배경 샘플 하나 선택
                 bg = self.background[self.rng.integers(M)]
                 # incremental 상태 구축
                 state = bg.copy()
                 f_prev = float(self.f(state[None, :])[0])
-                for j in perm:
+                perm_idx = 0
+                while perm_idx < perm.size:
+                    j = perm[perm_idx]
                     state[j] = x[j]
                     f_curr = float(self.f(state[None, :])[0])
                     contrib[j, s] = f_curr - f_prev
                     f_prev = f_curr
+                    perm_idx += 1
+                s += 1
             phi[n] = contrib.mean(axis=1)
+            n += 1
         logger.info("KernelSHAP explain: N=%d, d=%d, samples=%d", N, d, self.n_samples)
         return phi
 
