@@ -67,10 +67,12 @@ def spatial_autocorrelation(
 
     R = np.zeros(max_lag + 1)
     R[0] = 1.0
-    for r in range(1, max_lag + 1):
-        # 시간과 공간 모두에 대해 평균
-        prod = up[:, : n_x - r] * up[:, r:]
-        R[r] = float(np.mean(prod) / var)
+    lags = np.arange(1, max_lag + 1)
+    R[1:] = np.fromiter(
+        map(lambda lag: float(np.mean(up[:, : n_x - lag] * up[:, lag:]) / var), lags),
+        dtype=np.float64,
+        count=max_lag,
+    )
 
     r_arr = np.arange(max_lag + 1) * dx
     return r_arr, R
@@ -107,14 +109,20 @@ def temporal_autocorrelation(
     max_lag = min(max_lag, n_t - 1)
 
     up = _fluctuation(u)
-    R_per_x = np.zeros((max_lag + 1, n_x))
-    for x in range(n_x):
-        v = up[:, x]
-        var = np.mean(v * v) + 1e-30
-        R_per_x[0, x] = 1.0
-        for tau in range(1, max_lag + 1):
-            R_per_x[tau, x] = float(np.mean(v[: n_t - tau] * v[tau:]) / var)
+    lags = np.arange(1, max_lag + 1)
 
+    def _series_autocorrelation(v: NDArray[np.float64]) -> NDArray[np.float64]:
+        var = np.mean(v * v) + 1e-30
+        values = np.empty(max_lag + 1, dtype=np.float64)
+        values[0] = 1.0
+        values[1:] = np.fromiter(
+            map(lambda tau: float(np.mean(v[: n_t - tau] * v[tau:]) / var), lags),
+            dtype=np.float64,
+            count=max_lag,
+        )
+        return values
+
+    R_per_x = np.apply_along_axis(_series_autocorrelation, 0, up)
     R = R_per_x.mean(axis=1)
     tau_arr = np.arange(max_lag + 1) * dt
     return tau_arr, R
@@ -193,7 +201,7 @@ def taylor_microscale(
     r = np.asarray(r, dtype=np.float64)
     R = np.asarray(R, dtype=np.float64)
     if len(r) < 4:
-        raise ValueError(f"need at least 4 points for fit, got {len(r)}")
+        raise ValueError(f"need at least 4 points to fit, got {len(r)}")
     # 처음 R > 0.5 영역
     mask = R > 0.5
     if mask.sum() < 4:
