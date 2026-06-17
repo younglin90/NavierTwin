@@ -1,4 +1,4 @@
-"""1D DG — 리스트 of 셀별 계수 + local Lagrange nodes (GLL).
+"""1D DG - cell coefficient arrays plus local Lagrange nodes (GLL).
 
 Advection ∂u/∂t + c ∂u/∂x = 0 (스칼라 상수 c, upwind flux).
 
@@ -40,42 +40,35 @@ def solve_advection_1d_dg(
     xi = _lobatto_nodes(p)
     n_local = xi.size
     h = L / n_cells
-    # cell centers + local positions
-    x_all = np.zeros(n_cells * n_local)
-    for j in range(n_cells):
-        xc = (j + 0.5) * h
-        x_all[j * n_local:(j + 1) * n_local] = xc + 0.5 * h * xi
+    # cell centers plus local positions
+    centers = (np.arange(n_cells, dtype=np.float64) + 0.5) * h
+    x_all = (centers[:, None] + 0.5 * h * xi[None, :]).reshape(-1)
     # mass/stiffness per cell (reference)
     # Use Lagrange basis at GLL points; mass matrix = diag(w) (lumped)
     # weights via Gauss-Lobatto formulae (trapezoidal-like)
-    # 간단화: lumped mass → fixed GL weights approximation
+    # Lumped mass with fixed GL weights approximation.
     from numpy.polynomial.legendre import legval
     # compute lumped weights: w_i = 2 / (p(p+1) [P_p(xi_i)]²)
     Pp = np.zeros(p + 1)
     Pp[-1] = 1.0
     w = 2.0 / (p * (p + 1) * legval(xi, Pp) ** 2)
 
-    # differentiation matrix D_ref
-    # Lagrange derivative at GLL nodes (Trefethen-style)
+    # Differentiation matrix D_ref via barycentric weights.
     def lagrange_D(x):
         n = x.size
-        D = np.zeros((n, n))
-        for i in range(n):
-            for j in range(n):
-                if i == j:
-                    continue
-                num = 1.0
-                den = 1.0
-                for k in range(n):
-                    if k == i or k == j:
-                        continue
-                    num *= (x[i] - x[k])
-                for k in range(n):
-                    if k == j:
-                        continue
-                    den *= (x[j] - x[k])
-                D[i, j] = num / den
-            D[i, i] = -np.sum([D[i, j] for j in range(n) if j != i])
+        diff = x[:, None] - x[None, :]
+        offdiag = ~np.eye(n, dtype=bool)
+        safe_diff = diff.copy()
+        safe_diff[~offdiag] = 1.0
+        bary = 1.0 / np.prod(safe_diff, axis=1)
+        D = np.zeros((n, n), dtype=np.float64)
+        np.divide(
+            bary[None, :] / bary[:, None],
+            diff,
+            out=D,
+            where=offdiag,
+        )
+        D[~offdiag] = -np.sum(D, axis=1)
         return D
     D_ref = lagrange_D(xi)
     # physical D: D_phys = (2/h) D_ref (chain rule)
@@ -94,9 +87,10 @@ def solve_advection_1d_dg(
     U[:, 0] = u.reshape(-1)
     t = np.zeros(n_steps + 1)
 
-    for k in range(n_steps):
+    k = 0
+    while k < n_steps:
         # upwind numerical flux at cell boundaries
-        u_left = u[:, 0]   # left face of each cell
+        u_left = u[:, 0]
         u_right = u[:, -1]  # right face of each cell
         # upwind: if c > 0, flux = c * u_right_prev (left neighbor)
         if c > 0:
@@ -105,18 +99,14 @@ def solve_advection_1d_dg(
         else:
             flux_left = c * u_left
             flux_right = c * np.roll(u_left, -1)
-        # interior contribution: -c D u (local)
-        du = np.zeros_like(u)
-        for j in range(n_cells):
-            local = u[j]
-            du[j] = -c * (D @ local)
-            # subtract/add surface integrals
-            # boundary terms divided by w_i to account for lumped mass
-            du[j, 0] -= (flux_left[j] - c * local[0]) * (2.0 / h) / w[0]
-            du[j, -1] += (flux_right[j] - c * local[-1]) * (2.0 / h) / w[-1]
+        # Interior contribution plus lumped-mass boundary terms.
+        du = -c * (u @ D.T)
+        du[:, 0] -= (flux_left - c * u_left) * (2.0 / h) / w[0]
+        du[:, -1] += (flux_right - c * u_right) * (2.0 / h) / w[-1]
         u = u + dt * du
         U[:, k + 1] = u.reshape(-1)
         t[k + 1] = (k + 1) * dt
+        k += 1
     return x_all, t, U
 
 
