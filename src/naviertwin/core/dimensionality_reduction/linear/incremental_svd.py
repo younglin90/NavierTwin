@@ -9,8 +9,10 @@ Examples:
     ... )
     >>> rng = np.random.default_rng(0)
     >>> isvd = IncrementalSVD(rank=3)
-    >>> for _ in range(10):
+    >>> step = 0
+    >>> while step < 10:
     ...     isvd.update(rng.standard_normal(50))
+    ...     step += 1
     >>> isvd.U.shape
     (50, 3)
 """
@@ -18,6 +20,7 @@ Examples:
 from __future__ import annotations
 
 import numpy as np
+from numpy.linalg import svd as _svd
 from numpy.typing import NDArray
 
 
@@ -47,7 +50,7 @@ class IncrementalSVD:
         Q[:k, k:k + 1] = m
         Q[k, k] = p_norm
         # SVD of Q
-        U_q, s_q, Vt_q = np.linalg.svd(Q, full_matrices=False)
+        U_q, s_q, Vt_q = _svd(Q, full_matrices=False)
         # update U/s/Vt
         p_normed = p / (p_norm + 1e-30) if p_norm > 1e-30 else np.zeros_like(p)
         U_ext = np.hstack([self.U, p_normed])
