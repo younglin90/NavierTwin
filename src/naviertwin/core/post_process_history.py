@@ -80,10 +80,10 @@ class RunHistory:
         self._entries.clear()
 
     def filter_by_op(self, op: str) -> list[dict[str, Any]]:
-        return [e for e in self._entries if e["op"] == op]
+        return list(filter(lambda e: e["op"] == op, self._entries))
 
     def filter_by_status(self, status: str) -> list[dict[str, Any]]:
-        return [e for e in self._entries if e["status"] == status]
+        return list(filter(lambda e: e["status"] == status, self._entries))
 
     def save_json(self, path: str | Path) -> Path:
         """이력을 JSON으로 저장."""
@@ -100,51 +100,49 @@ class RunHistory:
         """저장된 이력을 복원."""
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         hist = cls(max_entries=max(max_entries, len(data)))
-        for entry in data:
-            hist._entries.append(entry)
+        hist._entries.extend(data)
         return hist
 
 
 def _summarize_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
     """kwargs를 GUI/JSON에 표시하기 좋게 요약."""
-    out: dict[str, Any] = {}
-    for k, v in kwargs.items():
+    def summarize_item(item: tuple[str, Any]) -> tuple[str, Any]:
+        k, v = item
         if isinstance(v, np.ndarray):
-            out[k] = f"ndarray{tuple(v.shape)}"
-        elif isinstance(v, (list, tuple)):
-            out[k] = f"{type(v).__name__}(len={len(v)})"
-        elif isinstance(v, (int, float, str, bool)):
-            out[k] = v
-        elif callable(v):
-            out[k] = f"<callable {getattr(v, '__name__', '?')}>"
-        else:
-            out[k] = type(v).__name__
-    return out
+            return k, f"ndarray{tuple(v.shape)}"
+        if isinstance(v, (list, tuple)):
+            return k, f"{type(v).__name__}(len={len(v)})"
+        if isinstance(v, (int, float, str, bool)):
+            return k, v
+        if callable(v):
+            return k, f"<callable {getattr(v, '__name__', '?')}>"
+        return k, type(v).__name__
+
+    return dict(map(summarize_item, kwargs.items()))
 
 
 def _summarize_result(result: dict[str, Any]) -> dict[str, Any]:
     """결과 dict를 요약 (큰 ndarray는 통계만)."""
-    out: dict[str, Any] = {}
-    for k, v in result.items():
+    def summarize_item(item: tuple[str, Any]) -> tuple[str, Any]:
+        k, v = item
         if isinstance(v, np.ndarray):
             if v.size > 0:
-                out[k] = {
+                return k, {
                     "shape": list(v.shape),
                     "min": float(v.min()),
                     "max": float(v.max()),
                     "mean": float(v.mean()),
                 }
-            else:
-                out[k] = {"shape": [0]}
-        elif isinstance(v, (int, float, str, bool)):
-            out[k] = v
-        elif isinstance(v, dict):
-            out[k] = f"dict(keys={list(v.keys())[:5]})"
-        elif isinstance(v, list):
-            out[k] = f"list(len={len(v)})"
-        else:
-            out[k] = type(v).__name__
-    return out
+            return k, {"shape": [0]}
+        if isinstance(v, (int, float, str, bool)):
+            return k, v
+        if isinstance(v, dict):
+            return k, f"dict(keys={list(v.keys())[:5]})"
+        if isinstance(v, list):
+            return k, f"list(len={len(v)})"
+        return k, type(v).__name__
+
+    return dict(map(summarize_item, result.items()))
 
 
 __all__ = ["RunHistory"]
