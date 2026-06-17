@@ -204,9 +204,12 @@ def _cgns_tree_to_cfd_dataset(tree: Any, source_file: str = "") -> CFDDataset:
         children, ntype = node[2], node[3]
 
         if ntype == "GridCoordinates_t":
-            for child in children:
+            child_idx = 0
+            while child_idx < len(children):
+                child = children[child_idx]
                 cname, cval = child[0], child[1]
                 if cval is None:
+                    child_idx += 1
                     continue
                 arr = np.asarray(cval).ravel()
                 if "CoordinateX" in cname:
@@ -215,15 +218,21 @@ def _cgns_tree_to_cfd_dataset(tree: Any, source_file: str = "") -> CFDDataset:
                     nodes_y.append(arr)
                 elif "CoordinateZ" in cname:
                     nodes_z.append(arr)
+                child_idx += 1
 
         elif ntype == "FlowSolution_t":
-            for child in children:
+            child_idx = 0
+            while child_idx < len(children):
+                child = children[child_idx]
                 cname, cval = child[0], child[1]
                 if cval is not None:
                     field_data[cname] = np.asarray(cval).ravel()
+                child_idx += 1
 
-        for child in children:
-            _traverse(child)
+        child_idx = 0
+        while child_idx < len(children):
+            _traverse(children[child_idx])
+            child_idx += 1
 
     _traverse(tree)
 
@@ -236,9 +245,13 @@ def _cgns_tree_to_cfd_dataset(tree: Any, source_file: str = "") -> CFDDataset:
     points = np.column_stack([x, y, z])
 
     mesh = pv.PolyData(points).cast_to_unstructured_grid()
-    for fname, arr in field_data.items():
+    field_items = list(field_data.items())
+    field_idx = 0
+    while field_idx < len(field_items):
+        fname, arr = field_items[field_idx]
         if len(arr) == len(points):
             mesh.point_data[fname] = arr
+        field_idx += 1
 
     field_names = sorted(field_data.keys())
     logger.debug(
@@ -285,13 +298,19 @@ def _h5py_cgns_to_cfd_dataset(f: Any, source_file: str = "") -> CFDDataset:
     field_data: dict[str, Any] = {}
 
     def _walk(group: Any) -> None:
-        for key in group.keys():
+        keys = list(group.keys())
+        key_idx = 0
+        while key_idx < len(keys):
+            key = keys[key_idx]
             item = group[key]
             if hasattr(item, "keys"):
                 # 그룹
                 label = item.attrs.get("label", b"").decode("utf-8", errors="replace")
                 if label in ("GridCoordinates_t",) or "GridCoordinates" in key:
-                    for coord_key in item.keys():
+                    coord_keys = list(item.keys())
+                    coord_idx = 0
+                    while coord_idx < len(coord_keys):
+                        coord_key = coord_keys[coord_idx]
                         coord_item = item[coord_key]
                         if not hasattr(coord_item, "keys"):
                             arr = np.asarray(coord_item).ravel()
@@ -309,8 +328,12 @@ def _h5py_cgns_to_cfd_dataset(f: Any, source_file: str = "") -> CFDDataset:
                                 coords_y.append(arr)
                             elif "Z" in coord_key:
                                 coords_z.append(arr)
+                        coord_idx += 1
                 elif label in ("FlowSolution_t",) or "FlowSolution" in key:
-                    for field_key in item.keys():
+                    field_keys = list(item.keys())
+                    field_idx = 0
+                    while field_idx < len(field_keys):
+                        field_key = field_keys[field_idx]
                         field_item = item[field_key]
                         try:
                             if hasattr(field_item, "keys") and " data" in field_item:
@@ -322,8 +345,10 @@ def _h5py_cgns_to_cfd_dataset(f: Any, source_file: str = "") -> CFDDataset:
                             field_data[field_key] = arr
                         except Exception:
                             pass
+                        field_idx += 1
                 else:
                     _walk(item)
+            key_idx += 1
 
     _walk(f)
 
@@ -337,9 +362,13 @@ def _h5py_cgns_to_cfd_dataset(f: Any, source_file: str = "") -> CFDDataset:
     points = np.column_stack([x, y, z])
 
     mesh = pv.PolyData(points).cast_to_unstructured_grid()
-    for fname, arr in field_data.items():
+    field_items = list(field_data.items())
+    field_idx = 0
+    while field_idx < len(field_items):
+        fname, arr = field_items[field_idx]
         if len(arr) == len(points):
             mesh.point_data[fname] = arr
+        field_idx += 1
 
     field_names = sorted(field_data.keys())
     logger.debug(
