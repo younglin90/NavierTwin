@@ -16,6 +16,8 @@ from typing import Callable
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
 
 def _advect(
     vf: Callable[[NDArray[np.float64]], NDArray[np.float64]],
@@ -25,13 +27,27 @@ def _advect(
     n = int(np.ceil(T / dt))
     dt = T / n
     P = pts.copy()
-    for _ in range(n):
-        k1 = np.array([vf(p) for p in P])
-        k2 = np.array([vf(p) for p in (P + 0.5 * dt * k1)])
-        k3 = np.array([vf(p) for p in (P + 0.5 * dt * k2)])
-        k4 = np.array([vf(p) for p in (P + dt * k3)])
+    step = 0
+    while step < n:
+        k1 = _eval_vf(vf, P)
+        k2 = _eval_vf(vf, P + 0.5 * dt * k1)
+        k3 = _eval_vf(vf, P + 0.5 * dt * k2)
+        k4 = _eval_vf(vf, P + dt * k3)
         P = P + (dt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+        step += 1
     return P
+
+
+def _eval_vf(
+    vf: Callable[[NDArray[np.float64]], NDArray[np.float64]],
+    pts: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    out = np.empty_like(pts)
+    idx = 0
+    while idx < pts.shape[0]:
+        out[idx] = vf(pts[idx])
+        idx += 1
+    return out
 
 
 def compute_ftle_2d(
@@ -41,12 +57,16 @@ def compute_ftle_2d(
     *, eps: float = 1e-4,
 ) -> NDArray[np.float64]:
     """grid 각 점에서 FTLE = (1/(2T)) log λ_max(Cauchy-Green)."""
+    if _kernels is None:
+        raise ImportError("naviertwin._native._kernels is required by compute_ftle_2d")
     nx = x.size
     ny = y.size
-    FT = np.zeros((ny, nx))
     X, Y = np.meshgrid(x, y, indexing="xy")
-    for i in range(ny):
-        for j in range(nx):
+    advected = np.empty((ny, nx, 4, 2), dtype=np.float64)
+    i = 0
+    while i < ny:
+        j = 0
+        while j < nx:
             p = np.array([X[i, j], Y[i, j]])
             stencil = np.array([
                 p + [eps, 0],
@@ -54,14 +74,10 @@ def compute_ftle_2d(
                 p + [0, eps],
                 p - [0, eps],
             ])
-            adv = _advect(vf, stencil, T, dt)
-            dxdX = (adv[0] - adv[1]) / (2 * eps)
-            dxdY = (adv[2] - adv[3]) / (2 * eps)
-            F = np.stack([dxdX, dxdY], axis=1)  # (2, 2)
-            C = F.T @ F
-            lam = np.linalg.eigvalsh(C).max()
-            FT[i, j] = 0.5 / abs(T) * np.log(max(lam, 1e-30))
-    return FT
+            advected[i, j] = _advect(vf, stencil, T, dt)
+            j += 1
+        i += 1
+    return _kernels.ftle_from_advected_stencils(advected, T, eps)
 
 
 __all__ = ["compute_ftle_2d"]

@@ -4424,6 +4424,40 @@ static py::array_t<double> gmm_log_prob_matrix_native(Array2D X, ArrayD weights,
     return out;
 }
 
+static py::array_t<double> ftle_from_advected_stencils_native(ArrayD adv, double T, double eps) {
+    if (adv.ndim() != 4 || adv.shape(2) != 4 || adv.shape(3) != 2) {
+        throw std::invalid_argument("adv must have shape (ny, nx, 4, 2)");
+    }
+    if (T == 0.0 || eps == 0.0) {
+        throw std::invalid_argument("T and eps must be non-zero");
+    }
+    const py::ssize_t ny = adv.shape(0);
+    const py::ssize_t nx = adv.shape(1);
+    auto out = py::array_t<double>({ny, nx});
+    const double* ap = adv.data();
+    double* op = out.mutable_data();
+    const double inv_2eps = 0.5 / eps;
+    const double scale = 0.5 / std::abs(T);
+
+    for (py::ssize_t i = 0; i < ny; ++i) {
+        for (py::ssize_t j = 0; j < nx; ++j) {
+            const py::ssize_t base = ((i * nx + j) * 4) * 2;
+            const double f00 = (ap[base + 0] - ap[base + 2]) * inv_2eps;
+            const double f10 = (ap[base + 1] - ap[base + 3]) * inv_2eps;
+            const double f01 = (ap[base + 4] - ap[base + 6]) * inv_2eps;
+            const double f11 = (ap[base + 5] - ap[base + 7]) * inv_2eps;
+            const double c00 = f00 * f00 + f10 * f10;
+            const double c01 = f00 * f01 + f10 * f11;
+            const double c11 = f01 * f01 + f11 * f11;
+            const double tr = c00 + c11;
+            const double disc = std::sqrt(std::max(0.0, (c00 - c11) * (c00 - c11) + 4.0 * c01 * c01));
+            const double lambda_max = std::max(1e-30, 0.5 * (tr + disc));
+            op[i * nx + j] = scale * std::log(lambda_max);
+        }
+    }
+    return out;
+}
+
 static void schedule_berger_oliger_fill(int level, int max_level, int refine_ratio, std::vector<int>& out) {
     if (level >= max_level) {
         out.push_back(level);
@@ -4650,6 +4684,7 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("frequency_peak_dicts", &frequency_peak_dicts_native, py::arg("freqs"), py::arg("amplitudes"), py::arg("indices"));
     m.def("delta_criterion_3x3", &delta_criterion_3x3_native, py::arg("grad"));
     m.def("gmm_log_prob_matrix", &gmm_log_prob_matrix_native, py::arg("X"), py::arg("weights"), py::arg("means"), py::arg("covs"));
+    m.def("ftle_from_advected_stencils", &ftle_from_advected_stencils_native, py::arg("adv"), py::arg("T"), py::arg("eps"));
     m.def(
         "schedule_berger_oliger", &schedule_berger_oliger_native, py::arg("level") = 0,
         py::arg("max_level") = 2, py::arg("refine_ratio") = 2
