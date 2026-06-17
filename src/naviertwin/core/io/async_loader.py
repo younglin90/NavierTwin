@@ -3,8 +3,7 @@
 Examples:
     >>> from naviertwin.core.io.async_loader import AsyncLoader
     >>> def gen():
-    ...     for i in range(5):
-    ...         yield i
+    ...     yield from range(5)
     >>> loader = AsyncLoader(gen(), max_buffer=2)
     >>> sum(loader.iter())
     10
@@ -29,8 +28,7 @@ class AsyncLoader:
 
     def _run(self) -> None:
         try:
-            for item in self.source:
-                self.q.put(item)
+            tuple(map(self.q.put, self.source))
             self.q.put(_SENTINEL)
         except Exception as e:  # noqa: BLE001
             self.error = e
