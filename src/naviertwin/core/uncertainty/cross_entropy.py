@@ -33,9 +33,10 @@ def cem_optimize(
     best_f = float(objective(mu))
     n_elite = max(1, int(n_samples * elite_frac))
 
-    for _ in range(n_iter):
+    iteration = 0
+    while iteration < n_iter:
         samples = rng.normal(mu, sigma, size=(n_samples, dim))
-        fvals = np.array([float(objective(s)) for s in samples])
+        fvals = np.fromiter(map(lambda sample: float(objective(sample)), samples), dtype=np.float64, count=n_samples)
         order = np.argsort(-fvals)  # descending
         elite = samples[order[:n_elite]]
         mu = elite.mean(axis=0)
@@ -43,6 +44,7 @@ def cem_optimize(
         if fvals[order[0]] > best_f:
             best_f = float(fvals[order[0]])
             best_x = samples[order[0]].copy()
+        iteration += 1
     return best_x, best_f
 
 
