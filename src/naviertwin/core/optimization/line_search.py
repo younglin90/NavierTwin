@@ -19,6 +19,11 @@ from typing import Callable
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required by line search")
+
 
 def armijo_backtrack(
     f: Callable[[NDArray], float],
@@ -33,11 +38,13 @@ def armijo_backtrack(
     alpha = float(alpha0)
     f0 = f(x)
     g0 = grad(x)
-    slope = float(g0 @ p)
-    for _ in range(max_iter):
+    slope = float(_kernels.vector_dot(np.asarray(g0, dtype=np.float64), np.asarray(p, dtype=np.float64)))
+    it = 0
+    while it < max_iter:
         if f(x + alpha * p) <= f0 + c1 * alpha * slope:
             return alpha
         alpha *= rho
+        it += 1
     return alpha
 
 
@@ -49,10 +56,10 @@ def check_wolfe(
     """(Strong) Wolfe 조건 두 개 평가."""
     f0 = f(x)
     g0 = grad(x)
-    slope0 = float(g0 @ p)
+    slope0 = float(_kernels.vector_dot(np.asarray(g0, dtype=np.float64), np.asarray(p, dtype=np.float64)))
     f1 = f(x + alpha * p)
     g1 = grad(x + alpha * p)
-    slope1 = float(g1 @ p)
+    slope1 = float(_kernels.vector_dot(np.asarray(g1, dtype=np.float64), np.asarray(p, dtype=np.float64)))
     armijo = f1 <= f0 + c1 * alpha * slope0
     curvature = slope1 >= c2 * slope0  # 일반 Wolfe
     strong = abs(slope1) <= c2 * abs(slope0)

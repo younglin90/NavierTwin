@@ -2778,6 +2778,19 @@ static double vector_l2_norm_native(ArrayD x) {
     return std::sqrt(ss);
 }
 
+static double vector_dot_native(ArrayD a, ArrayD b) {
+    if (a.size() != b.size()) {
+        throw std::invalid_argument("a and b must have the same size");
+    }
+    const double* ap = a.data();
+    const double* bp = b.data();
+    double out = 0.0;
+    for (py::ssize_t i = 0; i < a.size(); ++i) {
+        out += ap[i] * bp[i];
+    }
+    return out;
+}
+
 static double aitken_relax_native(double omega_prev, ArrayD r_prev, ArrayD r_curr) {
     if (r_prev.size() != r_curr.size()) {
         throw std::invalid_argument("r_prev and r_curr must have the same size");
@@ -2911,6 +2924,7 @@ PYBIND11_MODULE(_kernels, m) {
         py::arg("cp"), py::arg("dt")
     );
     m.def("vector_l2_norm", &vector_l2_norm_native, py::arg("x"));
+    m.def("vector_dot", &vector_dot_native, py::arg("a"), py::arg("b"));
     m.def("aitken_relax", &aitken_relax_native, py::arg("omega_prev"), py::arg("r_prev"), py::arg("r_curr"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
