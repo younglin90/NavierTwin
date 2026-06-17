@@ -3057,6 +3057,36 @@ static double edge_length_metric_native(ArrayD M_a, ArrayD M_b, ArrayD a, ArrayD
     return std::sqrt(std::max(q, 0.0));
 }
 
+static py::array_t<double> box_filter_2d_native(ArrayD field, int width) {
+    if (field.ndim() != 2) {
+        throw std::invalid_argument("field must be a 2D array");
+    }
+    if (width <= 0) {
+        throw std::invalid_argument("width must be positive");
+    }
+    const py::ssize_t ny = field.shape(0);
+    const py::ssize_t nx = field.shape(1);
+    const int pad = width / 2;
+    auto out = py::array_t<double>({ny, nx});
+    const double* fp = field.data();
+    double* op = out.mutable_data();
+    const double denom = static_cast<double>(width * width);
+    for (py::ssize_t i = 0; i < ny; ++i) {
+        for (py::ssize_t j = 0; j < nx; ++j) {
+            double sum = 0.0;
+            for (int di = 0; di < width; ++di) {
+                const py::ssize_t ii = std::min<py::ssize_t>(ny - 1, std::max<py::ssize_t>(0, i + di - pad));
+                for (int dj = 0; dj < width; ++dj) {
+                    const py::ssize_t jj = std::min<py::ssize_t>(nx - 1, std::max<py::ssize_t>(0, j + dj - pad));
+                    sum += fp[ii * nx + jj];
+                }
+            }
+            op[i * nx + j] = sum / denom;
+        }
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -3191,5 +3221,6 @@ PYBIND11_MODULE(_kernels, m) {
     );
     m.def("metric_from_hessian_2d", &metric_from_hessian_2d_native, py::arg("H"), py::arg("h_min") = 1e-3, py::arg("h_max") = 1.0);
     m.def("edge_length_metric", &edge_length_metric_native, py::arg("M_a"), py::arg("M_b"), py::arg("a"), py::arg("b"));
+    m.def("box_filter_2d", &box_filter_2d_native, py::arg("field"), py::arg("width") = 3);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

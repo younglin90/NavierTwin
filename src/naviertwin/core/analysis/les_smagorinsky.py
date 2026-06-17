@@ -14,7 +14,12 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
 CS_DEFAULT = 0.17
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required by LES analysis")
 
 
 def smagorinsky_nu_sgs(
@@ -29,14 +34,7 @@ def filter_box_2d(
     field: NDArray[np.float64], width: int = 3,
 ) -> NDArray[np.float64]:
     """Box filter (uniform) — 2D."""
-    f = np.asarray(field, dtype=np.float64)
-    pad = width // 2
-    fp = np.pad(f, pad, mode="edge")
-    out = np.zeros_like(f)
-    for i in range(width):
-        for j in range(width):
-            out += fp[i:i + f.shape[0], j:j + f.shape[1]]
-    return out / (width * width)
+    return _kernels.box_filter_2d(np.asarray(field, dtype=np.float64), int(width))
 
 
 __all__ = ["smagorinsky_nu_sgs", "filter_box_2d", "CS_DEFAULT"]
