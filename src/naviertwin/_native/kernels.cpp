@@ -3334,6 +3334,85 @@ static py::array_t<double> clenshaw_curtis_weights_native(int N) {
     return w;
 }
 
+static py::array_t<double> chebyshev_points_native(int N) {
+    if (N < 1) {
+        throw std::invalid_argument("N >= 1 required");
+    }
+    auto out = py::array_t<double>({static_cast<py::ssize_t>(N + 1)});
+    double* op = out.mutable_data();
+    constexpr double pi = 3.141592653589793238462643383279502884;
+    for (int i = 0; i <= N; ++i) {
+        op[i] = std::cos(pi * static_cast<double>(i) / static_cast<double>(N));
+    }
+    return out;
+}
+
+static py::array_t<double> chebyshev_diff_matrix_native(int N) {
+    if (N < 1) {
+        throw std::invalid_argument("N >= 1 required");
+    }
+    const int m = N + 1;
+    constexpr double pi = 3.141592653589793238462643383279502884;
+    std::vector<double> x(static_cast<std::size_t>(m));
+    std::vector<double> c(static_cast<std::size_t>(m));
+    for (int i = 0; i < m; ++i) {
+        x[i] = std::cos(pi * static_cast<double>(i) / static_cast<double>(N));
+        const double endpoint_scale = (i == 0 || i == N) ? 2.0 : 1.0;
+        c[i] = endpoint_scale * ((i % 2 == 0) ? 1.0 : -1.0);
+    }
+
+    auto out = py::array_t<double>({static_cast<py::ssize_t>(m), static_cast<py::ssize_t>(m)});
+    double* op = out.mutable_data();
+    for (int i = 0; i < m; ++i) {
+        double row_sum = 0.0;
+        for (int j = 0; j < m; ++j) {
+            if (i == j) {
+                op[i * m + j] = 0.0;
+                continue;
+            }
+            const double value = (c[i] / c[j]) / (x[i] - x[j]);
+            op[i * m + j] = value;
+            row_sum += value;
+        }
+        op[i * m + i] = -row_sum;
+    }
+    return out;
+}
+
+static py::array_t<double> lagrange_interp_1d_native(ArrayD x_known, ArrayD y_known, ArrayD x_new) {
+    if (x_known.ndim() != 1 || y_known.ndim() != 1 || x_known.shape(0) != y_known.shape(0)) {
+        throw std::invalid_argument("x_known and y_known must be matching 1D arrays");
+    }
+    std::vector<py::ssize_t> shape;
+    shape.reserve(static_cast<std::size_t>(x_new.ndim()));
+    for (py::ssize_t axis = 0; axis < x_new.ndim(); ++axis) {
+        shape.push_back(x_new.shape(axis));
+    }
+    auto out = py::array_t<double>(shape);
+    const double* xkp = x_known.data();
+    const double* ykp = y_known.data();
+    const double* xnp = x_new.data();
+    double* op = out.mutable_data();
+    const py::ssize_t n_known = x_known.shape(0);
+    const py::ssize_t n_new = x_new.size();
+    for (py::ssize_t p = 0; p < n_new; ++p) {
+        double value = 0.0;
+        const double x = xnp[p];
+        for (py::ssize_t i = 0; i < n_known; ++i) {
+            double basis = 1.0;
+            for (py::ssize_t j = 0; j < n_known; ++j) {
+                if (i == j) {
+                    continue;
+                }
+                basis *= (x - xkp[j]) / (xkp[i] - xkp[j]);
+            }
+            value += ykp[i] * basis;
+        }
+        op[p] = value;
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -3479,5 +3558,8 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("duct_modes_dirichlet", &duct_modes_dirichlet_native, py::arg("L"), py::arg("c"), py::arg("n_modes") = 5, py::arg("n_points") = 128);
     m.def("duct_modes_neumann", &duct_modes_neumann_native, py::arg("L"), py::arg("c"), py::arg("n_modes") = 5, py::arg("n_points") = 128);
     m.def("clenshaw_curtis_weights", &clenshaw_curtis_weights_native, py::arg("N"));
+    m.def("chebyshev_points", &chebyshev_points_native, py::arg("N"));
+    m.def("chebyshev_diff_matrix", &chebyshev_diff_matrix_native, py::arg("N"));
+    m.def("lagrange_interp_1d", &lagrange_interp_1d_native, py::arg("x_known"), py::arg("y_known"), py::arg("x_new"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

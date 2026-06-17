@@ -18,6 +18,8 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
 
 def chebyshev_points(N: int) -> NDArray[np.float64]:
     """Chebyshev-Gauss-Lobatto 점들 x_k = cos(kπ/N), k=0..N.
@@ -25,9 +27,9 @@ def chebyshev_points(N: int) -> NDArray[np.float64]:
     Returns:
         (N+1,) [1, ..., -1].
     """
-    if N < 1:
-        raise ValueError("N >= 1 필요")
-    return np.cos(np.pi * np.arange(N + 1) / N)
+    if _kernels is None:
+        raise ImportError("NavierTwin native kernels are required by chebyshev_points")
+    return _kernels.chebyshev_points(N)
 
 
 def chebyshev_diff_matrix(N: int) -> NDArray[np.float64]:
@@ -37,15 +39,9 @@ def chebyshev_diff_matrix(N: int) -> NDArray[np.float64]:
     D[i, i] = -x_i / 2(1 - x_i²)   (endpoint 제외).
     D[0, 0] = (2N² + 1)/6,  D[N, N] = -(2N² + 1)/6.
     """
-    if N < 1:
-        raise ValueError("N >= 1 필요")
-    x = chebyshev_points(N)
-    c = np.array([2.0] + [1.0] * (N - 1) + [2.0]) * (-1.0) ** np.arange(N + 1)
-    X = np.tile(x, (N + 1, 1)).T
-    dX = X - X.T
-    D = (c[:, None] / c[None, :]) / (dX + np.eye(N + 1))
-    D = D - np.diag(np.sum(D, axis=1))
-    return D
+    if _kernels is None:
+        raise ImportError("NavierTwin native kernels are required by chebyshev_diff_matrix")
+    return _kernels.chebyshev_diff_matrix(N)
 
 
 def lagrange_interp_1d(
@@ -54,19 +50,9 @@ def lagrange_interp_1d(
     x_new: NDArray[np.float64],
 ) -> NDArray[np.float64]:
     """1D Lagrange 보간."""
-    x_known = np.asarray(x_known, dtype=np.float64)
-    y_known = np.asarray(y_known, dtype=np.float64)
-    x_new = np.asarray(x_new, dtype=np.float64)
-    N = x_known.size
-    out = np.zeros_like(x_new)
-    for i in range(N):
-        L = np.ones_like(x_new)
-        for j in range(N):
-            if i == j:
-                continue
-            L *= (x_new - x_known[j]) / (x_known[i] - x_known[j])
-        out += y_known[i] * L
-    return out
+    if _kernels is None:
+        raise ImportError("NavierTwin native kernels are required by lagrange_interp_1d")
+    return _kernels.lagrange_interp_1d(x_known, y_known, x_new)
 
 
 __all__ = ["chebyshev_points", "chebyshev_diff_matrix", "lagrange_interp_1d"]
