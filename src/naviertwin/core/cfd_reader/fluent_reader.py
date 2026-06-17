@@ -203,11 +203,15 @@ class FluentReader(BaseReader):
             return
 
         # point_data 병합
-        for key, arr in dat_mesh.point_data.items():
+        point_items = list(dat_mesh.point_data.items())
+        point_idx = 0
+        while point_idx < len(point_items):
+            key, arr = point_items[point_idx]
             if hasattr(dataset.mesh, "point_data"):
                 dataset.mesh.point_data[key] = arr
                 if key not in dataset.field_names:
                     dataset.field_names.append(key)
+            point_idx += 1
 
         logger.debug(".dat 필드 병합 완료: %s", list(dat_mesh.point_data.keys()))
 
@@ -299,15 +303,28 @@ class FluentASCIIParser:
         node_pattern = re.compile(
             r"\(2010\s*\(([^)]+)\)\s*\(([\s\S]*?)\)\s*\)", re.IGNORECASE
         )
-        for m in node_pattern.finditer(content):
+        matches = list(node_pattern.finditer(content))
+        match_idx = 0
+        while match_idx < len(matches):
+            m = matches[match_idx]
             coord_block = m.group(2).strip()
-            for line in coord_block.splitlines():
+            coord_lines = coord_block.splitlines()
+            line_idx = 0
+            while line_idx < len(coord_lines):
+                line = coord_lines[line_idx]
                 vals = line.split()
                 if len(vals) >= 3:
                     try:
-                        nodes.append([float(v) for v in vals[:3]])
+                        node = []
+                        val_idx = 0
+                        while val_idx < 3:
+                            node.append(float(vals[val_idx]))
+                            val_idx += 1
+                        nodes.append(node)
                     except ValueError:
                         pass
+                line_idx += 1
+            match_idx += 1
 
         if not nodes:
             raise ValueError(
