@@ -30,7 +30,8 @@ def _power_iter(X: NDArray[np.float64], n_iter: int, tol: float) -> tuple:
     G = rng.standard_normal(J)
     H = rng.standard_normal(K)
     prev_norm = np.inf
-    for _ in range(n_iter):
+    it = 0
+    while it < n_iter:
         # mode-1: F
         F = np.einsum("ijk,j,k->i", X, G, H)
         nF = np.linalg.norm(F)
@@ -54,6 +55,7 @@ def _power_iter(X: NDArray[np.float64], n_iter: int, tol: float) -> tuple:
         if abs(prev_norm - total) < tol:
             break
         prev_norm = total
+        it += 1
     sigma = float(np.einsum("ijk,i,j,k->", X, F, G, H))
     return F, G, H, sigma
 
@@ -75,10 +77,12 @@ def compute_pgd_3d(
 
     R = X.copy()
     modes: list[dict] = []
-    for _ in range(n_modes):
+    mode_idx = 0
+    while mode_idx < n_modes:
         F, G, H, sigma = _power_iter(R, max_iter, tol)
         modes.append({"F": F, "G": G, "H": H, "sigma": sigma})
         R = R - sigma * np.einsum("i,j,k->ijk", F, G, H)
+        mode_idx += 1
     logger.info(
         "PGD 3D 완료: n_modes=%d, residual=%.4g",
         n_modes,
@@ -92,10 +96,15 @@ def reconstruct_pgd(
     shape: tuple[int, ...],
 ) -> NDArray[np.float64]:
     """PGD 모드로부터 원본 텐서 복원."""
-    T = np.zeros(shape, dtype=np.float64)
-    for m in modes:
-        T += m["sigma"] * np.einsum("i,j,k->ijk", m["F"], m["G"], m["H"])
-    return T
+    if not modes:
+        return np.zeros(shape, dtype=np.float64)
+    parts = tuple(
+        map(
+            lambda m: m["sigma"] * np.einsum("i,j,k->ijk", m["F"], m["G"], m["H"]),
+            modes,
+        )
+    )
+    return np.sum(np.stack(parts), axis=0)
 
 
 __all__ = ["compute_pgd_3d", "reconstruct_pgd"]
