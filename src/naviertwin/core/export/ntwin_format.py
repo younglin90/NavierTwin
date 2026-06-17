@@ -165,7 +165,9 @@ class NTwinWriter:
         compression_kwargs: dict[str, Any] = {}
         if compression:
             compression_kwargs["compression"] = compression
-        for name in dataset.field_names:
+        field_idx = 0
+        while field_idx < len(dataset.field_names):
+            name = dataset.field_names[field_idx]
             arr: Any = None
             if hasattr(mesh, "point_data") and name in mesh.point_data:
                 arr = np.asarray(mesh.point_data[name], dtype=np.float32)
@@ -173,6 +175,7 @@ class NTwinWriter:
                 arr = np.asarray(mesh.cell_data[name], dtype=np.float32)
             if arr is not None:
                 point_data_grp.create_dataset(name, data=arr, **compression_kwargs)
+            field_idx += 1
 
         # NumberOfPoints/Cells
         n_pts = int(mesh.n_points) if hasattr(mesh, "n_points") else 0
@@ -218,10 +221,13 @@ class NTwinWriter:
         n_cls = int(mesh.n_cells) if hasattr(mesh, "n_cells") else 0
 
         # NumberOfPoints/Cells append
-        for key, value in (
+        count_items = (
             ("NumberOfPoints", n_pts),
             ("NumberOfCells", n_cls),
-        ):
+        )
+        count_idx = 0
+        while count_idx < len(count_items):
+            key, value = count_items[count_idx]
             if key in vtk_grp:
                 ds = vtk_grp[key]
                 old_len = ds.shape[0]
@@ -233,10 +239,14 @@ class NTwinWriter:
                     data=np.array([value], dtype=np.int64),
                     maxshape=(None,),
                 )
+            count_idx += 1
 
         # 각 필드 append
         if hasattr(mesh, "point_data"):
-            for name, arr_raw in mesh.point_data.items():
+            point_items = list(mesh.point_data.items())
+            point_idx = 0
+            while point_idx < len(point_items):
+                name, arr_raw = point_items[point_idx]
                 arr = np.asarray(arr_raw, dtype=np.float32)
                 if name in point_data_grp:
                     ds = point_data_grp[name]
@@ -248,6 +258,7 @@ class NTwinWriter:
                     point_data_grp.create_dataset(
                         name, data=arr, maxshape=maxshape
                     )
+                point_idx += 1
 
         # NavierTwin 메타데이터 업데이트
         nt_grp = self._h5.require_group("NavierTwin")
@@ -493,11 +504,15 @@ class NTwinReader:
         # PointData 필드 로드
         if "PointData" in vtk_grp:
             pd_grp = vtk_grp["PointData"]
-            for name in self.field_names:
+            field_names = self.field_names
+            field_idx = 0
+            while field_idx < len(field_names):
+                name = field_names[field_idx]
                 if name in pd_grp:
                     arr = np.asarray(pd_grp[name])
                     if arr.ndim == 0:
                         mesh.point_data[name] = arr
+                        field_idx += 1
                         continue
                     if arr.shape[0] < offset + count:
                         raise ValueError(
@@ -505,6 +520,7 @@ class NTwinReader:
                             f"field={name}, len={arr.shape[0]}, need={offset + count}"
                         )
                     mesh.point_data[name] = arr[offset : offset + count]
+                field_idx += 1
 
         logger.debug("read_timestep t_idx=%d 완료", t_idx)
         return mesh
@@ -531,11 +547,15 @@ class NTwinReader:
 
         result: dict[str, Any] = {}
         pd_grp = vtk_grp["PointData"]
-        for name in field_names:
+        field_idx = 0
+        while field_idx < len(field_names):
+            name = field_names[field_idx]
             if name not in pd_grp:
+                field_idx += 1
                 continue
             arr = np.asarray(pd_grp[name])
             if arr.ndim == 0:
+                field_idx += 1
                 continue
             if arr.shape[0] < total_points:
                 raise ValueError(
@@ -543,6 +563,7 @@ class NTwinReader:
                     f"field={name}, len={arr.shape[0]}, need={total_points}"
                 )
             result[name] = arr[:total_points]
+            field_idx += 1
         return result
 
     def _resolve_timestep_slice(
@@ -585,7 +606,7 @@ class NTwinReader:
             if ts_arr.ndim == 0:
                 return [float(ts_arr)]
             values = list(ts_arr)
-            return [float(v) for v in values]
+            return list(map(float, values))
         except (KeyError, TypeError, ValueError):
             return [0.0]
 
@@ -600,7 +621,7 @@ class NTwinReader:
             raw = self._h5["NavierTwin/field_names"]
             decoded = raw[()].decode("utf-8") if hasattr(raw[()], "decode") else str(raw[()])
             parsed = json.loads(decoded)
-            if isinstance(parsed, list) and all(isinstance(x, str) for x in parsed):
+            if isinstance(parsed, list) and all(map(lambda x: isinstance(x, str), parsed)):
                 return parsed
             raise TypeError("field_names must be list[str]")
         except (KeyError, json.JSONDecodeError, AttributeError):
