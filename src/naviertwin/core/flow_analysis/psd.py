@@ -5,7 +5,7 @@ Welch 평균화 주기도법으로 추정한다. 상용 후처리 툴 (Tecplot 3
 MATLAB Signal Processing Toolbox)의 표준 PSD 알고리즘.
 
 References:
-    Welch, P., "The use of fast Fourier transform for the estimation of power
+    Welch, P., "The use of fast Fourier transform to estimate power
     spectra", IEEE Trans. Audio and Electroacoustics, 1967.
 
 Examples:
@@ -111,26 +111,13 @@ def welch_psd(
     step = nperseg - noverlap
     n_seg = max(1, (N - noverlap) // step)
 
-    # 세그먼트별 PSD 평균
-    psd_sum = None
-    for i in range(n_seg):
-        start = i * step
-        end = start + nperseg
-        if end > N:
-            break
-        seg = x[start:end].copy()
-        if detrend == "constant":
-            seg -= seg.mean()
-        seg = seg * win
-        S = np.fft.rfft(seg)
-        P = np.abs(S) ** 2
-        if psd_sum is None:
-            psd_sum = P
-        else:
-            psd_sum = psd_sum + P
-
-    n_seg_actual = max(1, n_seg)
-    P_avg = psd_sum / n_seg_actual
+    starts = np.arange(n_seg) * step
+    starts = starts[starts + nperseg <= N]
+    frames = np.lib.stride_tricks.sliding_window_view(x, nperseg)[starts].copy()
+    if detrend == "constant":
+        frames -= frames.mean(axis=1, keepdims=True)
+    S = np.fft.rfft(frames * win, axis=1)
+    P_avg = np.mean(np.abs(S) ** 2, axis=0)
 
     if scaling == "density":
         P_avg = P_avg / (fs * win_norm)
@@ -188,23 +175,15 @@ def cross_psd(
     step = nperseg - noverlap
     n_seg = max(1, (N - noverlap) // step)
 
-    csd_sum = None
-    for i in range(n_seg):
-        start = i * step
-        end = start + nperseg
-        if end > N:
-            break
-        sx = (x[start:end] - x[start:end].mean()) * win
-        sy = (y[start:end] - y[start:end].mean()) * win
-        Sx = np.fft.rfft(sx)
-        Sy = np.fft.rfft(sy)
-        C = np.conj(Sx) * Sy
-        if csd_sum is None:
-            csd_sum = C
-        else:
-            csd_sum = csd_sum + C
-
-    P_xy = csd_sum / max(1, n_seg) / (fs * win_norm)
+    starts = np.arange(n_seg) * step
+    starts = starts[starts + nperseg <= N]
+    x_frames = np.lib.stride_tricks.sliding_window_view(x, nperseg)[starts]
+    y_frames = np.lib.stride_tricks.sliding_window_view(y, nperseg)[starts]
+    sx = (x_frames - x_frames.mean(axis=1, keepdims=True)) * win
+    sy = (y_frames - y_frames.mean(axis=1, keepdims=True)) * win
+    Sx = np.fft.rfft(sx, axis=1)
+    Sy = np.fft.rfft(sy, axis=1)
+    P_xy = np.mean(np.conj(Sx) * Sy, axis=0) / (fs * win_norm)
     P_xy = P_xy.copy()
     P_xy[1:-1] *= 2.0
     freq = np.fft.rfftfreq(nperseg, d=1.0 / fs)
