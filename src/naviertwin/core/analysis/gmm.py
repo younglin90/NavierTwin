@@ -15,6 +15,8 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
 
 class GMM:
     def __init__(self, k: int = 2, seed: int | None = 0) -> None:
@@ -32,32 +34,19 @@ class GMM:
         self.covs = np.stack([np.eye(d)] * self.k)
         self.weights = np.full(self.k, 1.0 / self.k)
 
-    def _log_gauss(self, X: NDArray, mean: NDArray, cov: NDArray) -> NDArray:
-        d = X.shape[1]
-        diff = X - mean
-        try:
-            inv = np.linalg.inv(cov)
-            det = float(np.linalg.det(cov))
-        except np.linalg.LinAlgError:
-            cov = cov + 1e-6 * np.eye(d)
-            inv = np.linalg.inv(cov)
-            det = float(np.linalg.det(cov))
-        if det <= 0:
-            det = 1e-30
-        maha = np.einsum("ni,ij,nj->n", diff, inv, diff)
-        return -0.5 * (d * np.log(2 * np.pi) + np.log(det) + maha)
+    def _log_prob_matrix(self, X: NDArray[np.float64]) -> NDArray[np.float64]:
+        if _kernels is None:
+            raise ImportError("naviertwin._native._kernels is required by GMM")
+        return _kernels.gmm_log_prob_matrix(X, self.weights, self.means, self.covs)
 
     def fit(self, X: NDArray[np.float64], max_iter: int = 100, tol: float = 1e-6) -> "GMM":
         X = np.asarray(X, dtype=np.float64)
         self._init(X)
         ll_prev = -np.inf
-        for _ in range(max_iter):
+        it = 0
+        while it < max_iter:
             # E
-            logp = np.stack(
-                [np.log(self.weights[k]) + self._log_gauss(X, self.means[k], self.covs[k])
-                 for k in range(self.k)],
-                axis=1,
-            )
+            logp = self._log_prob_matrix(X)
             # softmax
             m = logp.max(axis=1, keepdims=True)
             probs = np.exp(logp - m)
@@ -67,25 +56,24 @@ class GMM:
             Nk = probs.sum(axis=0)
             self.weights = Nk / X.shape[0]
             self.means = (probs.T @ X) / (Nk[:, None] + 1e-30)
-            for k in range(self.k):
-                diff = X - self.means[k]
-                self.covs[k] = (
-                    (probs[:, k:k + 1] * diff).T @ diff
-                ) / (Nk[k] + 1e-30) + 1e-6 * np.eye(X.shape[1])
+            k_idx = 0
+            while k_idx < self.k:
+                diff = X - self.means[k_idx]
+                self.covs[k_idx] = (
+                    (probs[:, k_idx:k_idx + 1] * diff).T @ diff
+                ) / (Nk[k_idx] + 1e-30) + 1e-6 * np.eye(X.shape[1])
+                k_idx += 1
 
             ll = float(np.sum(m) + np.sum(np.log(np.exp(logp - m).sum(axis=1))))
             if abs(ll - ll_prev) < tol:
                 break
             ll_prev = ll
+            it += 1
         return self
 
     def predict(self, X: NDArray[np.float64]) -> NDArray[np.int64]:
         X = np.asarray(X, dtype=np.float64)
-        logp = np.stack(
-            [np.log(self.weights[k]) + self._log_gauss(X, self.means[k], self.covs[k])
-             for k in range(self.k)],
-            axis=1,
-        )
+        logp = self._log_prob_matrix(X)
         return np.argmax(logp, axis=1).astype(np.int64)
 
 

@@ -4316,6 +4316,114 @@ static py::array_t<double> delta_criterion_3x3_native(ArrayD grad) {
     return out;
 }
 
+static bool invert_with_logdet(const double* a, py::ssize_t d, double jitter, std::vector<double>& inv, double& det) {
+    const py::ssize_t width = 2 * d;
+    std::vector<double> aug(static_cast<size_t>(d * width), 0.0);
+    for (py::ssize_t i = 0; i < d; ++i) {
+        for (py::ssize_t j = 0; j < d; ++j) {
+            aug[static_cast<size_t>(i * width + j)] = a[i * d + j] + (i == j ? jitter : 0.0);
+        }
+        aug[static_cast<size_t>(i * width + d + i)] = 1.0;
+    }
+
+    det = 1.0;
+    for (py::ssize_t col = 0; col < d; ++col) {
+        py::ssize_t pivot = col;
+        double best = std::abs(aug[static_cast<size_t>(col * width + col)]);
+        for (py::ssize_t row = col + 1; row < d; ++row) {
+            const double value = std::abs(aug[static_cast<size_t>(row * width + col)]);
+            if (value > best) {
+                best = value;
+                pivot = row;
+            }
+        }
+        if (best < 1e-15) {
+            return false;
+        }
+        if (pivot != col) {
+            for (py::ssize_t j = 0; j < width; ++j) {
+                std::swap(aug[static_cast<size_t>(col * width + j)], aug[static_cast<size_t>(pivot * width + j)]);
+            }
+            det = -det;
+        }
+        const double pivot_value = aug[static_cast<size_t>(col * width + col)];
+        det *= pivot_value;
+        for (py::ssize_t j = 0; j < width; ++j) {
+            aug[static_cast<size_t>(col * width + j)] /= pivot_value;
+        }
+        for (py::ssize_t row = 0; row < d; ++row) {
+            if (row == col) {
+                continue;
+            }
+            const double factor = aug[static_cast<size_t>(row * width + col)];
+            if (factor == 0.0) {
+                continue;
+            }
+            for (py::ssize_t j = 0; j < width; ++j) {
+                aug[static_cast<size_t>(row * width + j)] -= factor * aug[static_cast<size_t>(col * width + j)];
+            }
+        }
+    }
+
+    inv.assign(static_cast<size_t>(d * d), 0.0);
+    for (py::ssize_t i = 0; i < d; ++i) {
+        for (py::ssize_t j = 0; j < d; ++j) {
+            inv[static_cast<size_t>(i * d + j)] = aug[static_cast<size_t>(i * width + d + j)];
+        }
+    }
+    return true;
+}
+
+static py::array_t<double> gmm_log_prob_matrix_native(Array2D X, ArrayD weights, Array2D means, ArrayD covs) {
+    if (weights.ndim() != 1 || covs.ndim() != 3) {
+        throw std::invalid_argument("weights must be 1D and covs must be 3D");
+    }
+    const py::ssize_t n = X.shape(0);
+    const py::ssize_t d = X.shape(1);
+    const py::ssize_t k = weights.shape(0);
+    if (means.shape(0) != k || means.shape(1) != d || covs.shape(0) != k || covs.shape(1) != d || covs.shape(2) != d) {
+        throw std::invalid_argument("GMM array shapes are inconsistent");
+    }
+
+    auto out = py::array_t<double>({n, k});
+    const double* xp = X.data();
+    const double* wp = weights.data();
+    const double* mp = means.data();
+    const double* cp = covs.data();
+    double* op = out.mutable_data();
+    const double norm_const = static_cast<double>(d) * std::log(2.0 * M_PI);
+
+    std::vector<double> inv;
+    for (py::ssize_t comp = 0; comp < k; ++comp) {
+        double det = 0.0;
+        const double* cov = cp + comp * d * d;
+        if (!invert_with_logdet(cov, d, 0.0, inv, det)) {
+            if (!invert_with_logdet(cov, d, 1e-6, inv, det)) {
+                throw std::runtime_error("covariance matrix is singular");
+            }
+        }
+        if (det <= 0.0) {
+            det = 1e-30;
+        }
+        const double base = std::log(wp[comp]) - 0.5 * (norm_const + std::log(det));
+        const double* mean = mp + comp * d;
+        for (py::ssize_t row = 0; row < n; ++row) {
+            const double* x = xp + row * d;
+            double maha = 0.0;
+            for (py::ssize_t i = 0; i < d; ++i) {
+                const double di = x[i] - mean[i];
+                double acc = 0.0;
+                for (py::ssize_t j = 0; j < d; ++j) {
+                    acc += inv[static_cast<size_t>(i * d + j)] * (x[j] - mean[j]);
+                }
+                maha += di * acc;
+            }
+            op[row * k + comp] = base - 0.5 * maha;
+        }
+    }
+    return out;
+}
+
 static void schedule_berger_oliger_fill(int level, int max_level, int refine_ratio, std::vector<int>& out) {
     if (level >= max_level) {
         out.push_back(level);
@@ -4541,6 +4649,7 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("r_adapt_1d", &r_adapt_1d_native, py::arg("x"), py::arg("weights"), py::arg("n_iter") = 20);
     m.def("frequency_peak_dicts", &frequency_peak_dicts_native, py::arg("freqs"), py::arg("amplitudes"), py::arg("indices"));
     m.def("delta_criterion_3x3", &delta_criterion_3x3_native, py::arg("grad"));
+    m.def("gmm_log_prob_matrix", &gmm_log_prob_matrix_native, py::arg("X"), py::arg("weights"), py::arg("means"), py::arg("covs"));
     m.def(
         "schedule_berger_oliger", &schedule_berger_oliger_native, py::arg("level") = 0,
         py::arg("max_level") = 2, py::arg("refine_ratio") = 2
