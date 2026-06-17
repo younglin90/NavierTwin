@@ -13,6 +13,8 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
 
 def threshold_detector(
     residuals: NDArray[np.float64], threshold: float,
@@ -34,30 +36,18 @@ def cusum(
     k: float = 0.5, h: float = 5.0,
 ) -> NDArray[np.bool_]:
     """Positive/negative CUSUM: 드리프트 누적 감지."""
-    r = np.asarray(residuals, dtype=np.float64)
-    Splus = 0.0
-    Sminus = 0.0
-    alarms = np.zeros(r.size, dtype=bool)
-    for i, v in enumerate(r):
-        Splus = max(0.0, Splus + v - k)
-        Sminus = min(0.0, Sminus + v + k)
-        alarms[i] = Splus > h or Sminus < -h
-    return alarms
+    if _kernels is None:
+        raise ImportError("NavierTwin native kernels are required by cusum")
+    return _kernels.cusum_alarms(np.asarray(residuals, dtype=np.float64), k, h)
 
 
 def ewma(
     residuals: NDArray[np.float64], *, lam: float = 0.2, k: float = 3.0,
 ) -> NDArray[np.bool_]:
     """EWMA control chart."""
-    r = np.asarray(residuals, dtype=np.float64)
-    mu = r[0]
-    z = np.zeros_like(r)
-    z[0] = mu
-    for i in range(1, r.size):
-        z[i] = (1 - lam) * z[i - 1] + lam * r[i]
-    sigma = r.std() + 1e-30
-    # stdized
-    return np.abs(z - mu) / sigma > k
+    if _kernels is None:
+        raise ImportError("NavierTwin native kernels are required by ewma")
+    return _kernels.ewma_alarms(np.asarray(residuals, dtype=np.float64), lam, k)
 
 
 __all__ = ["threshold_detector", "zscore_detector", "cusum", "ewma"]

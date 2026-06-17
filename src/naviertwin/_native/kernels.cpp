@@ -3413,6 +3413,57 @@ static py::array_t<double> lagrange_interp_1d_native(ArrayD x_known, ArrayD y_kn
     return out;
 }
 
+static py::array_t<bool> cusum_alarms_native(ArrayD residuals, double k, double h) {
+    if (residuals.ndim() != 1) {
+        throw std::invalid_argument("residuals must be a 1D array");
+    }
+    const py::ssize_t n = residuals.shape(0);
+    const double* rp = residuals.data();
+    auto out = py::array_t<bool>({n});
+    bool* op = out.mutable_data();
+    double splus = 0.0;
+    double sminus = 0.0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const double v = rp[i];
+        splus = std::max(0.0, splus + v - k);
+        sminus = std::min(0.0, sminus + v + k);
+        op[i] = splus > h || sminus < -h;
+    }
+    return out;
+}
+
+static py::array_t<bool> ewma_alarms_native(ArrayD residuals, double lam, double k) {
+    if (residuals.ndim() != 1) {
+        throw std::invalid_argument("residuals must be a 1D array");
+    }
+    const py::ssize_t n = residuals.shape(0);
+    if (n == 0) {
+        throw std::invalid_argument("residuals must be non-empty");
+    }
+    const double* rp = residuals.data();
+    double mean = 0.0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        mean += rp[i];
+    }
+    mean /= static_cast<double>(n);
+    double var = 0.0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const double centered = rp[i] - mean;
+        var += centered * centered;
+    }
+    const double sigma = std::sqrt(var / static_cast<double>(n)) + 1e-30;
+    const double mu = rp[0];
+    double z = mu;
+    auto out = py::array_t<bool>({n});
+    bool* op = out.mutable_data();
+    op[0] = std::abs(z - mu) / sigma > k;
+    for (py::ssize_t i = 1; i < n; ++i) {
+        z = (1.0 - lam) * z + lam * rp[i];
+        op[i] = std::abs(z - mu) / sigma > k;
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -3561,5 +3612,7 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("chebyshev_points", &chebyshev_points_native, py::arg("N"));
     m.def("chebyshev_diff_matrix", &chebyshev_diff_matrix_native, py::arg("N"));
     m.def("lagrange_interp_1d", &lagrange_interp_1d_native, py::arg("x_known"), py::arg("y_known"), py::arg("x_new"));
+    m.def("cusum_alarms", &cusum_alarms_native, py::arg("residuals"), py::arg("k") = 0.5, py::arg("h") = 5.0);
+    m.def("ewma_alarms", &ewma_alarms_native, py::arg("residuals"), py::arg("lam") = 0.2, py::arg("k") = 3.0);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
