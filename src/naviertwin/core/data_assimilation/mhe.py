@@ -15,6 +15,8 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin.core.data_assimilation.iterated_ekf import _right_solve
+
 
 def mhe_estimate(
     A: NDArray[np.float64],
@@ -30,15 +32,17 @@ def mhe_estimate(
     N = Y.shape[0]
     x = x0.copy().astype(np.float64)
     P = P0.copy().astype(np.float64)
-    for k in range(N):
+    k = 0
+    while k < N:
         # predict
         x = A @ x
         P = A @ P @ A.T + Q
         # update
         S = H @ P @ H.T + R
-        K = P @ H.T @ np.linalg.inv(S)
+        K = _right_solve(S, P @ H.T)
         x = x + K @ (Y[k] - H @ x)
         P = (np.eye(len(x)) - K @ H) @ P
+        k += 1
     return x
 
 
