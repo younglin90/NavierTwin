@@ -20,20 +20,39 @@ def shard_state(
     state: dict[str, Any], *, n_ranks: int = 2,
 ) -> list[dict[str, Any]]:
     """각 param tensor 를 n_ranks 등분 (마지막 rank 가 잔여)."""
-    shards: list[dict[str, Any]] = [{} for _ in range(n_ranks)]
-    for k, v in state.items():
+    shards: list[dict[str, Any]] = []
+    rank_idx = 0
+    while rank_idx < n_ranks:
+        shards.append({})
+        rank_idx += 1
+    items = list(state.items())
+    item_idx = 0
+    while item_idx < len(items):
+        k, v = items[item_idx]
         v = np.asarray(v)
         chunks = np.array_split(v, n_ranks, axis=0)
-        for r, c in enumerate(chunks):
+        r = 0
+        while r < len(chunks):
+            c = chunks[r]
             shards[r][k] = c
+            r += 1
+        item_idx += 1
     return shards
 
 
 def gather_state(shards: list[dict[str, Any]]) -> dict[str, np.ndarray]:
-    keys = shards[0].keys()
+    keys = list(shards[0].keys())
     out = {}
-    for k in keys:
-        out[k] = np.concatenate([s[k] for s in shards], axis=0)
+    key_idx = 0
+    while key_idx < len(keys):
+        k = keys[key_idx]
+        chunks = []
+        shard_idx = 0
+        while shard_idx < len(shards):
+            chunks.append(shards[shard_idx][k])
+            shard_idx += 1
+        out[k] = np.concatenate(chunks, axis=0)
+        key_idx += 1
     return out
 
 
