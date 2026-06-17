@@ -71,7 +71,7 @@ class BaseFlowAnalyzer(ABC):
             KeyError: 필요한 필드가 메쉬에 없는 경우.
         """
         available = set(mesh.point_data.keys()) | set(mesh.cell_data.keys())
-        missing = [f for f in required_fields if f not in available]
+        missing = list(filter(lambda field: field not in available, required_fields))
         if missing:
             raise KeyError(
                 f"메쉬에 다음 필드가 없습니다: {missing}. "
