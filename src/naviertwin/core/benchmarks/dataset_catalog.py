@@ -41,13 +41,16 @@ def generate_burgers_dataset(
     snaps = np.zeros((n_samples, n_x))
     x = np.linspace(0, 2 * np.pi, n_x, endpoint=False)
 
-    for i in range(n_samples):
+    i = 0
+    harmonics = np.arange(1, 4, dtype=np.float64)
+    while i < n_samples:
         nu = float(10 ** rng.uniform(-2.5, -1.5))  # 0.003 ~ 0.03
         amps = rng.uniform(-1, 1, 3)
-        u0 = sum(amps[k] * np.sin((k + 1) * x) for k in range(3))
+        u0 = (amps[:, None] * np.sin(harmonics[:, None] * x[None, :])).sum(axis=0)
         _, U = solve_burgers_1d(u0, nu=nu, L=2 * np.pi, T=T, n_steps=n_steps)
         params[i] = [nu, *amps]
         snaps[i] = U[-1]
+        i += 1
 
     logger.info("Burgers 데이터셋: %d samples, n_x=%d", n_samples, n_x)
     return {"params": params, "snapshots": snaps, "x": x}
@@ -68,13 +71,15 @@ def generate_heat_dataset(
     snaps = np.zeros((n_samples, n_x))
     x = np.linspace(0, 1, n_x)
 
-    for i in range(n_samples):
+    i = 0
+    while i < n_samples:
         alpha = float(10 ** rng.uniform(-2.5, -1.0))
         amps = rng.uniform(0.2, 1.0, 2)
         u0 = amps[0] * np.sin(np.pi * x) + amps[1] * np.sin(3 * np.pi * x)
         _, U = solve_heat_1d(u0, alpha=alpha, L=1.0, T=T, n_steps=n_steps)
         params[i] = [alpha, *amps]
         snaps[i] = U[-1]
+        i += 1
 
     logger.info("Heat 데이터셋: %d samples, n_x=%d", n_samples, n_x)
     return {"params": params, "snapshots": snaps, "x": x}
@@ -93,12 +98,14 @@ def generate_cavity_dataset(
     rng = np.random.default_rng(seed)
     params = np.zeros((n_samples, 1))
     snaps = np.zeros((n_samples, ny * nx))
-    for i in range(n_samples):
+    i = 0
+    while i < n_samples:
         u_top = float(rng.uniform(0.01, 0.1))
         lbm = LBMD2Q9(nx=nx, ny=ny, tau=tau, u_top=u_top)
         s = lbm.run(n_steps=200, record_every=200)
         params[i] = u_top
         snaps[i] = s[-1, :, :, 1].ravel()
+        i += 1
     logger.info("Cavity 데이터셋: %d samples", n_samples)
     return {"params": params, "snapshots": snaps}
 
