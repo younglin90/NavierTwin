@@ -24,6 +24,7 @@ from typing import Callable
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
 from naviertwin.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -53,6 +54,8 @@ def compute_ftle_2d(
     Returns:
         (ny, nx) FTLE 필드.
     """
+    if _kernels is None:
+        raise ImportError("naviertwin._native._kernels is required by compute_ftle_2d")
     x = np.linspace(*x_range, nx)
     y = np.linspace(*y_range, ny)
     Xg, Yg = np.meshgrid(x, y)
@@ -62,7 +65,8 @@ def compute_ftle_2d(
     n_steps = int(abs(T) / dt)
     sign = np.sign(T) if T != 0 else 1.0
 
-    for k in range(n_steps):
+    k = 0
+    while k < n_steps:
         t = t0 + sign * k * dt
         k1u = u_fn(t, X, Y)
         k1v = v_fn(t, X, Y)
@@ -74,26 +78,11 @@ def compute_ftle_2d(
         k4v = v_fn(t + sign * dt, X + sign * dt * k3u, Y + sign * dt * k3v)
         X = X + sign * dt / 6 * (k1u + 2 * k2u + 2 * k3u + k4u)
         Y = Y + sign * dt / 6 * (k1v + 2 * k2v + 2 * k3v + k4v)
+        k += 1
 
-    # Flow-map Jacobian 계산 (중앙차분)
     dx = x[1] - x[0]
     dy = y[1] - y[0]
-    dXdx = np.gradient(X, dx, axis=1)
-    dXdy = np.gradient(X, dy, axis=0)
-    dYdx = np.gradient(Y, dx, axis=1)
-    dYdy = np.gradient(Y, dy, axis=0)
-
-    # Cauchy-Green 최대 고유값
-    C11 = dXdx ** 2 + dYdx ** 2
-    C22 = dXdy ** 2 + dYdy ** 2
-    C12 = dXdx * dXdy + dYdx * dYdy
-    trace = C11 + C22
-    det = C11 * C22 - C12 ** 2
-    disc = np.sqrt(np.maximum(trace ** 2 / 4 - det, 0.0))
-    lam_max = trace / 2 + disc
-    lam_max = np.maximum(lam_max, 1e-30)
-
-    ftle = (1.0 / max(abs(T), 1e-30)) * 0.5 * np.log(lam_max)
+    ftle = _kernels.lcs_ftle_from_flow_map(X, Y, dx, dy, T)
     logger.info("FTLE 계산 완료: grid=%dx%d, T=%.3g", nx, ny, T)
     return ftle
 

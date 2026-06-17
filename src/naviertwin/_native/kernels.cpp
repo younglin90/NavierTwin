@@ -4458,6 +4458,38 @@ static py::array_t<double> ftle_from_advected_stencils_native(ArrayD adv, double
     return out;
 }
 
+static py::array_t<double> lcs_ftle_from_flow_map_native(Array2D X, Array2D Y, double dx, double dy, double T) {
+    check_same_2d(X, Y);
+    if (dx == 0.0 || dy == 0.0) {
+        throw std::invalid_argument("dx and dy must be non-zero");
+    }
+    const py::ssize_t ny = X.shape(0);
+    const py::ssize_t nx = X.shape(1);
+    auto out = py::array_t<double>({ny, nx});
+    const double* xp = X.data();
+    const double* yp = Y.data();
+    double* op = out.mutable_data();
+    const double scale = 0.5 / std::max(std::abs(T), 1e-30);
+
+    for (py::ssize_t i = 0; i < ny; ++i) {
+        for (py::ssize_t j = 0; j < nx; ++j) {
+            const double dXdx = grad_x(xp, ny, nx, i, j, dx);
+            const double dXdy = grad_y(xp, ny, nx, i, j, dy);
+            const double dYdx = grad_x(yp, ny, nx, i, j, dx);
+            const double dYdy = grad_y(yp, ny, nx, i, j, dy);
+            const double c11 = dXdx * dXdx + dYdx * dYdx;
+            const double c22 = dXdy * dXdy + dYdy * dYdy;
+            const double c12 = dXdx * dXdy + dYdx * dYdy;
+            const double trace = c11 + c22;
+            const double det = c11 * c22 - c12 * c12;
+            const double disc = std::sqrt(std::max(trace * trace * 0.25 - det, 0.0));
+            const double lam_max = std::max(trace * 0.5 + disc, 1e-30);
+            op[i * nx + j] = scale * std::log(lam_max);
+        }
+    }
+    return out;
+}
+
 static void schedule_berger_oliger_fill(int level, int max_level, int refine_ratio, std::vector<int>& out) {
     if (level >= max_level) {
         out.push_back(level);
@@ -4685,6 +4717,7 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("delta_criterion_3x3", &delta_criterion_3x3_native, py::arg("grad"));
     m.def("gmm_log_prob_matrix", &gmm_log_prob_matrix_native, py::arg("X"), py::arg("weights"), py::arg("means"), py::arg("covs"));
     m.def("ftle_from_advected_stencils", &ftle_from_advected_stencils_native, py::arg("adv"), py::arg("T"), py::arg("eps"));
+    m.def("lcs_ftle_from_flow_map", &lcs_ftle_from_flow_map_native, py::arg("X"), py::arg("Y"), py::arg("dx"), py::arg("dy"), py::arg("T"));
     m.def(
         "schedule_berger_oliger", &schedule_berger_oliger_native, py::arg("level") = 0,
         py::arg("max_level") = 2, py::arg("refine_ratio") = 2
