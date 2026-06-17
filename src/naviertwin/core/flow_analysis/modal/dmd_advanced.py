@@ -68,9 +68,12 @@ def mrdmd_analysis(
 
     inner = DMD()
     dmd = MrDMD(dmd=inner, max_level=max_level, max_cycles=max_cycles).fit(X)
+    modes_by_level = list(
+        map(lambda lvl: np.asarray(dmd.partial_modes(lvl)), range(max_level))
+    )
     return {
         "dmd_object": dmd,
-        "modes_by_level": [np.asarray(dmd.partial_modes(lvl)) for lvl in range(max_level)],
+        "modes_by_level": modes_by_level,
     }
 
 
