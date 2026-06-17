@@ -31,14 +31,20 @@ def _parse_scalar(s: str) -> Any:
 def _fallback_load(text: str) -> dict[str, Any]:
     """매우 단순한 YAML: top-level key: value 만."""
     out: dict[str, Any] = {}
-    for line in text.splitlines():
+    lines = text.splitlines()
+    line_idx = 0
+    while line_idx < len(lines):
+        line = lines[line_idx]
         line = line.rstrip()
         if not line or line.startswith("#"):
+            line_idx += 1
             continue
         if ":" not in line:
+            line_idx += 1
             continue
         k, v = line.split(":", 1)
         out[k.strip()] = _parse_scalar(v)
+        line_idx += 1
     return out
 
 
@@ -65,8 +71,12 @@ def safe_yaml_dump(data: Any) -> str:
         if not isinstance(data, dict):
             return repr(data)
         lines = []
-        for k, v in data.items():
+        items = list(data.items())
+        item_idx = 0
+        while item_idx < len(items):
+            k, v = items[item_idx]
             lines.append(f"{k}: {v}")
+            item_idx += 1
         return "\n".join(lines) + "\n"
 
 
