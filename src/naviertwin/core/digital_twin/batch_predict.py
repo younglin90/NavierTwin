@@ -39,7 +39,7 @@ def batch_predict_fields(
     if pipe.state.surrogate is None:
         raise RuntimeError("fit_surrogate() 먼저")
     n = params.shape[0]
-    chunks = [params[i:i + chunk_size] for i in range(0, n, chunk_size)]
+    chunks = [] if n == 0 else np.split(params, np.arange(chunk_size, n, chunk_size))
 
     def _one(chunk: NDArray[np.float64]) -> NDArray[np.float64]:
         coeffs = pipe.state.surrogate.predict(chunk)
@@ -49,7 +49,7 @@ def batch_predict_fields(
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             results = list(ex.map(_one, chunks))
     else:
-        results = [_one(c) for c in chunks]
+        results = list(map(_one, chunks))
 
     out = np.concatenate(results, axis=1)
     logger.info("batch_predict: %d params → %s", n, out.shape)
