@@ -8,7 +8,7 @@ Examples:
     >>> from naviertwin.core.multi_fidelity.transfer_learning import freeze_layers
     >>> model = nn.Sequential(nn.Linear(4, 8), nn.ReLU(), nn.Linear(8, 2))
     >>> freeze_layers(model, n_freeze=1)
-    >>> [p.requires_grad for p in model.parameters()]
+    >>> list(map(lambda p: p.requires_grad, model.parameters()))
     [False, False, True, True]
 """
 
@@ -26,15 +26,26 @@ logger = get_logger(__name__)
 
 def freeze_layers(model: Any, n_freeze: int) -> None:
     """앞쪽 n_freeze 개 ``nn.Linear`` 레이어 파라미터의 grad 를 false 로."""
+    try:
+        import torch.nn as nn
+    except ImportError as exc:
+        raise RuntimeError("torch 필요") from exc
+
     count = 0
-    for m in model.modules():
+    module_iter = iter(model.modules())
+    while True:
         try:
-            import torch.nn as nn
-        except ImportError as exc:
-            raise RuntimeError("torch 필요") from exc
+            m = next(module_iter)
+        except StopIteration:
+            break
         if isinstance(m, nn.Linear):
             if count < n_freeze:
-                for p in m.parameters():
+                param_iter = iter(m.parameters())
+                while True:
+                    try:
+                        p = next(param_iter)
+                    except StopIteration:
+                        break
                     p.requires_grad = False
                 count += 1
 
@@ -66,7 +77,7 @@ def finetune(
         else ("cuda" if device == "cuda" else "cpu")
     )
     model.to(dev)
-    params = [p for p in model.parameters() if p.requires_grad]
+    params = list(filter(lambda p: p.requires_grad, model.parameters()))
     if not params:
         raise ValueError("학습 가능한 파라미터가 없습니다 (너무 많이 freeze 됨)")
     optim = torch.optim.Adam(params, lr=lr)
@@ -81,9 +92,15 @@ def finetune(
     )
 
     losses: list[float] = []
-    for _ in range(max_epochs):
+    epoch_idx = 0
+    while epoch_idx < max_epochs:
         epoch = 0.0
-        for xb, yb in loader:
+        batch_iter = iter(loader)
+        while True:
+            try:
+                xb, yb = next(batch_iter)
+            except StopIteration:
+                break
             xb = xb.to(dev)
             yb = yb.to(dev)
             optim.zero_grad()
@@ -94,6 +111,7 @@ def finetune(
             epoch += float(loss.item()) * xb.shape[0]
         epoch /= max(len(X_t), 1)
         losses.append(epoch)
+        epoch_idx += 1
     logger.info("finetune 완료: epochs=%d, final=%.6g", max_epochs, losses[-1])
     return losses
 
