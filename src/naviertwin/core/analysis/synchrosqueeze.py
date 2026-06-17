@@ -19,12 +19,9 @@ from numpy.typing import NDArray
 def _stft(x, win, hop):
     n = len(x)
     n_seg = (n - win) // hop + 1
-    out = np.zeros((win, n_seg), dtype=complex)
     w = np.hanning(win)
-    for k in range(n_seg):
-        seg = x[k * hop:k * hop + win] * w
-        out[:, k] = np.fft.fft(seg)
-    return out
+    frames = np.lib.stride_tricks.sliding_window_view(x, win)[::hop][:n_seg]
+    return np.fft.fft(frames * w, axis=1).T
 
 
 def synchrosqueeze_stft(
@@ -35,10 +32,9 @@ def synchrosqueeze_stft(
     freqs = np.fft.fftfreq(win, d=1.0 / fs)
     n_seg = X.shape[1]
     Tx = np.zeros_like(X)
-    for k in range(n_seg):
-        # find dominant freq bin
-        idx = int(np.argmax(np.abs(X[:, k])))
-        Tx[idx, k] = X[idx, k]
+    idx = np.argmax(np.abs(X), axis=0)
+    cols = np.arange(n_seg)
+    Tx[idx, cols] = X[idx, cols]
     return Tx, freqs
 
 
