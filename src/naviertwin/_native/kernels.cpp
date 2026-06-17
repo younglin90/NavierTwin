@@ -3628,6 +3628,67 @@ static py::array_t<long long> boundary_faces_tet_native(ArrayI tets) {
     return out;
 }
 
+static py::array_t<double> lumped_mass_2d_native(ArrayD points, ArrayI simplices) {
+    if (points.ndim() != 2 || points.shape(1) != 2 || simplices.ndim() != 2 || simplices.shape(1) != 3) {
+        throw std::invalid_argument("points must be (N, 2) and simplices must be (M, 3)");
+    }
+    const py::ssize_t n_points = points.shape(0);
+    const py::ssize_t n_tri = simplices.shape(0);
+    const double* pp = points.data();
+    const long long* sp = simplices.data();
+    auto out = py::array_t<double>({n_points});
+    double* op = out.mutable_data();
+    std::fill(op, op + n_points, 0.0);
+    for (py::ssize_t e = 0; e < n_tri; ++e) {
+        const long long i0 = sp[e * 3];
+        const long long i1 = sp[e * 3 + 1];
+        const long long i2 = sp[e * 3 + 2];
+        const double x0 = pp[i0 * 2];
+        const double y0 = pp[i0 * 2 + 1];
+        const double x1 = pp[i1 * 2];
+        const double y1 = pp[i1 * 2 + 1];
+        const double x2 = pp[i2 * 2];
+        const double y2 = pp[i2 * 2 + 1];
+        const double area = 0.5 * std::abs((x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0));
+        const double share = area / 3.0;
+        op[i0] += share;
+        op[i1] += share;
+        op[i2] += share;
+    }
+    return out;
+}
+
+static py::array_t<double> p1_stiffness_2d_native(ArrayD points, ArrayI simplices) {
+    if (points.ndim() != 2 || points.shape(1) != 2 || simplices.ndim() != 2 || simplices.shape(1) != 3) {
+        throw std::invalid_argument("points must be (N, 2) and simplices must be (M, 3)");
+    }
+    const py::ssize_t n_points = points.shape(0);
+    const py::ssize_t n_tri = simplices.shape(0);
+    const double* pp = points.data();
+    const long long* sp = simplices.data();
+    auto out = py::array_t<double>({n_points, n_points});
+    double* K = out.mutable_data();
+    std::fill(K, K + n_points * n_points, 0.0);
+    for (py::ssize_t e = 0; e < n_tri; ++e) {
+        const long long tri[3] = {sp[e * 3], sp[e * 3 + 1], sp[e * 3 + 2]};
+        const double xs[3] = {pp[tri[0] * 2], pp[tri[1] * 2], pp[tri[2] * 2]};
+        const double ys[3] = {pp[tri[0] * 2 + 1], pp[tri[1] * 2 + 1], pp[tri[2] * 2 + 1]};
+        const double det = (xs[1] - xs[0]) * (ys[2] - ys[0]) - (xs[2] - xs[0]) * (ys[1] - ys[0]);
+        const double area = 0.5 * std::abs(det);
+        if (area < 1e-20) {
+            continue;
+        }
+        const double b[3] = {ys[1] - ys[2], ys[2] - ys[0], ys[0] - ys[1]};
+        const double c[3] = {xs[2] - xs[1], xs[0] - xs[2], xs[1] - xs[0]};
+        for (int i = 0; i < 3; ++i) {
+            for (int j = 0; j < 3; ++j) {
+                K[tri[i] * n_points + tri[j]] += (b[i] * b[j] + c[i] * c[j]) / (4.0 * area);
+            }
+        }
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -3782,5 +3843,7 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("arrow_segments", &arrow_segments_native, py::arg("points"), py::arg("vectors"), py::arg("scale") = 1.0);
     m.def("ray_march", &ray_march_native, py::arg("volume"), py::arg("n_steps") = 32, py::arg("axis") = 2, py::arg("alpha") = 0.1);
     m.def("boundary_faces_tet", &boundary_faces_tet_native, py::arg("tets"));
+    m.def("lumped_mass_2d", &lumped_mass_2d_native, py::arg("points"), py::arg("simplices"));
+    m.def("p1_stiffness_2d", &p1_stiffness_2d_native, py::arg("points"), py::arg("simplices"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

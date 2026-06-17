@@ -14,6 +14,8 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
 
 def triangulate(points: NDArray[np.float64]) -> dict:
     try:
@@ -40,37 +42,24 @@ def lumped_mass_matrix(
     points: NDArray[np.float64], simplices: NDArray[np.int64],
 ) -> NDArray[np.float64]:
     """노드별 lumped mass = 인접 삼각형 면적 합 / 3."""
-    n = points.shape[0]
-    areas = triangle_areas(points, simplices)
-    m = np.zeros(n)
-    for idx, a in zip(simplices, areas):
-        m[idx] += a / 3.0
-    return m
+    if _kernels is None:
+        raise ImportError("NavierTwin native kernels are required by lumped_mass_matrix")
+    return _kernels.lumped_mass_2d(
+        np.asarray(points, dtype=np.float64),
+        np.asarray(simplices, dtype=np.int64),
+    )
 
 
 def p1_stiffness_matrix(
     points: NDArray[np.float64], simplices: NDArray[np.int64],
 ) -> NDArray[np.float64]:
     """∇φ_i · ∇φ_j 적분 — P1 element. 반환 dense (n, n)."""
-    n = points.shape[0]
-    K = np.zeros((n, n))
-    for tri in simplices:
-        xs = points[tri, 0]
-        ys = points[tri, 1]
-        det = (
-            (xs[1] - xs[0]) * (ys[2] - ys[0])
-            - (xs[2] - xs[0]) * (ys[1] - ys[0])
-        )
-        area = 0.5 * abs(det)
-        if area < 1e-20:
-            continue
-        b = np.array([ys[1] - ys[2], ys[2] - ys[0], ys[0] - ys[1]])
-        c = np.array([xs[2] - xs[1], xs[0] - xs[2], xs[1] - xs[0]])
-        Ke = (np.outer(b, b) + np.outer(c, c)) / (4.0 * area)
-        for i in range(3):
-            for j in range(3):
-                K[tri[i], tri[j]] += Ke[i, j]
-    return K
+    if _kernels is None:
+        raise ImportError("NavierTwin native kernels are required by p1_stiffness_matrix")
+    return _kernels.p1_stiffness_2d(
+        np.asarray(points, dtype=np.float64),
+        np.asarray(simplices, dtype=np.int64),
+    )
 
 
 __all__ = [
