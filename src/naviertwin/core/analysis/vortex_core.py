@@ -23,10 +23,8 @@ def swirl_strength_field(
     """grad_u shape (..., 3, 3) → swirl strength (...,)."""
     g = np.asarray(grad_u, dtype=np.float64)
     flat = g.reshape(-1, 3, 3)
-    out = np.zeros(flat.shape[0])
-    for i in range(flat.shape[0]):
-        ev = np.linalg.eigvals(flat[i])
-        out[i] = float(np.max(np.abs(ev.imag)))
+    ev = np.linalg.eigvals(flat)
+    out = np.max(np.abs(ev.imag), axis=1)
     return out.reshape(g.shape[:-2])
 
 
