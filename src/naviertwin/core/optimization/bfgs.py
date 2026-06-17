@@ -17,7 +17,11 @@ from typing import Callable
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
 from naviertwin.core.optimization.line_search import armijo_backtrack
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required by BFGS optimization")
 
 
 def bfgs_minimize(
@@ -30,13 +34,14 @@ def bfgs_minimize(
     n = x.size
     H = np.eye(n)
     g = grad(x)
-    for i in range(max_iter):
-        gnorm = float(np.linalg.norm(g))
+    i = 0
+    while i < max_iter:
+        gnorm = float(_kernels.vector_l2_norm(np.asarray(g, dtype=np.float64)))
         if gnorm < tol:
             return x, {"iters": i, "grad_norm": gnorm, "converged": True, "f": float(f(x))}
         p = -H @ g
         # descent 방향 확인
-        if p @ g > 0:
+        if _kernels.vector_dot(np.asarray(p, dtype=np.float64), np.asarray(g, dtype=np.float64)) > 0:
             H = np.eye(n)
             p = -g
         alpha = armijo_backtrack(f, grad, x, p, alpha0=1.0)
@@ -44,7 +49,7 @@ def bfgs_minimize(
         x_new = x + s
         g_new = grad(x_new)
         y = g_new - g
-        sy = float(s @ y)
+        sy = float(_kernels.vector_dot(np.asarray(s, dtype=np.float64), np.asarray(y, dtype=np.float64)))
         if sy > 1e-12:
             rho = 1.0 / sy
             eye = np.eye(n)
@@ -53,8 +58,9 @@ def bfgs_minimize(
             H = V @ H @ Vt + rho * np.outer(s, s)
         x = x_new
         g = g_new
+        i += 1
     return x, {
-        "iters": max_iter, "grad_norm": float(np.linalg.norm(g)),
+        "iters": max_iter, "grad_norm": float(_kernels.vector_l2_norm(np.asarray(g, dtype=np.float64))),
         "converged": False, "f": float(f(x)),
     }
 
