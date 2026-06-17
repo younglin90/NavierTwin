@@ -4262,6 +4262,27 @@ static py::array_t<double> r_adapt_1d_native(ArrayD x_in, ArrayD weights, int n_
     return out;
 }
 
+static void schedule_berger_oliger_fill(int level, int max_level, int refine_ratio, std::vector<int>& out) {
+    if (level >= max_level) {
+        out.push_back(level);
+        return;
+    }
+    for (int i = 0; i < refine_ratio; ++i) {
+        schedule_berger_oliger_fill(level + 1, max_level, refine_ratio, out);
+    }
+    out.push_back(level);
+}
+
+static py::list schedule_berger_oliger_native(int level, int max_level, int refine_ratio) {
+    std::vector<int> values;
+    schedule_berger_oliger_fill(level, max_level, refine_ratio, values);
+    py::list out;
+    for (int value : values) {
+        out.append(value);
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -4433,5 +4454,9 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("connected_components_2d", &connected_components_2d_native, py::arg("mask"), py::arg("connectivity") = 1);
     m.def("expected_improvement", &expected_improvement_native, py::arg("mu"), py::arg("sigma"), py::arg("y_best"), py::arg("xi") = 0.0);
     m.def("r_adapt_1d", &r_adapt_1d_native, py::arg("x"), py::arg("weights"), py::arg("n_iter") = 20);
+    m.def(
+        "schedule_berger_oliger", &schedule_berger_oliger_native, py::arg("level") = 0,
+        py::arg("max_level") = 2, py::arg("refine_ratio") = 2
+    );
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

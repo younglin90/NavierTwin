@@ -11,20 +11,16 @@ Examples:
 
 from __future__ import annotations
 
+from naviertwin._native import _kernels
+
 
 def schedule(
     *, level: int = 0, max_level: int = 2, refine_ratio: int = 2,
 ) -> list[int]:
     """nested sub-cycling 호출 순서 (각 entry = 호출되는 레벨)."""
-    if level >= max_level:
-        return [level]
-    out: list[int] = []
-    for _ in range(refine_ratio):
-        out += schedule(
-            level=level + 1, max_level=max_level, refine_ratio=refine_ratio,
-        )
-    out.append(level)
-    return out
+    if _kernels is None:
+        raise ImportError("NavierTwin native kernels are required by schedule")
+    return list(_kernels.schedule_berger_oliger(level, max_level, refine_ratio))
 
 
 __all__ = ["schedule"]
