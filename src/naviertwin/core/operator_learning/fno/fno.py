@@ -4,7 +4,7 @@ PyTorch 로 직접 구현. SpectralConv 블록 + 포인트-와이즈 가중치�
 해상도 독립적(함수 공간) PDE 연산자를 학습한다.
 
 References:
-    Li et al., "Fourier Neural Operator for Parametric PDEs", ICLR 2021.
+    Li et al., "Fourier Neural Operator on Parametric PDEs", ICLR 2021.
 
 Examples:
     >>> import numpy as np
@@ -150,17 +150,26 @@ class FNO1D(BaseOperator):
             def __init__(self) -> None:
                 super().__init__()
                 self.lift = nn.Linear(in_c, W)
-                self.specs = nn.ModuleList(
-                    [_build_spectral_conv_1d(W, W, M) for _ in range(self.n_layers_)]
-                )
-                self.ws = nn.ModuleList([nn.Conv1d(W, W, 1) for _ in range(self.n_layers_)])
+                specs = nn.ModuleList()
+                ws = nn.ModuleList()
+                layer_idx = 0
+                while layer_idx < self.n_layers_:
+                    specs.append(_build_spectral_conv_1d(W, W, M))
+                    ws.append(nn.Conv1d(W, W, 1))
+                    layer_idx += 1
+                self.specs = specs
+                self.ws = ws
                 self.proj1 = nn.Linear(W, 4 * W)
                 self.proj2 = nn.Linear(4 * W, out_c)
 
             def forward(self, x: Any) -> Any:  # (B, N, C_in)
                 x = self.lift(x).permute(0, 2, 1)  # (B, W, N)
-                for sp, w in zip(self.specs, self.ws):
-                    x = torch.nn.functional.gelu(sp(x) + w(x))
+                layer_idx = 0
+                while layer_idx < len(self.specs):
+                    x = torch.nn.functional.gelu(
+                        self.specs[layer_idx](x) + self.ws[layer_idx](x)
+                    )
+                    layer_idx += 1
                 x = x.permute(0, 2, 1)  # (B, N, W)
                 x = torch.nn.functional.gelu(self.proj1(x))
                 return self.proj2(x)
@@ -192,9 +201,15 @@ class FNO1D(BaseOperator):
         )
 
         self.train_losses_ = []
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             epoch_loss = 0.0
-            for xb, yb in loader:
+            batches = iter(loader)
+            while True:
+                try:
+                    xb, yb = next(batches)
+                except StopIteration:
+                    break
                 xb = xb.to(self._device)
                 yb = yb.to(self._device)
                 optim.zero_grad()
@@ -205,6 +220,7 @@ class FNO1D(BaseOperator):
                 epoch_loss += float(loss.item()) * xb.shape[0]
             epoch_loss /= max(len(X), 1)
             self.train_losses_.append(epoch_loss)
+            epoch_idx += 1
 
         self.n_epochs = self.max_epochs
         self.is_fitted = True
@@ -289,19 +305,26 @@ class FNO2D(BaseOperator):
             def __init__(self) -> None:
                 super().__init__()
                 self.lift = nn.Linear(in_c, W)
-                self.specs = nn.ModuleList(
-                    [_build_spectral_conv_2d(W, W, M1, M2) for _ in range(n_layers)]
-                )
-                self.ws = nn.ModuleList(
-                    [nn.Conv2d(W, W, 1) for _ in range(n_layers)]
-                )
+                specs = nn.ModuleList()
+                ws = nn.ModuleList()
+                layer_idx = 0
+                while layer_idx < n_layers:
+                    specs.append(_build_spectral_conv_2d(W, W, M1, M2))
+                    ws.append(nn.Conv2d(W, W, 1))
+                    layer_idx += 1
+                self.specs = specs
+                self.ws = ws
                 self.proj1 = nn.Linear(W, 4 * W)
                 self.proj2 = nn.Linear(4 * W, out_c)
 
             def forward(self, x: Any) -> Any:  # (B, H, W, C_in)
                 x = self.lift(x).permute(0, 3, 1, 2)  # (B, W, H, W_)
-                for sp, w in zip(self.specs, self.ws):
-                    x = torch.nn.functional.gelu(sp(x) + w(x))
+                layer_idx = 0
+                while layer_idx < len(self.specs):
+                    x = torch.nn.functional.gelu(
+                        self.specs[layer_idx](x) + self.ws[layer_idx](x)
+                    )
+                    layer_idx += 1
                 x = x.permute(0, 2, 3, 1)
                 x = torch.nn.functional.gelu(self.proj1(x))
                 return self.proj2(x)
@@ -330,9 +353,15 @@ class FNO2D(BaseOperator):
             shuffle=True,
         )
         self.train_losses_ = []
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             epoch_loss = 0.0
-            for xb, yb in loader:
+            batches = iter(loader)
+            while True:
+                try:
+                    xb, yb = next(batches)
+                except StopIteration:
+                    break
                 xb = xb.to(self._device)
                 yb = yb.to(self._device)
                 optim.zero_grad()
@@ -343,6 +372,7 @@ class FNO2D(BaseOperator):
                 epoch_loss += float(loss.item()) * xb.shape[0]
             epoch_loss /= max(len(X), 1)
             self.train_losses_.append(epoch_loss)
+            epoch_idx += 1
 
         self.n_epochs = self.max_epochs
         self.is_fitted = True
