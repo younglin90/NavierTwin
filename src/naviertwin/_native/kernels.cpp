@@ -2871,6 +2871,54 @@ static py::tuple winslow_smooth_native(ArrayD X, ArrayD Y, int n_iter) {
     return py::make_tuple(Xout, Yout);
 }
 
+static py::tuple fd_heat_2d_evolve(ArrayD u0, int n_steps, double cx, double cy, double dt) {
+    if (u0.ndim() != 2) {
+        throw std::invalid_argument("u0 must be a 2D array");
+    }
+    const py::ssize_t nx = u0.shape(0);
+    const py::ssize_t ny = u0.shape(1);
+    auto t = py::array_t<double>({static_cast<py::ssize_t>(n_steps + 1)});
+    auto U = py::array_t<double>({nx, ny, static_cast<py::ssize_t>(n_steps + 1)});
+    double* tp = t.mutable_data();
+    double* Up = U.mutable_data();
+    std::vector<double> u(static_cast<std::size_t>(nx * ny));
+    std::vector<double> u_new(static_cast<std::size_t>(nx * ny));
+    std::copy(u0.data(), u0.data() + nx * ny, u.begin());
+    for (py::ssize_t i = 0; i < nx; ++i) {
+        for (py::ssize_t j = 0; j < ny; ++j) {
+            Up[(i * ny + j) * (n_steps + 1)] = u[static_cast<std::size_t>(i * ny + j)];
+        }
+    }
+    tp[0] = 0.0;
+    for (int k = 0; k < n_steps; ++k) {
+        u_new = u;
+        for (py::ssize_t i = 1; i < nx - 1; ++i) {
+            for (py::ssize_t j = 1; j < ny - 1; ++j) {
+                const py::ssize_t idx = i * ny + j;
+                const double lap = cx * (u[(i + 1) * ny + j] - 2.0 * u[idx] + u[(i - 1) * ny + j])
+                    + cy * (u[i * ny + j + 1] - 2.0 * u[idx] + u[i * ny + j - 1]);
+                u_new[static_cast<std::size_t>(idx)] = u[static_cast<std::size_t>(idx)] + lap;
+            }
+        }
+        for (py::ssize_t i = 0; i < nx; ++i) {
+            u_new[static_cast<std::size_t>(i * ny)] = 0.0;
+            u_new[static_cast<std::size_t>(i * ny + ny - 1)] = 0.0;
+        }
+        for (py::ssize_t j = 0; j < ny; ++j) {
+            u_new[static_cast<std::size_t>(j)] = 0.0;
+            u_new[static_cast<std::size_t>((nx - 1) * ny + j)] = 0.0;
+        }
+        u.swap(u_new);
+        tp[k + 1] = static_cast<double>(k + 1) * dt;
+        for (py::ssize_t i = 0; i < nx; ++i) {
+            for (py::ssize_t j = 0; j < ny; ++j) {
+                Up[(i * ny + j) * (n_steps + 1) + k + 1] = u[static_cast<std::size_t>(i * ny + j)];
+            }
+        }
+    }
+    return py::make_tuple(t, U);
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -2992,5 +3040,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("aitken_relax", &aitken_relax_native, py::arg("omega_prev"), py::arg("r_prev"), py::arg("r_curr"));
     m.def("mean_std_axis0", &mean_std_axis0_native, py::arg("values"));
     m.def("winslow_smooth", &winslow_smooth_native, py::arg("X"), py::arg("Y"), py::arg("n_iter") = 30);
+    m.def("fd_heat_2d_evolve", &fd_heat_2d_evolve, py::arg("u0"), py::arg("n_steps"), py::arg("cx"), py::arg("cy"), py::arg("dt"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

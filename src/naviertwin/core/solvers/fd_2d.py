@@ -14,6 +14,11 @@ from typing import Callable
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required by 2D finite-difference solvers")
+
 
 def solve_heat_2d(
     nx: int = 64, ny: int = 64,
@@ -41,22 +46,15 @@ def solve_heat_2d(
         u = u0(X, Y)
     u[0, :] = u[-1, :] = u[:, 0] = u[:, -1] = 0.0
 
-    U = np.zeros((nx, ny, n_steps + 1), dtype=np.float64)
-    U[:, :, 0] = u
-    t = np.zeros(n_steps + 1)
     cx = nu * dt / dx ** 2
     cy = nu * dt / dy ** 2
-    for k in range(n_steps):
-        lap = (
-            cx * (u[2:, 1:-1] - 2 * u[1:-1, 1:-1] + u[:-2, 1:-1])
-            + cy * (u[1:-1, 2:] - 2 * u[1:-1, 1:-1] + u[1:-1, :-2])
-        )
-        u_new = u.copy()
-        u_new[1:-1, 1:-1] = u[1:-1, 1:-1] + lap
-        u_new[0, :] = u_new[-1, :] = u_new[:, 0] = u_new[:, -1] = 0.0
-        u = u_new
-        U[:, :, k + 1] = u
-        t[k + 1] = (k + 1) * dt
+    t, U = _kernels.fd_heat_2d_evolve(
+        np.asarray(u, dtype=np.float64),
+        int(n_steps),
+        float(cx),
+        float(cy),
+        float(dt),
+    )
     return x, y, t, U
 
 
