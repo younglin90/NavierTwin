@@ -76,7 +76,7 @@ class PostProcessFacade:
             return _OPERATIONS[op_name]["fn"](**kwargs)
         except TypeError as e:
             raise ValueError(
-                f"invalid parameters for '{op_name}': {e}"
+                f"invalid parameters in '{op_name}': {e}"
             ) from e
 
 
@@ -258,8 +258,10 @@ def _op_running_moments(
         else np.stack(samples)
     )
     rm = RunningMoments(shape=arr.shape[1:] if arr.ndim > 1 else ())
-    for s in arr:
-        rm.update(s)
+    sample_idx = 0
+    while sample_idx < len(arr):
+        rm.update(arr[sample_idx])
+        sample_idx += 1
     return {
         "mean": rm.mean,
         "std": rm.std,
@@ -728,7 +730,11 @@ def _op_ensemble_average(
         weighted_average,
     )
 
-    arr_list = [np.asarray(p, dtype=np.float64) for p in predictions]
+    arr_list = []
+    pred_idx = 0
+    while pred_idx < len(predictions):
+        arr_list.append(np.asarray(predictions[pred_idx], dtype=np.float64))
+        pred_idx += 1
     if weights is not None:
         avg = weighted_average(arr_list, weights=np.asarray(weights, dtype=np.float64))
     else:
@@ -753,9 +759,11 @@ def _op_trajectory_clustering(
     # silhouette는 실제 데이터 (label 1대1)에 대해 평가
     n_win = labels.shape[0]
     n_modes = coeffs.shape[1]
-    features = np.zeros((n_win, n_modes))
-    for i in range(n_win):
-        features[i] = coeffs[i : i + window].mean(axis=0)
+    csum = np.cumsum(
+        np.vstack([np.zeros((1, n_modes), dtype=coeffs.dtype), coeffs]),
+        axis=0,
+    )
+    features = (csum[window : window + n_win] - csum[:n_win]) / float(window)
     sil = cluster_silhouette(features, labels)
     return {
         "labels": labels,
@@ -826,7 +834,11 @@ def _op_basis_interpolate(
         linear_interpolate_bases,
     )
 
-    arr_bases = [np.asarray(b, dtype=np.float64) for b in bases]
+    arr_bases = []
+    basis_idx = 0
+    while basis_idx < len(bases):
+        arr_bases.append(np.asarray(bases[basis_idx], dtype=np.float64))
+        basis_idx += 1
     interpolated = linear_interpolate_bases(arr_bases, params, target=target)
     distances = basis_distance_curve(arr_bases)
     return {
@@ -885,7 +897,11 @@ def _op_bic_model_average(
         weighted_average,
     )
 
-    arr_list = [np.asarray(p, dtype=np.float64) for p in predictions]
+    arr_list = []
+    pred_idx = 0
+    while pred_idx < len(predictions):
+        arr_list.append(np.asarray(predictions[pred_idx], dtype=np.float64))
+        pred_idx += 1
     weights = bic_weights(np.asarray(bic_values, dtype=np.float64))
     avg = weighted_average(arr_list, weights=weights)
     return {"weights": weights, "average": avg}
