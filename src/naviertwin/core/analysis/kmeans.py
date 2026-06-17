@@ -15,6 +15,8 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
 
 def _init_plusplus(
     X: NDArray[np.float64], k: int, rng: np.random.Generator,
@@ -22,7 +24,8 @@ def _init_plusplus(
     n = X.shape[0]
     idx0 = int(rng.integers(n))
     centers = [X[idx0]]
-    for _ in range(k - 1):
+    remaining = k - 1
+    while remaining > 0:
         dists = np.min(
             np.linalg.norm(
                 X[:, None, :] - np.asarray(centers)[None, :, :], axis=2,
@@ -36,6 +39,7 @@ def _init_plusplus(
         else:
             idx = int(rng.choice(n, p=probs / s))
         centers.append(X[idx])
+        remaining -= 1
     return np.stack(centers, axis=0)
 
 
@@ -46,20 +50,9 @@ def kmeans(
     X = np.asarray(X, dtype=np.float64)
     rng = np.random.default_rng(seed)
     centers = _init_plusplus(X, k, rng)
-    for _ in range(max_iter):
-        # assignment
-        D = np.linalg.norm(X[:, None, :] - centers[None, :, :], axis=2)
-        labels = np.argmin(D, axis=1)
-        # update
-        new_centers = centers.copy()
-        for j in range(k):
-            pts = X[labels == j]
-            if pts.size > 0:
-                new_centers[j] = pts.mean(axis=0)
-        shift = np.linalg.norm(new_centers - centers)
-        centers = new_centers
-        if shift < tol:
-            break
+    if _kernels is None:
+        raise ImportError("NavierTwin native kernels are required by kmeans")
+    centers, labels = _kernels.kmeans_lloyd(X, centers, max_iter, tol)
     return centers, labels.astype(np.int64)
 
 
@@ -67,12 +60,15 @@ def inertia(
     X: NDArray[np.float64], centers: NDArray[np.float64],
     labels: NDArray[np.int64],
 ) -> float:
-    s = 0.0
-    for j in range(centers.shape[0]):
-        pts = X[labels == j]
-        if pts.size > 0:
-            s += float(np.sum((pts - centers[j]) ** 2))
-    return s
+    if _kernels is None:
+        raise ImportError("NavierTwin native kernels are required by inertia")
+    return float(
+        _kernels.kmeans_inertia(
+            np.asarray(X, dtype=np.float64),
+            np.asarray(centers, dtype=np.float64),
+            np.asarray(labels, dtype=np.int64),
+        )
+    )
 
 
 __all__ = ["kmeans", "inertia"]

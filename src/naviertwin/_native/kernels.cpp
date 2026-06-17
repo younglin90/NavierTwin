@@ -3793,6 +3793,92 @@ static py::list augment_symmetric_native(ArrayD u, py::sequence axes) {
     return out;
 }
 
+static py::tuple kmeans_lloyd_native(ArrayD x, ArrayD initial_centers, int max_iter, double tol) {
+    if (x.ndim() != 2 || initial_centers.ndim() != 2 || x.shape(1) != initial_centers.shape(1)) {
+        throw std::invalid_argument("X and initial_centers must be 2D with matching feature dimension");
+    }
+    const py::ssize_t n = x.shape(0);
+    const py::ssize_t d = x.shape(1);
+    const py::ssize_t k = initial_centers.shape(0);
+    const double* xp = x.data();
+    std::vector<double> centers(initial_centers.data(), initial_centers.data() + k * d);
+    std::vector<long long> labels(static_cast<std::size_t>(n), 0);
+    if (max_iter < 1) {
+        throw std::invalid_argument("max_iter must be >= 1");
+    }
+    for (int iter = 0; iter < max_iter; ++iter) {
+        for (py::ssize_t i = 0; i < n; ++i) {
+            py::ssize_t best = 0;
+            double best_dist = std::numeric_limits<double>::infinity();
+            for (py::ssize_t cidx = 0; cidx < k; ++cidx) {
+                double dist = 0.0;
+                for (py::ssize_t j = 0; j < d; ++j) {
+                    const double diff = xp[i * d + j] - centers[cidx * d + j];
+                    dist += diff * diff;
+                }
+                if (dist < best_dist) {
+                    best_dist = dist;
+                    best = cidx;
+                }
+            }
+            labels[static_cast<std::size_t>(i)] = static_cast<long long>(best);
+        }
+
+        std::vector<double> next_centers = centers;
+        std::vector<double> sums(static_cast<std::size_t>(k * d), 0.0);
+        std::vector<py::ssize_t> counts(static_cast<std::size_t>(k), 0);
+        for (py::ssize_t i = 0; i < n; ++i) {
+            const py::ssize_t cidx = static_cast<py::ssize_t>(labels[static_cast<std::size_t>(i)]);
+            counts[static_cast<std::size_t>(cidx)] += 1;
+            for (py::ssize_t j = 0; j < d; ++j) {
+                sums[cidx * d + j] += xp[i * d + j];
+            }
+        }
+        for (py::ssize_t cidx = 0; cidx < k; ++cidx) {
+            const py::ssize_t count = counts[static_cast<std::size_t>(cidx)];
+            if (count > 0) {
+                for (py::ssize_t j = 0; j < d; ++j) {
+                    next_centers[cidx * d + j] = sums[cidx * d + j] / static_cast<double>(count);
+                }
+            }
+        }
+        double shift_sq = 0.0;
+        for (py::ssize_t idx = 0; idx < k * d; ++idx) {
+            const double diff = next_centers[static_cast<std::size_t>(idx)] - centers[static_cast<std::size_t>(idx)];
+            shift_sq += diff * diff;
+        }
+        centers = std::move(next_centers);
+        if (std::sqrt(shift_sq) < tol) {
+            break;
+        }
+    }
+    auto centers_out = py::array_t<double>({k, d});
+    std::copy(centers.begin(), centers.end(), centers_out.mutable_data());
+    auto labels_out = py::array_t<long long>({n});
+    std::copy(labels.begin(), labels.end(), labels_out.mutable_data());
+    return py::make_tuple(centers_out, labels_out);
+}
+
+static double kmeans_inertia_native(ArrayD x, ArrayD centers, ArrayI labels) {
+    if (x.ndim() != 2 || centers.ndim() != 2 || labels.ndim() != 1 || x.shape(1) != centers.shape(1) || x.shape(0) != labels.shape(0)) {
+        throw std::invalid_argument("X, centers, and labels have incompatible shapes");
+    }
+    const py::ssize_t n = x.shape(0);
+    const py::ssize_t d = x.shape(1);
+    const double* xp = x.data();
+    const double* cp = centers.data();
+    const long long* lp = labels.data();
+    double total = 0.0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const long long label = lp[i];
+        for (py::ssize_t j = 0; j < d; ++j) {
+            const double diff = xp[i * d + j] - cp[label * d + j];
+            total += diff * diff;
+        }
+    }
+    return total;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -3951,5 +4037,7 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("p1_stiffness_2d", &p1_stiffness_2d_native, py::arg("points"), py::arg("simplices"));
     m.def("marching_squares", &marching_squares_native, py::arg("f"), py::arg("level") = 0.0);
     m.def("augment_symmetric", &augment_symmetric_native, py::arg("U"), py::arg("axes"));
+    m.def("kmeans_lloyd", &kmeans_lloyd_native, py::arg("X"), py::arg("initial_centers"), py::arg("max_iter") = 100, py::arg("tol") = 1e-6);
+    m.def("kmeans_inertia", &kmeans_inertia_native, py::arg("X"), py::arg("centers"), py::arg("labels"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
