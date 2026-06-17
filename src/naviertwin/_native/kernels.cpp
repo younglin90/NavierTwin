@@ -4283,6 +4283,37 @@ static py::list schedule_berger_oliger_native(int level, int max_level, int refi
     return out;
 }
 
+static void exchange_ghost_1d_native(py::sequence blocks, int n_ghost) {
+    const py::ssize_t n_blocks = py::len(blocks);
+    if (n_ghost < 0) {
+        throw std::invalid_argument("n_ghost must be non-negative");
+    }
+    for (py::ssize_t i = 0; i < n_blocks - 1; ++i) {
+        py::array a_obj = py::cast<py::array>(blocks[i]);
+        py::array b_obj = py::cast<py::array>(blocks[i + 1]);
+        if (a_obj.ndim() != 1 || b_obj.ndim() != 1) {
+            throw std::invalid_argument("blocks must be 1D arrays");
+        }
+        if (a_obj.shape(0) < 2 * n_ghost || b_obj.shape(0) < 2 * n_ghost) {
+            throw std::invalid_argument("blocks are too short for n_ghost");
+        }
+        auto a = py::array_t<double, py::array::c_style | py::array::forcecast>::ensure(a_obj);
+        auto b = py::array_t<double, py::array::c_style | py::array::forcecast>::ensure(b_obj);
+        if (!a || !b) {
+            throw std::invalid_argument("blocks must be numeric arrays");
+        }
+        double* ap = a.mutable_data();
+        double* bp = b.mutable_data();
+        const py::ssize_t na = a.shape(0);
+        for (int g = 0; g < n_ghost; ++g) {
+            ap[na - n_ghost + g] = bp[n_ghost + g];
+        }
+        for (int g = 0; g < n_ghost; ++g) {
+            bp[g] = ap[na - 2 * n_ghost + g];
+        }
+    }
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -4458,5 +4489,6 @@ PYBIND11_MODULE(_kernels, m) {
         "schedule_berger_oliger", &schedule_berger_oliger_native, py::arg("level") = 0,
         py::arg("max_level") = 2, py::arg("refine_ratio") = 2
     );
+    m.def("exchange_ghost_1d", &exchange_ghost_1d_native, py::arg("blocks"), py::arg("n_ghost") = 2);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

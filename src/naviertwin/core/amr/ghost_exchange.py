@@ -16,16 +16,16 @@ from collections.abc import Sequence
 
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
 
 def exchange_ghost_1d(
     blocks: Sequence[NDArray], *, n_ghost: int = 2,
 ) -> None:
     """In-place: blocks[i][-ng:] ← blocks[i+1] interior; blocks[i+1][:ng] ← blocks[i]."""
-    for i in range(len(blocks) - 1):
-        a = blocks[i]
-        b = blocks[i + 1]
-        a[-n_ghost:] = b[n_ghost:2 * n_ghost]
-        b[:n_ghost] = a[-2 * n_ghost:-n_ghost]
+    if _kernels is None:
+        raise ImportError("NavierTwin native kernels are required by exchange_ghost_1d")
+    _kernels.exchange_ghost_1d(blocks, n_ghost)
 
 
 __all__ = ["exchange_ghost_1d"]
