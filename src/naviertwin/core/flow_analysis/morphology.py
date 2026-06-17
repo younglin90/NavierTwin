@@ -24,6 +24,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
 from naviertwin.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -52,22 +53,9 @@ def binary_dilation_2d(
     if iterations < 0:
         raise ValueError(f"iterations must be >= 0, got {iterations}")
 
-    out = np.asarray(mask, dtype=bool).copy()
-    for _ in range(iterations):
-        new = out.copy()
-        # 4-neighbor
-        new[:-1, :] |= out[1:, :]
-        new[1:, :] |= out[:-1, :]
-        new[:, :-1] |= out[:, 1:]
-        new[:, 1:] |= out[:, :-1]
-        if connectivity == 2:
-            # 대각선
-            new[:-1, :-1] |= out[1:, 1:]
-            new[1:, 1:] |= out[:-1, :-1]
-            new[:-1, 1:] |= out[1:, :-1]
-            new[1:, :-1] |= out[:-1, 1:]
-        out = new
-    return out
+    if _kernels is None:
+        raise ImportError("NavierTwin native kernels are required by binary_dilation_2d")
+    return _kernels.binary_dilation_2d(np.asarray(mask, dtype=bool), iterations, connectivity)
 
 
 def binary_erosion_2d(
@@ -95,24 +83,9 @@ def binary_erosion_2d(
     if iterations < 0:
         raise ValueError(f"iterations must be >= 0, got {iterations}")
 
-    out = np.asarray(mask, dtype=bool).copy()
-    for _ in range(iterations):
-        # 경계 외부 = False 가정 → 0 padding
-        padded = np.zeros((out.shape[0] + 2, out.shape[1] + 2), dtype=bool)
-        padded[1:-1, 1:-1] = out
-        new = padded[1:-1, 1:-1].copy()
-        # 4-neighbor 모두 True여야 살아남음
-        new &= padded[:-2, 1:-1]
-        new &= padded[2:, 1:-1]
-        new &= padded[1:-1, :-2]
-        new &= padded[1:-1, 2:]
-        if connectivity == 2:
-            new &= padded[:-2, :-2]
-            new &= padded[2:, 2:]
-            new &= padded[:-2, 2:]
-            new &= padded[2:, :-2]
-        out = new
-    return out
+    if _kernels is None:
+        raise ImportError("NavierTwin native kernels are required by binary_erosion_2d")
+    return _kernels.binary_erosion_2d(np.asarray(mask, dtype=bool), iterations, connectivity)
 
 
 def binary_opening_2d(
@@ -165,37 +138,9 @@ def connected_components_2d(
     if connectivity not in (1, 2):
         raise ValueError(f"connectivity must be 1 or 2, got {connectivity}")
 
-    mask = np.asarray(mask, dtype=bool)
-    labels = np.zeros(mask.shape, dtype=np.int32)
-    nx, ny = mask.shape
-    n_components = 0
-
-    if connectivity == 1:
-        offsets = [(-1, 0), (1, 0), (0, -1), (0, 1)]
-    else:
-        offsets = [
-            (-1, 0), (1, 0), (0, -1), (0, 1),
-            (-1, -1), (1, 1), (-1, 1), (1, -1),
-        ]
-
-    for i in range(nx):
-        for j in range(ny):
-            if not mask[i, j] or labels[i, j] != 0:
-                continue
-            n_components += 1
-            # BFS
-            stack = [(i, j)]
-            labels[i, j] = n_components
-            while stack:
-                ci, cj = stack.pop()
-                for di, dj in offsets:
-                    ni, nj = ci + di, cj + dj
-                    if 0 <= ni < nx and 0 <= nj < ny:
-                        if mask[ni, nj] and labels[ni, nj] == 0:
-                            labels[ni, nj] = n_components
-                            stack.append((ni, nj))
-
-    return labels, n_components
+    if _kernels is None:
+        raise ImportError("NavierTwin native kernels are required by connected_components_2d")
+    return _kernels.connected_components_2d(np.asarray(mask, dtype=bool), connectivity)
 
 
 def component_sizes(

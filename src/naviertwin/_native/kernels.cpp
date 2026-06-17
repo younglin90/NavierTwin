@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <pybind11/numpy.h>
@@ -17,6 +18,8 @@ using Array2D = py::array_t<double, py::array::c_style | py::array::forcecast>;
 using ArrayD = py::array_t<double, py::array::c_style | py::array::forcecast>;
 
 using ArrayI = py::array_t<long long, py::array::c_style | py::array::forcecast>;
+
+using ArrayB = py::array_t<bool, py::array::c_style | py::array::forcecast>;
 
 static void check_same_2d(const Array2D& u, const Array2D& v) {
     if (u.ndim() != 2 || v.ndim() != 2) {
@@ -4057,6 +4060,136 @@ static double autocorrelation_time_native(ArrayD x, int max_lag) {
     return tau;
 }
 
+static void check_binary_morphology_args(const ArrayB& mask, int iterations, int connectivity) {
+    if (mask.ndim() != 2) {
+        throw std::invalid_argument("mask must be a 2D array");
+    }
+    if (connectivity != 1 && connectivity != 2) {
+        throw std::invalid_argument("connectivity must be 1 or 2");
+    }
+    if (iterations < 0) {
+        throw std::invalid_argument("iterations must be >= 0");
+    }
+}
+
+static py::array_t<bool> binary_dilation_2d_native(ArrayB mask, int iterations, int connectivity) {
+    check_binary_morphology_args(mask, iterations, connectivity);
+    const py::ssize_t nx = mask.shape(0);
+    const py::ssize_t ny = mask.shape(1);
+    std::vector<bool> current(mask.data(), mask.data() + nx * ny);
+    std::vector<bool> next = current;
+    const int offsets4[4][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+    const int offsets8[8][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}, {-1, -1}, {1, 1}, {-1, 1}, {1, -1}};
+    for (int it = 0; it < iterations; ++it) {
+        next = current;
+        const int n_offsets = connectivity == 1 ? 4 : 8;
+        const int (*offsets)[2] = connectivity == 1 ? offsets4 : offsets8;
+        for (py::ssize_t i = 0; i < nx; ++i) {
+            for (py::ssize_t j = 0; j < ny; ++j) {
+                bool value = current[static_cast<std::size_t>(i * ny + j)];
+                for (int oi = 0; oi < n_offsets && !value; ++oi) {
+                    const py::ssize_t ni = i + offsets[oi][0];
+                    const py::ssize_t nj = j + offsets[oi][1];
+                    if (0 <= ni && ni < nx && 0 <= nj && nj < ny) {
+                        value = current[static_cast<std::size_t>(ni * ny + nj)];
+                    }
+                }
+                next[static_cast<std::size_t>(i * ny + j)] = value;
+            }
+        }
+        current.swap(next);
+    }
+    auto out = py::array_t<bool>({nx, ny});
+    bool* op = out.mutable_data();
+    for (py::ssize_t idx = 0; idx < nx * ny; ++idx) {
+        op[idx] = current[static_cast<std::size_t>(idx)];
+    }
+    return out;
+}
+
+static py::array_t<bool> binary_erosion_2d_native(ArrayB mask, int iterations, int connectivity) {
+    check_binary_morphology_args(mask, iterations, connectivity);
+    const py::ssize_t nx = mask.shape(0);
+    const py::ssize_t ny = mask.shape(1);
+    std::vector<bool> current(mask.data(), mask.data() + nx * ny);
+    std::vector<bool> next = current;
+    const int offsets4[5][2] = {{0, 0}, {-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+    const int offsets8[9][2] = {{0, 0}, {-1, 0}, {1, 0}, {0, -1}, {0, 1}, {-1, -1}, {1, 1}, {-1, 1}, {1, -1}};
+    for (int it = 0; it < iterations; ++it) {
+        const int n_offsets = connectivity == 1 ? 5 : 9;
+        const int (*offsets)[2] = connectivity == 1 ? offsets4 : offsets8;
+        for (py::ssize_t i = 0; i < nx; ++i) {
+            for (py::ssize_t j = 0; j < ny; ++j) {
+                bool value = true;
+                for (int oi = 0; oi < n_offsets; ++oi) {
+                    const py::ssize_t ni = i + offsets[oi][0];
+                    const py::ssize_t nj = j + offsets[oi][1];
+                    if (!(0 <= ni && ni < nx && 0 <= nj && nj < ny) || !current[static_cast<std::size_t>(ni * ny + nj)]) {
+                        value = false;
+                        break;
+                    }
+                }
+                next[static_cast<std::size_t>(i * ny + j)] = value;
+            }
+        }
+        current.swap(next);
+    }
+    auto out = py::array_t<bool>({nx, ny});
+    bool* op = out.mutable_data();
+    for (py::ssize_t idx = 0; idx < nx * ny; ++idx) {
+        op[idx] = current[static_cast<std::size_t>(idx)];
+    }
+    return out;
+}
+
+static py::tuple connected_components_2d_native(ArrayB mask, int connectivity) {
+    if (mask.ndim() != 2) {
+        throw std::invalid_argument("mask must be a 2D array");
+    }
+    if (connectivity != 1 && connectivity != 2) {
+        throw std::invalid_argument("connectivity must be 1 or 2");
+    }
+    const py::ssize_t nx = mask.shape(0);
+    const py::ssize_t ny = mask.shape(1);
+    const bool* mp = mask.data();
+    auto labels = py::array_t<int>({nx, ny});
+    int* lp = labels.mutable_data();
+    std::fill(lp, lp + nx * ny, 0);
+    const int offsets4[4][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+    const int offsets8[8][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}, {-1, -1}, {1, 1}, {-1, 1}, {1, -1}};
+    const int n_offsets = connectivity == 1 ? 4 : 8;
+    const int (*offsets)[2] = connectivity == 1 ? offsets4 : offsets8;
+    int n_components = 0;
+    for (py::ssize_t i = 0; i < nx; ++i) {
+        for (py::ssize_t j = 0; j < ny; ++j) {
+            const py::ssize_t idx = i * ny + j;
+            if (!mp[idx] || lp[idx] != 0) {
+                continue;
+            }
+            ++n_components;
+            std::vector<std::pair<py::ssize_t, py::ssize_t>> stack;
+            stack.emplace_back(i, j);
+            lp[idx] = n_components;
+            while (!stack.empty()) {
+                const auto [ci, cj] = stack.back();
+                stack.pop_back();
+                for (int oi = 0; oi < n_offsets; ++oi) {
+                    const py::ssize_t ni = ci + offsets[oi][0];
+                    const py::ssize_t nj = cj + offsets[oi][1];
+                    if (0 <= ni && ni < nx && 0 <= nj && nj < ny) {
+                        const py::ssize_t nidx = ni * ny + nj;
+                        if (mp[nidx] && lp[nidx] == 0) {
+                            lp[nidx] = n_components;
+                            stack.emplace_back(ni, nj);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return py::make_tuple(labels, n_components);
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -4223,5 +4356,8 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("effective_sample_size", &effective_sample_size_native, py::arg("x"), py::arg("max_lag") = -1);
     m.def("plateau_detector", &plateau_detector_native, py::arg("x"), py::arg("window") = 100, py::arg("tol_rel") = 0.01);
     m.def("autocorrelation_time", &autocorrelation_time_native, py::arg("x"), py::arg("max_lag") = -1);
+    m.def("binary_dilation_2d", &binary_dilation_2d_native, py::arg("mask"), py::arg("iterations") = 1, py::arg("connectivity") = 1);
+    m.def("binary_erosion_2d", &binary_erosion_2d_native, py::arg("mask"), py::arg("iterations") = 1, py::arg("connectivity") = 1);
+    m.def("connected_components_2d", &connected_components_2d_native, py::arg("mask"), py::arg("connectivity") = 1);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
