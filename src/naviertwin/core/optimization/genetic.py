@@ -27,19 +27,19 @@ def ga(
 ) -> tuple[NDArray[np.float64], float]:
     rng = np.random.default_rng(seed)
     d = len(bounds)
-    lo = np.array([b[0] for b in bounds])
-    hi = np.array([b[1] for b in bounds])
+    bounds_arr = np.asarray(bounds, dtype=np.float64)
+    lo = bounds_arr[:, 0]
+    hi = bounds_arr[:, 1]
     pop = rng.uniform(lo, hi, size=(n_pop, d))
-    fit = np.array([float(objective(p)) for p in pop])
+    fit = np.fromiter(map(lambda p: float(objective(p)), pop), dtype=np.float64)
     best_x = pop[np.argmin(fit)].copy()
     best_f = float(fit.min())
 
-    for _ in range(n_gen):
-        new_pop = []
+    gen_idx = 0
+    while gen_idx < n_gen:
         # elitism
         elite_idx = np.argsort(fit)[:elitism]
-        for e in elite_idx:
-            new_pop.append(pop[e].copy())
+        new_pop = list(map(lambda e: pop[e].copy(), elite_idx))
 
         while len(new_pop) < n_pop:
             # tournament selection
@@ -59,10 +59,11 @@ def ga(
             new_pop.append(child)
 
         pop = np.stack(new_pop[:n_pop], axis=0)
-        fit = np.array([float(objective(p)) for p in pop])
+        fit = np.fromiter(map(lambda p: float(objective(p)), pop), dtype=np.float64)
         if fit.min() < best_f:
             best_f = float(fit.min())
             best_x = pop[np.argmin(fit)].copy()
+        gen_idx += 1
     return best_x, best_f
 
 
