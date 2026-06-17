@@ -25,9 +25,13 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
 from naviertwin.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required by multi-output metrics")
 
 
 def channel_rmse(
@@ -130,17 +134,9 @@ def multi_output_r2(
     yp = np.asarray(y_pred, dtype=np.float64)
     if yt.shape != yp.shape or yt.ndim != 2:
         raise ValueError(f"shape error: {yt.shape}, {yp.shape}")
-    K = yt.shape[1]
-    r2_per_channel = np.zeros(K)
-    var_per_channel = np.zeros(K)
-    for k in range(K):
-        ss_res = float(np.sum((yt[:, k] - yp[:, k]) ** 2))
-        ss_tot = float(np.sum((yt[:, k] - yt[:, k].mean()) ** 2))
-        var_per_channel[k] = ss_tot
-        if ss_tot < 1e-30:
-            r2_per_channel[k] = float("nan")
-        else:
-            r2_per_channel[k] = 1.0 - ss_res / ss_tot
+    r2_per_channel, var_per_channel = _kernels.multi_output_r2_raw(yt, yp)
+    r2_per_channel = np.asarray(r2_per_channel, dtype=np.float64)
+    var_per_channel = np.asarray(var_per_channel, dtype=np.float64)
 
     if average == "raw":
         return r2_per_channel  # type: ignore[return-value]
@@ -173,14 +169,7 @@ def cross_channel_correlation(
     yp = np.asarray(y_pred, dtype=np.float64)
     if yt.shape != yp.shape or yt.ndim != 2:
         raise ValueError(f"shape error: {yt.shape}, {yp.shape}")
-    K = yt.shape[1]
-    out = np.zeros(K)
-    for k in range(K):
-        a = yt[:, k] - yt[:, k].mean()
-        b = yp[:, k] - yp[:, k].mean()
-        denom = np.sqrt(float(np.dot(a, a)) * float(np.dot(b, b))) + 1e-30
-        out[k] = float(np.dot(a, b)) / denom
-    return out
+    return _kernels.cross_channel_correlation(yt, yp)
 
 
 def top_k_worst_channels(

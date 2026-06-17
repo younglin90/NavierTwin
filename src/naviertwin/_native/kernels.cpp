@@ -3147,6 +3147,72 @@ static py::array_t<double> track_particles_2d_native(ArrayD u, ArrayD v, ArrayD 
     return trails;
 }
 
+static py::tuple multi_output_r2_raw_native(ArrayD y_true, ArrayD y_pred) {
+    if (y_true.ndim() != 2 || y_pred.ndim() != 2 || y_true.shape(0) != y_pred.shape(0) || y_true.shape(1) != y_pred.shape(1)) {
+        throw std::invalid_argument("y_true and y_pred must be matching 2D arrays");
+    }
+    const py::ssize_t n = y_true.shape(0);
+    const py::ssize_t k = y_true.shape(1);
+    auto r2 = py::array_t<double>({k});
+    auto var = py::array_t<double>({k});
+    double* r2p = r2.mutable_data();
+    double* varp = var.mutable_data();
+    const double* yt = y_true.data();
+    const double* yp = y_pred.data();
+    for (py::ssize_t j = 0; j < k; ++j) {
+        double mean = 0.0;
+        for (py::ssize_t i = 0; i < n; ++i) {
+            mean += yt[i * k + j];
+        }
+        mean /= static_cast<double>(std::max<py::ssize_t>(n, 1));
+        double ss_res = 0.0;
+        double ss_tot = 0.0;
+        for (py::ssize_t i = 0; i < n; ++i) {
+            const double err = yt[i * k + j] - yp[i * k + j];
+            const double centered = yt[i * k + j] - mean;
+            ss_res += err * err;
+            ss_tot += centered * centered;
+        }
+        varp[j] = ss_tot;
+        r2p[j] = ss_tot < 1e-30 ? std::numeric_limits<double>::quiet_NaN() : 1.0 - ss_res / ss_tot;
+    }
+    return py::make_tuple(r2, var);
+}
+
+static py::array_t<double> cross_channel_correlation_native(ArrayD y_true, ArrayD y_pred) {
+    if (y_true.ndim() != 2 || y_pred.ndim() != 2 || y_true.shape(0) != y_pred.shape(0) || y_true.shape(1) != y_pred.shape(1)) {
+        throw std::invalid_argument("y_true and y_pred must be matching 2D arrays");
+    }
+    const py::ssize_t n = y_true.shape(0);
+    const py::ssize_t k = y_true.shape(1);
+    auto out = py::array_t<double>({k});
+    double* op = out.mutable_data();
+    const double* yt = y_true.data();
+    const double* yp = y_pred.data();
+    for (py::ssize_t j = 0; j < k; ++j) {
+        double mt = 0.0;
+        double mp = 0.0;
+        for (py::ssize_t i = 0; i < n; ++i) {
+            mt += yt[i * k + j];
+            mp += yp[i * k + j];
+        }
+        mt /= static_cast<double>(std::max<py::ssize_t>(n, 1));
+        mp /= static_cast<double>(std::max<py::ssize_t>(n, 1));
+        double dot_ab = 0.0;
+        double dot_a = 0.0;
+        double dot_b = 0.0;
+        for (py::ssize_t i = 0; i < n; ++i) {
+            const double a = yt[i * k + j] - mt;
+            const double b = yp[i * k + j] - mp;
+            dot_ab += a * b;
+            dot_a += a * a;
+            dot_b += b * b;
+        }
+        op[j] = dot_ab / (std::sqrt(dot_a * dot_b) + 1e-30);
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -3286,5 +3352,7 @@ PYBIND11_MODULE(_kernels, m) {
         "track_particles_2d", &track_particles_2d_native, py::arg("u"), py::arg("v"), py::arg("seeds"),
         py::arg("Lx") = 1.0, py::arg("Ly") = 1.0, py::arg("dt") = 0.01, py::arg("n_steps") = 100
     );
+    m.def("multi_output_r2_raw", &multi_output_r2_raw_native, py::arg("y_true"), py::arg("y_pred"));
+    m.def("cross_channel_correlation", &cross_channel_correlation_native, py::arg("y_true"), py::arg("y_pred"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
