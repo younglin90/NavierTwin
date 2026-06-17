@@ -20,12 +20,12 @@ _SECTION_RE = re.compile(r"\(\s*(\d+)\b")
 
 def parse_section_ids(text: str) -> list[int]:
     """ASCII .cas section ID list."""
-    return [int(m.group(1)) for m in _SECTION_RE.finditer(text)]
+    return list(map(lambda m: int(m.group(1)), _SECTION_RE.finditer(text)))
 
 
 def section_count(path: str | Path, section_id: int) -> int:
     text = Path(path).read_text(errors="ignore")
-    return sum(1 for s in parse_section_ids(text) if s == section_id)
+    return parse_section_ids(text).count(section_id)
 
 
 def list_zone_names(path: str | Path) -> list[str]:
