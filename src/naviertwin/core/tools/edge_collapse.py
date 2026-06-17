@@ -22,12 +22,9 @@ def edge_collapse_once(
     """가장 짧은 edge 를 midpoint 로 합치기 (1회)."""
     v = np.asarray(verts, dtype=np.float64)
     tri = np.asarray(triangles)
-    edges = set()
-    for t in tri:
-        for a, b in [(0, 1), (1, 2), (2, 0)]:
-            edges.add(tuple(sorted((int(t[a]), int(t[b])))))
-    edge_list = list(edges)
-    lens = [np.linalg.norm(v[a] - v[b]) for a, b in edge_list]
+    edge_list = np.vstack([tri[:, [0, 1]], tri[:, [1, 2]], tri[:, [2, 0]]]).astype(int)
+    edge_list = np.unique(np.sort(edge_list, axis=1), axis=0)
+    lens = np.linalg.norm(v[edge_list[:, 0]] - v[edge_list[:, 1]], axis=1)
     idx = int(np.argmin(lens))
     a, b = edge_list[idx]
     # collapse b → a, midpoint
@@ -38,9 +35,11 @@ def edge_collapse_once(
     remap[b] = a
     tri_new = remap[tri]
     # drop degenerate triangles (any two equal)
-    keep = np.array([
-        len({int(t[0]), int(t[1]), int(t[2])}) == 3 for t in tri_new
-    ])
+    keep = (
+        (tri_new[:, 0] != tri_new[:, 1])
+        & (tri_new[:, 1] != tri_new[:, 2])
+        & (tri_new[:, 2] != tri_new[:, 0])
+    )
     tri_new = tri_new[keep]
     # remove unused vertex b
     used = np.zeros(len(v_new), dtype=bool)
