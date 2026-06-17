@@ -2769,6 +2769,31 @@ static double greenhouse_temperature_step_native(double T_in, double T_out, doub
     return T_in + dt * dTdt;
 }
 
+static double vector_l2_norm_native(ArrayD x) {
+    const double* xp = x.data();
+    double ss = 0.0;
+    for (py::ssize_t i = 0; i < x.size(); ++i) {
+        ss += xp[i] * xp[i];
+    }
+    return std::sqrt(ss);
+}
+
+static double aitken_relax_native(double omega_prev, ArrayD r_prev, ArrayD r_curr) {
+    if (r_prev.size() != r_curr.size()) {
+        throw std::invalid_argument("r_prev and r_curr must have the same size");
+    }
+    const double* rp = r_prev.data();
+    const double* rc = r_curr.data();
+    double num = 0.0;
+    double denom = 1e-30;
+    for (py::ssize_t i = 0; i < r_prev.size(); ++i) {
+        const double dr = rc[i] - rp[i];
+        num += rp[i] * dr;
+        denom += dr * dr;
+    }
+    return -omega_prev * num / denom;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -2885,5 +2910,7 @@ PYBIND11_MODULE(_kernels, m) {
         py::arg("T_out"), py::arg("Q_solar"), py::arg("U"), py::arg("A"), py::arg("m"),
         py::arg("cp"), py::arg("dt")
     );
+    m.def("vector_l2_norm", &vector_l2_norm_native, py::arg("x"));
+    m.def("aitken_relax", &aitken_relax_native, py::arg("omega_prev"), py::arg("r_prev"), py::arg("r_curr"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

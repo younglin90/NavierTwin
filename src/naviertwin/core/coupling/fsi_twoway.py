@@ -16,6 +16,11 @@ from collections.abc import Callable
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required by FSI coupling")
+
 
 def aitken_relax(
     omega_prev: float,
@@ -23,9 +28,13 @@ def aitken_relax(
     r_curr: NDArray[np.float64],
 ) -> float:
     """Aitken: ω_new = -ω_prev * (r_prev · (r_curr - r_prev)) / ‖r_curr - r_prev‖²."""
-    dr = r_curr - r_prev
-    denom = float(dr @ dr) + 1e-30
-    return float(-omega_prev * (r_prev @ dr) / denom)
+    return float(
+        _kernels.aitken_relax(
+            float(omega_prev),
+            np.asarray(r_prev, dtype=np.float64),
+            np.asarray(r_curr, dtype=np.float64),
+        ),
+    )
 
 
 def fsi_2way(
@@ -41,17 +50,19 @@ def fsi_2way(
     x = np.asarray(x0, dtype=np.float64).copy()
     omega = omega0
     r_prev = None
-    for _ in range(n_iter):
+    it = 0
+    while it < n_iter:
         load = fluid_solve(x)
         x_tilde = solid_solve(load)
         r = x_tilde - x
-        if np.linalg.norm(r) < tol:
+        if _kernels.vector_l2_norm(np.asarray(r, dtype=np.float64)) < tol:
             return x_tilde
         if r_prev is not None:
             omega = aitken_relax(omega, r_prev, r)
             omega = float(np.clip(omega, 0.05, 1.0))
         x = x + omega * r
         r_prev = r
+        it += 1
     return x
 
 
