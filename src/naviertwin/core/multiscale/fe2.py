@@ -21,7 +21,7 @@ def fe2_macro_stress(
     micro_rve: Callable[[float], float],
 ) -> NDArray[np.float64]:
     s = np.asarray(macro_strain, dtype=np.float64)
-    return np.array([float(micro_rve(float(e))) for e in s])
+    return np.fromiter(map(lambda e: float(micro_rve(float(e))), s), dtype=np.float64, count=s.size)
 
 
 def fe2_tangent_fd(
@@ -31,10 +31,11 @@ def fe2_tangent_fd(
     eps: float = 1e-6,
 ) -> NDArray[np.float64]:
     s = np.asarray(macro_strain, dtype=np.float64)
-    out = np.zeros_like(s)
-    for i, e in enumerate(s):
-        out[i] = (micro_rve(float(e) + eps) - micro_rve(float(e) - eps)) / (2 * eps)
-    return out
+    plus = map(lambda e: float(micro_rve(float(e) + eps)), s)
+    minus = map(lambda e: float(micro_rve(float(e) - eps)), s)
+    return (np.fromiter(plus, dtype=np.float64, count=s.size) - np.fromiter(minus, dtype=np.float64, count=s.size)) / (
+        2 * eps
+    )
 
 
 __all__ = ["fe2_macro_stress", "fe2_tangent_fd"]
