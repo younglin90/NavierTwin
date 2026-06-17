@@ -210,10 +210,15 @@ def calibration_curve(
     # 정규 CDF (오차 함수)
     from math import erf, sqrt
 
-    F = np.array([0.5 * (1.0 + erf(zi / sqrt(2.0))) for zi in z])
+    scale = sqrt(2.0)
+    F = np.fromiter(
+        map(lambda zi: 0.5 * (1.0 + erf(float(zi) / scale)), z),
+        dtype=np.float64,
+        count=z.size,
+    )
 
     quantiles = np.linspace(0.0, 1.0, n_quantiles)
-    observed = np.array([np.mean(F <= q) for q in quantiles])
+    observed = (F[:, None] <= quantiles[None, :]).mean(axis=0)
     return quantiles, observed
 
 
