@@ -27,7 +27,7 @@ def read_zarr(path: str | Path) -> dict[str, Any]:
     import numpy as np
     import zarr
     g = zarr.open(str(path), mode="r")
-    return {k: np.asarray(g[k][:]) for k in g.array_keys()}
+    return dict(map(lambda key: (key, np.asarray(g[key][:])), g.array_keys()))
 
 
 def write_zarr(path: str | Path, data: dict[str, Any]) -> None:
@@ -36,8 +36,12 @@ def write_zarr(path: str | Path, data: dict[str, Any]) -> None:
     import numpy as np
     import zarr
     g = zarr.open(str(path), mode="w")
-    for k, v in data.items():
+    items = tuple(data.items())
+    idx = 0
+    while idx < len(items):
+        k, v = items[idx]
         g.create_dataset(k, data=np.asarray(v))
+        idx += 1
 
 
 __all__ = ["has_zarr", "read_zarr", "write_zarr"]
