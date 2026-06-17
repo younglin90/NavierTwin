@@ -7,9 +7,7 @@ Examples:
     >>> from naviertwin.core.optimization.gradient_opt import AdamOpt
     >>> opt = AdamOpt(lr=0.1)
     >>> x = np.array([3.0, -2.0])
-    >>> for _ in range(200):
-    ...     g = 2 * x  # ∇(x·x)
-    ...     x = opt.step(x, g)
+    >>> x, _ = minimize(lambda z: (float(z @ z), 2 * z), x, opt, n_steps=200)
     >>> np.linalg.norm(x) < 1e-3
     True
 """
@@ -85,12 +83,14 @@ def minimize(
     """obj_grad(x) → (f, g) 를 n_steps 회 반복."""
     x = np.asarray(x0, dtype=np.float64).copy()
     history: list[float] = []
-    for _ in range(n_steps):
+    step = 0
+    while step < n_steps:
         f, g = obj_grad(x)
         history.append(float(f))
         if np.linalg.norm(g) < tol:
             break
         x = opt.step(x, g)
+        step += 1
     return x, history
 
 
