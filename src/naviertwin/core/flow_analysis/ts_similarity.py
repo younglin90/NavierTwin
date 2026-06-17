@@ -7,7 +7,7 @@ CFD 시계열 (프로브, 모드 계수)에서 패턴 유사한 구간을 빠르
     - tslearn: shape_based_distance, MatrixProfile
     - stumpy: stump (Matrix Profile)
     - 학술: Yeh et al., "Matrix Profile I", ICDM 2016.
-            Mueen et al., "MASS: Mueen's Algorithm for Similarity Search".
+            Mueen et al., "MASS: Mueen's Similarity Search Algorithm".
 
 Examples:
     >>> import numpy as np
@@ -73,7 +73,7 @@ def mass_search(
     query: NDArray[np.float64],
     series: NDArray[np.float64],
 ) -> NDArray[np.float64]:
-    """Mueen's Algorithm for Similarity Search (MASS) — 정규화 거리 프로파일.
+    """Mueen's Similarity Search Algorithm (MASS) — 정규화 거리 프로파일.
 
     각 위치 i에서 series[i:i+len(query)]와 query의 z-정규화 유클리드 거리.
     O(n log n) FFT 기반.
@@ -166,7 +166,8 @@ def find_top_k_motifs(
     best_dist = np.full(n_pos, np.inf)
     best_idx = np.full(n_pos, -1, dtype=int)
 
-    for i in range(n_pos):
+    i = 0
+    while i < n_pos:
         query = s[i : i + window]
         dist = mass_search(query, s)
         # 자기 + 인접 제외
@@ -177,22 +178,28 @@ def find_top_k_motifs(
         if dist[j] < best_dist[i]:
             best_dist[i] = dist[j]
             best_idx[i] = j
+        i += 1
 
     # 가장 작은 거리 k개 (대칭 쌍 중복 제거)
     pairs: list[tuple[int, int, float]] = []
     seen: set[tuple[int, int]] = set()
     order = np.argsort(best_dist)
-    for i in order:
+    order_pos = 0
+    while order_pos < order.size:
+        i = order[order_pos]
         if best_idx[i] < 0:
+            order_pos += 1
             continue
         a, b = (int(i), int(best_idx[i]))
         pair = (min(a, b), max(a, b))
         if pair in seen:
+            order_pos += 1
             continue
         seen.add(pair)
         pairs.append((a, b, float(best_dist[i])))
         if len(pairs) >= k:
             break
+        order_pos += 1
     return pairs
 
 
