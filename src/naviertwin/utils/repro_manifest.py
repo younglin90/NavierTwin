@@ -28,11 +28,14 @@ def build_manifest(*, seed: int | None = None,
                      packages: list[str] | None = None) -> dict[str, Any]:
     pkgs = packages or ["numpy", "scipy", "torch"]
     versions: dict[str, str] = {}
-    for p in pkgs:
+    idx = 0
+    while idx < len(pkgs):
+        p = pkgs[idx]
         try:
             versions[p] = md.version(p)
         except Exception:  # noqa: BLE001
             versions[p] = "missing"
+        idx += 1
     return {
         "python": platform.python_version(),
         "platform": platform.platform(),
