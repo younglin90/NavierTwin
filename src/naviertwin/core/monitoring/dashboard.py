@@ -30,8 +30,10 @@ class DashboardAggregator:
         self._data[metric].append(float(value))
 
     def push_many(self, values: dict[str, float]) -> None:
-        for k, v in values.items():
-            self.push(k, v)
+        def _push(item: tuple[str, float]) -> None:
+            self.push(item[0], item[1])
+
+        tuple(map(_push, values.items()))
 
     def summary(self, metric: str) -> dict[str, float]:
         if metric not in self._data or len(self._data[metric]) == 0:
@@ -50,7 +52,7 @@ class DashboardAggregator:
         return list(self._data.keys())
 
     def snapshot(self) -> dict[str, Any]:
-        return {m: self.summary(m) for m in self._data}
+        return dict(map(lambda metric: (metric, self.summary(metric)), self._data))
 
     def reset(self, metric: str | None = None) -> None:
         if metric is None:
