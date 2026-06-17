@@ -44,10 +44,12 @@ def gradient_from_jvp(
     """complex-step gradient (머신 정밀도)."""
     n = x.size
     g = np.zeros(n)
-    for i in range(n):
+    i = 0
+    while i < n:
         v = np.zeros(n)
         v[i] = 1.0
         g[i] = directional_derivative(f, x, v, eps=eps)
+        i += 1
     return g
 
 
