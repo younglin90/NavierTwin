@@ -44,23 +44,26 @@ def load_csv_snapshots(
     if not paths:
         raise ValueError("paths 비어있음")
 
-    cols: list[NDArray[np.float64]] = []
-    coords: NDArray[np.float64] | None = None
-
-    for i, p in enumerate(paths):
+    def _read_snapshot(item: tuple[int, str | Path]) -> tuple[NDArray[np.float64], NDArray[np.float64] | None]:
+        i, p = item
         df = pd.read_csv(p, delimiter=delimiter)
         if column not in df.columns:
             raise KeyError(f"{p}: '{column}' 컬럼 없음 (사용 가능: {list(df.columns)[:6]}…)")
-        cols.append(df[column].to_numpy(dtype=np.float64))
+        values = df[column].to_numpy(dtype=np.float64)
+        first_coords = None
         if i == 0 and coord_columns:
-            avail = [c for c in coord_columns if c in df.columns]
+            avail = tuple(filter(lambda c: c in df.columns, coord_columns))
             if avail:
-                coords = df[list(avail)].to_numpy(dtype=np.float64)
+                first_coords = df[list(avail)].to_numpy(dtype=np.float64)
+        return values, first_coords
+
+    cols, coord_candidates = map(list, zip(*map(_read_snapshot, enumerate(paths)), strict=True))
+    coords = next(filter(lambda value: value is not None, coord_candidates), None)
 
     try:
         X = np.stack(cols, axis=1)
     except ValueError as e:
-        sizes = [c.size for c in cols]
+        sizes = list(map(lambda c: c.size, cols))
         raise ValueError(f"CSV 행 수 불일치: {sizes}") from e
 
     logger.info(
