@@ -84,10 +84,12 @@ class LDeepONet(BaseOperator):
         import torch.nn as nn
 
         layers: list[Any] = []
-        for i in range(len(dims) - 1):
+        i = 0
+        while i < len(dims) - 1:
             layers.append(nn.Linear(dims[i], dims[i + 1]))
             if i < len(dims) - 2:
                 layers.append(nn.GELU())
+            i += 1
         return nn.Sequential(*layers)
 
     def _build(self) -> None:
@@ -111,8 +113,7 @@ class LDeepONet(BaseOperator):
 
         self._device = self._resolve_device()
         self._build()
-        for m in (self._enc, self._dec, self._op):
-            m.to(self._device)
+        tuple(map(lambda m: m.to(self._device), (self._enc, self._dec, self._op)))
 
         params = (
             list(self._enc.parameters())
@@ -128,9 +129,15 @@ class LDeepONet(BaseOperator):
             shuffle=True,
         )
         self.train_losses_ = []
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             epoch = 0.0
-            for xb, yb in loader:
+            batches = iter(loader)
+            while True:
+                try:
+                    xb, yb = next(batches)
+                except StopIteration:
+                    break
                 xb = xb.to(self._device)
                 yb = yb.to(self._device)
                 optim.zero_grad()
@@ -144,6 +151,7 @@ class LDeepONet(BaseOperator):
                 epoch += float(loss.item()) * xb.shape[0]
             epoch /= max(len(X), 1)
             self.train_losses_.append(epoch)
+            epoch_idx += 1
 
         self.is_fitted = True
         logger.info("L-DeepONet 학습 완료: loss=%.6g", self.train_losses_[-1])
