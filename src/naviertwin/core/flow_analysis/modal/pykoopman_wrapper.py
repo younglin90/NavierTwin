@@ -9,8 +9,10 @@ Examples:
     >>> # Linear system: x_{t+1} = A x_t
     >>> A = np.array([[0.95, 0.02], [-0.01, 0.9]])
     >>> traj = [rng.standard_normal(2)]
-    >>> for _ in range(50):
+    >>> step = 0
+    >>> while step < 50:
     ...     traj.append(A @ traj[-1])
+    ...     step += 1
     >>> X = np.array(traj)
     >>> ka = KoopmanAnalysis()
     >>> ka.fit(X)
@@ -22,6 +24,7 @@ Examples:
 from __future__ import annotations
 
 import numpy as np
+from numpy.linalg import svd as _svd
 from numpy.typing import NDArray
 
 from naviertwin.utils.logger import get_logger
@@ -63,7 +66,7 @@ class KoopmanAnalysis:
         X0 = X[:-1].T
         X1 = X[1:].T
         r = self.rank or min(X0.shape[0], X0.shape[1])
-        U, s, Vt = np.linalg.svd(X0, full_matrices=False)
+        U, s, Vt = _svd(X0, full_matrices=False)
         U_r = U[:, :r]
         S_r = np.diag(s[:r])
         V_r = Vt[:r].T
@@ -81,9 +84,11 @@ class KoopmanAnalysis:
             raise RuntimeError("fit() 먼저 호출")
         x = np.asarray(x0, dtype=np.float64).ravel()
         out = []
-        for _ in range(n_steps):
+        step = 0
+        while step < n_steps:
             x = self.K_ @ x
             out.append(x.copy())
+            step += 1
         return np.stack(out)
 
 
