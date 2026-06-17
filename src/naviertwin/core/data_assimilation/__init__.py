@@ -1,4 +1,4 @@
-"""Data-assimilation algorithms for digital-twin state updates."""
+"""Data-assimilation algorithms supporting digital-twin state updates."""
 
 from __future__ import annotations
 
@@ -37,5 +37,5 @@ def __getattr__(name: str) -> Any:
 
 
 def __dir__() -> list[str]:
-    """Return stable public members for autocomplete and Sphinx."""
+    """Return stable public members used by autocomplete and Sphinx."""
     return sorted([*globals(), *__all__])
