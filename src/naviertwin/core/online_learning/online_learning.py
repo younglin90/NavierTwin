@@ -11,9 +11,9 @@ Examples:
     >>> y0 = X0[:, 0] + X0[:, 1]
     >>> ok = OnlineKriging(buffer_size=50, refit_every=5)
     >>> ok.initialize(X0, y0)
-    >>> for _ in range(6):
-    ...     x = rng.standard_normal(2)
-    ...     ok.update(x, float(x.sum()))
+    >>> Xn = rng.standard_normal((6, 2))
+    >>> tuple(map(lambda x: ok.update(x, float(x.sum())), Xn))
+    (None, None, None, None, None, None)
     >>> pred = ok.predict(np.array([[0.1, 0.2]]))
     >>> pred.shape
     (1,)
@@ -63,9 +63,8 @@ class OnlineKriging:
     ) -> None:
         X = np.asarray(X, dtype=np.float64)
         y = np.asarray(y, dtype=np.float64).ravel()
-        for xi, yi in zip(X, y):
-            self._X.append(xi.copy())
-            self._y.append(float(yi))
+        self._X.extend(np.array(X, dtype=np.float64, copy=True))
+        self._y.extend(map(float, y))
         self._refit()
         self.is_initialized = True
         logger.info("OnlineKriging 초기화: n=%d", len(self._X))
@@ -143,13 +142,15 @@ class OnlineNN:
         xb = torch.tensor(np.asarray(X, dtype=np.float32), device=self._device)
         yb = torch.tensor(np.asarray(y, dtype=np.float32), device=self._device)
         losses: list[float] = []
-        for _ in range(n_steps):
+        step_idx = 0
+        while step_idx < n_steps:
             self._optim.zero_grad()
             pred = self.model(xb)
             loss = torch.nn.functional.mse_loss(pred, yb)
             loss.backward()
             self._optim.step()
             losses.append(float(loss.item()))
+            step_idx += 1
         return losses
 
     def predict(self, X: NDArray[np.float64]) -> NDArray[np.float64]:
