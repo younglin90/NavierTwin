@@ -186,7 +186,7 @@ def compute_lambda2(
 
 
 def _compute_q_from_gradient_numpy(grad: Any) -> tuple[Any, Any]:
-    """NumPy fallback for Q-criterion and vorticity from a 3D gradient tensor."""
+    """NumPy fallback computing Q-criterion and vorticity from gradients."""
     import numpy as np
 
     grad = np.asarray(grad)
@@ -207,8 +207,9 @@ def _compute_q_from_gradient_numpy(grad: Any) -> tuple[Any, Any]:
 
 
 def _compute_lambda2_from_gradient_numpy(grad: Any) -> Any:
-    """NumPy fallback for λ₂ from a 3D gradient tensor."""
+    """NumPy fallback computing λ₂ from gradients."""
     import numpy as np
+    from numpy.linalg import eigvalsh as _eigvalsh
 
     grad = np.asarray(grad)
     if grad.ndim == 2 and grad.shape[1] == 9:
@@ -216,7 +217,7 @@ def _compute_lambda2_from_gradient_numpy(grad: Any) -> Any:
     S = (grad + grad.transpose(0, 2, 1)) / 2.0
     Omega = (grad - grad.transpose(0, 2, 1)) / 2.0
     M = S @ S + Omega @ Omega
-    eigenvalues = np.linalg.eigvalsh(M)
+    eigenvalues = _eigvalsh(M)
     return eigenvalues[:, 1]
 
 
