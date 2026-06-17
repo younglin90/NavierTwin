@@ -16,6 +16,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
 from naviertwin.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -24,7 +25,8 @@ logger = get_logger(__name__)
 def _halton_1d(n: int, base: int) -> NDArray[np.float64]:
     """1D Halton sequence — radical inverse in given base."""
     out = np.zeros(n)
-    for i in range(n):
+    i = 0
+    while i < n:
         f = 1.0
         r = 0.0
         k = i + 1
@@ -33,6 +35,7 @@ def _halton_1d(n: int, base: int) -> NDArray[np.float64]:
             r += f * (k % base)
             k //= base
         out[i] = r
+        i += 1
     return out
 
 
@@ -41,10 +44,9 @@ def halton(n: int, d: int) -> NDArray[np.float64]:
     primes = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53]
     if d > len(primes):
         raise ValueError(f"d <= {len(primes)} 필요")
-    out = np.zeros((n, d))
-    for i in range(d):
-        out[:, i] = _halton_1d(n, primes[i])
-    return out
+    if _kernels is None:
+        raise ImportError("naviertwin._native._kernels is required by halton")
+    return _kernels.halton_sequence(n, d)
 
 
 def latin_hypercube(
@@ -53,10 +55,12 @@ def latin_hypercube(
     """Latin Hypercube Sampling — 각 차원을 n 개 구간으로 분할."""
     rng = np.random.default_rng(seed)
     out = np.zeros((n, d))
-    for j in range(d):
+    j = 0
+    while j < d:
         perm = rng.permutation(n)
         u = rng.random(n)
         out[:, j] = (perm + u) / n
+        j += 1
     return out
 
 

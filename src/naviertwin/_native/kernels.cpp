@@ -4680,6 +4680,31 @@ static py::array_t<double> eigvalsh_symmetric_native(Array2D A) {
     return out;
 }
 
+static py::array_t<double> halton_sequence_native(int n, int d) {
+    static const int primes[] = {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53};
+    const int max_primes = static_cast<int>(sizeof(primes) / sizeof(primes[0]));
+    if (n < 0 || d < 0 || d > max_primes) {
+        throw std::invalid_argument("invalid Halton dimensions");
+    }
+    auto out = py::array_t<double>({static_cast<py::ssize_t>(n), static_cast<py::ssize_t>(d)});
+    double* op = out.mutable_data();
+    for (int col = 0; col < d; ++col) {
+        const int base = primes[col];
+        for (int row = 0; row < n; ++row) {
+            double f = 1.0;
+            double r = 0.0;
+            int k = row + 1;
+            while (k > 0) {
+                f /= static_cast<double>(base);
+                r += f * static_cast<double>(k % base);
+                k /= base;
+            }
+            op[row * d + col] = r;
+        }
+    }
+    return out;
+}
+
 static void schedule_berger_oliger_fill(int level, int max_level, int refine_ratio, std::vector<int>& out) {
     if (level >= max_level) {
         out.push_back(level);
@@ -4912,6 +4937,7 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("derivative_2d", &derivative_2d_native, py::arg("U"), py::arg("spacing"), py::arg("axis"), py::arg("order") = 1);
     m.def("solve_dense", &solve_dense_native, py::arg("A"), py::arg("b"));
     m.def("eigvalsh_symmetric", &eigvalsh_symmetric_native, py::arg("A"));
+    m.def("halton_sequence", &halton_sequence_native, py::arg("n"), py::arg("d"));
     m.def(
         "schedule_berger_oliger", &schedule_berger_oliger_native, py::arg("level") = 0,
         py::arg("max_level") = 2, py::arg("refine_ratio") = 2
