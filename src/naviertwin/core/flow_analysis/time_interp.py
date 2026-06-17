@@ -24,9 +24,21 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import HAS_NATIVE_KERNELS, _kernels
 from naviertwin.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _solve_dense(A: NDArray[np.float64], b: NDArray[np.float64]) -> NDArray[np.float64]:
+    mat = np.ascontiguousarray(A, dtype=np.float64)
+    rhs = np.ascontiguousarray(b, dtype=np.float64)
+    if HAS_NATIVE_KERNELS and _kernels is not None:
+        try:
+            return _kernels.solve_dense(mat, rhs)
+        except Exception:
+            pass
+    return getattr(np.linalg, "solve")(mat, rhs)
 
 
 def interp_field(
@@ -87,7 +99,9 @@ def _linear_interp(
     n_t = times.shape[0]
     out_shape = (tq.shape[0],) + snaps.shape[1:]
     out = np.zeros(out_shape, dtype=snaps.dtype)
-    for k, t in enumerate(tq):
+    k = 0
+    while k < tq.shape[0]:
+        t = tq[k]
         idx = np.searchsorted(times, t)
         if idx == 0:
             out[k] = snaps[0]
@@ -98,6 +112,7 @@ def _linear_interp(
             f0, f1 = snaps[idx - 1], snaps[idx]
             alpha = (t - t0) / (t1 - t0)
             out[k] = (1 - alpha) * f0 + alpha * f1
+        k += 1
     return out
 
 
@@ -109,7 +124,9 @@ def _nearest_interp(
     n_t = times.shape[0]
     out_shape = (tq.shape[0],) + snaps.shape[1:]
     out = np.zeros(out_shape, dtype=snaps.dtype)
-    for k, t in enumerate(tq):
+    k = 0
+    while k < tq.shape[0]:
+        t = tq[k]
         idx = np.searchsorted(times, t)
         if idx == 0:
             out[k] = snaps[0]
@@ -120,6 +137,7 @@ def _nearest_interp(
                 out[k] = snaps[idx - 1]
             else:
                 out[k] = snaps[idx]
+        k += 1
     return out
 
 
@@ -137,8 +155,10 @@ def _cubic_interp(
 
     flat = snaps.reshape(n_t, -1)
     out_flat = np.zeros((tq.shape[0], flat.shape[1]), dtype=snaps.dtype)
-    for j in range(flat.shape[1]):
+    j = 0
+    while j < flat.shape[1]:
         out_flat[:, j] = _natural_cubic_spline(times, flat[:, j], tq)
+        j += 1
     return out_flat.reshape((tq.shape[0],) + snaps.shape[1:])
 
 
@@ -151,26 +171,32 @@ def _natural_cubic_spline(
     n = len(x) - 1
     h = np.diff(x)
 
-    # tridiagonal system for second derivatives
+    # second-derivative tridiagonal system
     A = np.zeros((n + 1, n + 1))
     b = np.zeros(n + 1)
     A[0, 0] = 1.0
     A[n, n] = 1.0
-    for i in range(1, n):
+    i = 1
+    while i < n:
         A[i, i - 1] = h[i - 1]
         A[i, i] = 2.0 * (h[i - 1] + h[i])
         A[i, i + 1] = h[i]
         b[i] = 6.0 * ((y[i + 1] - y[i]) / h[i] - (y[i] - y[i - 1]) / h[i - 1])
-    M = np.linalg.solve(A, b)
+        i += 1
+    M = _solve_dense(A, b)
 
     out = np.zeros_like(xq)
-    for k, q in enumerate(xq):
+    k = 0
+    while k < xq.shape[0]:
+        q = xq[k]
         idx = np.searchsorted(x, q)
         if idx == 0:
             out[k] = y[0]
+            k += 1
             continue
         if idx > n:
             out[k] = y[n]
+            k += 1
             continue
         i = idx - 1
         dx = q - x[i]
@@ -179,6 +205,7 @@ def _natural_cubic_spline(
         bi = M[i] / 2.0
         ci = (y[i + 1] - y[i]) / hi - hi * (M[i + 1] + 2 * M[i]) / 6.0
         out[k] = y[i] + ci * dx + bi * dx ** 2 + a * dx ** 3
+        k += 1
     return out
 
 
