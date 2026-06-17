@@ -12,6 +12,7 @@ from __future__ import annotations
 def _torch():
     try:
         import torch
+
         return torch
     except ImportError as exc:
         raise RuntimeError("torch 필요") from exc
@@ -26,7 +27,8 @@ def NeuralODE(state_dim: int, hidden: int = 32):
         def __init__(self):
             super().__init__()
             self.f = nn.Sequential(
-                nn.Linear(state_dim, hidden), nn.Tanh(),
+                nn.Linear(state_dim, hidden),
+                nn.Tanh(),
                 nn.Linear(hidden, state_dim),
             )
 
@@ -44,9 +46,11 @@ def NeuralODE(state_dim: int, hidden: int = 32):
             n = int(round((t1 - t0) / dt))
             x = x0
             traj = [x]
-            for _ in range(n):
+            step = 0
+            while step < n:
                 x = self.rk4_step(x, dt)
                 traj.append(x)
+                step += 1
             return torch.stack(traj, dim=0)
 
     return _ODE()
