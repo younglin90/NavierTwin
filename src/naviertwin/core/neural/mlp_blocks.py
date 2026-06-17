@@ -38,10 +38,13 @@ def MLP(
         raise ValueError(f"activation ∈ {list(acts)}")
     layers: list = []
     prev = int(in_dim)
-    for h in hidden:
+    hidden_idx = 0
+    while hidden_idx < len(hidden):
+        h = hidden[hidden_idx]
         layers.append(nn.Linear(prev, int(h)))
         layers.append(acts[activation]())
         prev = int(h)
+        hidden_idx += 1
     layers.append(nn.Linear(prev, int(out_dim)))
     return nn.Sequential(*layers)
 
@@ -72,7 +75,9 @@ def ResidualMLP(
         def __init__(self):
             super().__init__()
             self.proj = nn.Linear(int(in_dim), int(hidden))
-            self.blocks = nn.Sequential(*[_ResBlock(int(hidden)) for _ in range(int(n_blocks))])
+            self.blocks = nn.Sequential(
+                *map(lambda _: _ResBlock(int(hidden)), range(int(n_blocks)))
+            )
             self.head = nn.Linear(int(hidden), int(out_dim))
 
         def forward(self, x):
@@ -98,9 +103,11 @@ def SirenMLP(
             return torch.sin(self.w0 * x)
 
     layers: list = [nn.Linear(int(in_dim), int(hidden)), _Sine(omega_0)]
-    for _ in range(int(n_layers) - 2):
+    layer_idx = 0
+    while layer_idx < int(n_layers) - 2:
         layers.append(nn.Linear(int(hidden), int(hidden)))
         layers.append(_Sine(1.0))
+        layer_idx += 1
     layers.append(nn.Linear(int(hidden), int(out_dim)))
     return nn.Sequential(*layers)
 
