@@ -2807,6 +2807,39 @@ static double aitken_relax_native(double omega_prev, ArrayD r_prev, ArrayD r_cur
     return -omega_prev * num / denom;
 }
 
+static py::tuple mean_std_axis0_native(ArrayD values) {
+    if (values.ndim() != 2) {
+        throw std::invalid_argument("values must be a 2D array");
+    }
+    const py::ssize_t n = values.shape(0);
+    const py::ssize_t d = values.shape(1);
+    auto mean = py::array_t<double>({d});
+    auto std_arr = py::array_t<double>({d});
+    double* mp = mean.mutable_data();
+    double* sp = std_arr.mutable_data();
+    std::fill(mp, mp + d, 0.0);
+    std::fill(sp, sp + d, 0.0);
+    const double* vp = values.data();
+    if (n == 0) {
+        std::fill(mp, mp + d, std::numeric_limits<double>::quiet_NaN());
+        std::fill(sp, sp + d, std::numeric_limits<double>::quiet_NaN());
+        return py::make_tuple(mean, std_arr);
+    }
+    for (py::ssize_t i = 0; i < n; ++i) {
+        for (py::ssize_t j = 0; j < d; ++j) {
+            const double value = vp[i * d + j];
+            mp[j] += value;
+            sp[j] += value * value;
+        }
+    }
+    for (py::ssize_t j = 0; j < d; ++j) {
+        mp[j] /= static_cast<double>(n);
+        const double var = sp[j] / static_cast<double>(n) - mp[j] * mp[j];
+        sp[j] = std::sqrt(std::max(0.0, var));
+    }
+    return py::make_tuple(mean, std_arr);
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -2926,5 +2959,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("vector_l2_norm", &vector_l2_norm_native, py::arg("x"));
     m.def("vector_dot", &vector_dot_native, py::arg("a"), py::arg("b"));
     m.def("aitken_relax", &aitken_relax_native, py::arg("omega_prev"), py::arg("r_prev"), py::arg("r_curr"));
+    m.def("mean_std_axis0", &mean_std_axis0_native, py::arg("values"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

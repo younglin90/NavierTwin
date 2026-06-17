@@ -22,9 +22,13 @@ from typing import Callable
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
 from naviertwin.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required by MC propagation")
 
 
 def propagate_mc(
@@ -50,11 +54,12 @@ def propagate_mc(
     if Y.ndim == 1:
         Y = Y[:, None]
 
-    mean = Y.mean(axis=0)
-    std = Y.std(axis=0)
-    pct: dict[float, NDArray[np.float64]] = {
-        float(p): np.percentile(Y, p, axis=0) for p in percentiles
-    }
+    mean, std = _kernels.mean_std_axis0(Y)
+    mean = np.asarray(mean, dtype=np.float64)
+    std = np.asarray(std, dtype=np.float64)
+    pct: dict[float, NDArray[np.float64]] = dict(
+        map(lambda p: (float(p), np.percentile(Y, p, axis=0)), percentiles),
+    )
     logger.info(
         "MC propagation: N=%d, d=%d, out_dim=%d, mean=%s",
         X.shape[0],
