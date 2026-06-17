@@ -17,6 +17,11 @@ from collections.abc import Callable
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required by trust-region optimization")
+
 
 def trust_region_minimize(
     f: Callable[[NDArray[np.float64]], float],
@@ -33,16 +38,18 @@ def trust_region_minimize(
     H = np.eye(n)
     delta = 0.5 * delta_max
     g = grad(x)
-    for _ in range(max_iter):
-        if np.linalg.norm(g) < tol:
+    it = 0
+    while it < max_iter:
+        g_norm = _kernels.vector_l2_norm(np.asarray(g, dtype=np.float64))
+        if g_norm < tol:
             break
         # Cauchy point
         gHg = float(g @ H @ g)
         if gHg <= 0:
             tau = 1.0
         else:
-            tau = min(1.0, np.linalg.norm(g) ** 3 / (delta * gHg))
-        p = -tau * delta / (np.linalg.norm(g) + 1e-30) * g
+            tau = min(1.0, g_norm**3 / (delta * gHg))
+        p = -tau * delta / (g_norm + 1e-30) * g
         # ratio
         f_x = f(x)
         f_xp = f(x + p)
@@ -50,7 +57,7 @@ def trust_region_minimize(
         rho = (f_x - f_xp) / max(f_x - m, 1e-12)
         if rho < 0.25:
             delta *= 0.5
-        elif rho > 0.75 and np.linalg.norm(p) >= 0.99 * delta:
+        elif rho > 0.75 and _kernels.vector_l2_norm(np.asarray(p, dtype=np.float64)) >= 0.99 * delta:
             delta = min(2 * delta, delta_max)
         if rho > 0.1:
             x_new = x + p
@@ -58,7 +65,7 @@ def trust_region_minimize(
             # BFGS update
             s = x_new - x
             y = g_new - g
-            sy = float(s @ y)
+            sy = float(_kernels.vector_dot(np.asarray(s, dtype=np.float64), np.asarray(y, dtype=np.float64)))
             if sy > 1e-10:
                 rho_b = 1.0 / sy
                 Im = np.eye(n)
@@ -66,6 +73,7 @@ def trust_region_minimize(
                     + rho_b * np.outer(y, y)
             x = x_new
             g = g_new
+        it += 1
     return x
 
 
