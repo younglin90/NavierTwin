@@ -1,4 +1,4 @@
-"""Symplectic integrators — energy-preserving for Hamiltonian systems.
+"""Symplectic integrators — energy-preserving Hamiltonian steppers.
 
 Leapfrog + Velocity Verlet. H(p, q) = T(p) + V(q), 보존성이 비보존형 RK4 보다 좋음.
 
@@ -36,13 +36,15 @@ def velocity_verlet(
     qs[0] = q
     ps[0] = p
     F = force_fn(q)
-    for k in range(n):
+    k = 0
+    while k < n:
         p_half = p + 0.5 * dt * F
         q = q + dt * p_half / mass
         F = force_fn(q)
         p = p_half + 0.5 * dt * F
         qs[k + 1] = q
         ps[k + 1] = p
+        k += 1
     return qs, ps
 
 
@@ -58,12 +60,14 @@ def leapfrog(
     ps = np.zeros((n + 1, p.size))
     qs[0] = q
     ps[0] = p
-    for k in range(n):
+    k = 0
+    while k < n:
         q_half = q + 0.5 * dt * p / mass
         p = p + dt * force_fn(q_half)
         q = q_half + 0.5 * dt * p / mass
         qs[k + 1] = q
         ps[k + 1] = p
+        k += 1
     return qs, ps
 
 
