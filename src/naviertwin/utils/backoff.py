@@ -19,10 +19,12 @@ def backoff_delays(
     rng = random.Random(seed)
     out = []
     d = base
-    for _ in range(n):
+    idx = 0
+    while idx < n:
         j = rng.uniform(-jitter, jitter) * d if jitter > 0 else 0.0
         out.append(min(cap, max(0.0, d + j)))
         d *= factor
+        idx += 1
     return out
 
 
