@@ -40,12 +40,14 @@ def finite_difference_gradient(
     """
     x = np.asarray(x, dtype=np.float64).ravel()
     g = np.zeros_like(x)
-    for i in range(x.size):
+    i = 0
+    while i < x.size:
         xp = x.copy()
         xm = x.copy()
         xp[i] += eps
         xm[i] -= eps
         g[i] = (float(f(xp)) - float(f(xm))) / (2 * eps)
+        i += 1
     return g
 
 
@@ -60,12 +62,14 @@ def finite_difference_jacobian(
     m = f0.size
     n = x.size
     J = np.zeros((m, n))
-    for j in range(n):
+    j = 0
+    while j < n:
         xp = x.copy()
         xm = x.copy()
         xp[j] += eps
         xm[j] -= eps
         J[:, j] = (np.asarray(f(xp)).ravel() - np.asarray(f(xm)).ravel()) / (2 * eps)
+        j += 1
     return J
 
 
