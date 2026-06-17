@@ -29,24 +29,31 @@ def bobyqa_lite(
     x = np.asarray(x0, dtype=np.float64).copy()
     n = x.shape[0]
     fx = f(x)
-    for _ in range(max_iter):
+    iter_idx = 0
+    while iter_idx < max_iter:
         improved = False
-        for i in range(n):
-            for sign in (+1, -1):
+        i = 0
+        while i < n:
+            sign_idx = 0
+            signs = (+1, -1)
+            while sign_idx < len(signs):
                 trial = x.copy()
-                trial[i] += sign * rho
+                trial[i] += signs[sign_idx] * rho
                 ft = f(trial)
                 if ft < fx:
                     fx = ft
                     x = trial
                     improved = True
                     break
+                sign_idx += 1
             if improved:
                 break
+            i += 1
         if not improved:
             rho *= 0.5
             if rho < rho_min:
                 break
+        iter_idx += 1
     return x
 
 
