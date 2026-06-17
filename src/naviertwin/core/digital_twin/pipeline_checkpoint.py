@@ -61,12 +61,19 @@ def save_pipeline_state(pipe: Any, path: str | Path) -> Path:
         if state.reducer is not None:
             r = state.reducer
             reducer_group = g.create_group("reducer")
-            for attr in ["modes_", "singular_values_", "mean_", "energy_ratio_"]:
+            def write_reducer_attr(attr: str) -> None:
                 v = getattr(r, attr, None)
                 if v is not None:
                     reducer_group.create_dataset(
                         attr.rstrip("_"), data=np.asarray(v, dtype=np.float64)
                     )
+
+            tuple(
+                map(
+                    write_reducer_attr,
+                    ["modes_", "singular_values_", "mean_", "energy_ratio_"],
+                )
+            )
         g.attrs["metrics_json"] = json.dumps(state.metrics, ensure_ascii=False)
 
     logger.info("Pipeline 체크포인트 저장: %s", p)
@@ -106,13 +113,14 @@ def load_pipeline_state(path: str | Path) -> dict[str, Any]:
             metrics_json = metrics_json.decode()
         out["metrics"] = json.loads(metrics_json)
 
-        for key in ("snapshots", "coeffs"):
+        def read_pipeline_array(key: str) -> None:
             if key in g:
                 out[key] = g[key][...]
+
+        tuple(map(read_pipeline_array, ("snapshots", "coeffs")))
         if "reducer" in g:
             rg = g["reducer"]
-            for k in rg:
-                out[k] = rg[k][...]
+            tuple(map(lambda k: out.__setitem__(k, rg[k][...]), rg.keys()))
 
     logger.info("Pipeline 체크포인트 로드: %s", p)
     return out
