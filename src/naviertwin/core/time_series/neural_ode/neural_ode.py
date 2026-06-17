@@ -80,8 +80,10 @@ class NeuralODEForecaster(BaseTimeSeries):
             def __init__(self) -> None:
                 super().__init__()
                 layers: list[nn.Module] = [nn.Linear(n_feat, h), nn.Tanh()]
-                for _ in range(self.n_hidden_ - 1):
+                layer_idx = 0
+                while layer_idx < self.n_hidden_ - 1:
                     layers.extend([nn.Linear(h, h), nn.Tanh()])
+                    layer_idx += 1
                 layers.append(nn.Linear(h, n_feat))
                 self.net = nn.Sequential(*layers)
 
@@ -108,15 +110,8 @@ class NeuralODEForecaster(BaseTimeSeries):
             raise ValueError(f"sequences (N,T,F) 3D 필요: {seqs.shape}")
         dt = float(dataset.get("dt", self.dt))
 
-        # (x_t, x_{t+1}) 쌍 구성
-        X: list[np.ndarray] = []
-        Y: list[np.ndarray] = []
-        for s in seqs:
-            for t in range(s.shape[0] - 1):
-                X.append(s[t])
-                Y.append(s[t + 1])
-        X_arr = np.asarray(X, dtype=np.float32)
-        Y_arr = np.asarray(Y, dtype=np.float32)
+        X_arr = np.ascontiguousarray(seqs[:, :-1, :]).reshape(-1, self.n_features)
+        Y_arr = np.ascontiguousarray(seqs[:, 1:, :]).reshape(-1, self.n_features)
 
         self._device = self._resolve_device()
         self._f = self._build().to(self._device)
@@ -136,9 +131,15 @@ class NeuralODEForecaster(BaseTimeSeries):
             shuffle=True,
         )
         self.train_losses_ = []
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             epoch_loss = 0.0
-            for xb, yb in loader:
+            batches = iter(loader)
+            while True:
+                try:
+                    xb, yb = next(batches)
+                except StopIteration:
+                    break
                 xb = xb.to(self._device)
                 yb = yb.to(self._device)
                 optim.zero_grad()
@@ -155,6 +156,7 @@ class NeuralODEForecaster(BaseTimeSeries):
                 epoch_loss += float(loss.item()) * xb.shape[0]
             epoch_loss /= max(len(X_arr), 1)
             self.train_losses_.append(epoch_loss)
+            epoch_idx += 1
 
         self.dt = dt
         self.is_fitted = True
@@ -174,7 +176,8 @@ class NeuralODEForecaster(BaseTimeSeries):
         preds: list[np.ndarray] = []
         state = torch.tensor(x, device=self._device)
         with torch.no_grad():
-            for _ in range(n_steps):
+            step = 0
+            while step < n_steps:
                 if self._use_torchdiffeq:
                     from torchdiffeq import odeint
 
@@ -183,6 +186,7 @@ class NeuralODEForecaster(BaseTimeSeries):
                 else:
                     state = self._rk4_step(self._f, state, self.dt)
                 preds.append(state.cpu().numpy().copy())
+                step += 1
         return np.stack(preds)
 
 
