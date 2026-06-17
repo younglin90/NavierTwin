@@ -20,15 +20,13 @@ from numpy.typing import NDArray
 
 
 def _ar_residual_ssr(X: NDArray, Y: NDArray, lag: int, with_y: bool) -> tuple[float, int]:
-    """SSR of AR(lag) for X with optional Y exogenous."""
-    T = len(X)
-    rows = []
-    for t in range(lag, T):
-        feats = list(X[t - lag:t])
-        if with_y:
-            feats.extend(Y[t - lag:t])
-        rows.append(feats)
-    A = np.asarray(rows)
+    """SSR of AR(lag) on X, optionally with lagged Y terms."""
+    x_lags = np.lib.stride_tricks.sliding_window_view(X, lag)[:-1]
+    if with_y:
+        y_lags = np.lib.stride_tricks.sliding_window_view(Y, lag)[:-1]
+        A = np.concatenate((x_lags, y_lags), axis=1)
+    else:
+        A = x_lags
     b = X[lag:]
     coef, *_ = np.linalg.lstsq(A, b, rcond=None)
     res = b - A @ coef
