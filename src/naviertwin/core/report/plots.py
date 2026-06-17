@@ -69,10 +69,13 @@ def plot_loss_curve(
         fig, ax = plt.subplots(figsize=(5, 3.2))
     else:
         fig = ax.figure
-    for label, L in losses.items():
+    def plot_one(item: tuple[str, list[float]]) -> None:
+        label, L = item
         if not L:
-            continue
+            return
         ax.plot(range(1, len(L) + 1), L, label=label)
+
+    tuple(map(plot_one, losses.items()))
     ax.set_xlabel("epoch")
     ax.set_ylabel("loss")
     if log_scale:
@@ -95,11 +98,10 @@ def plot_compare_metrics(
     else:
         fig = ax.figure
     names = list(results.keys())
-    vals = [results[n].get(metric, 0.0) for n in names]
+    vals = list(map(lambda n: results[n].get(metric, 0.0), names))
     ax.bar(names, vals, color="#3B6FCC")
     ax.set_ylabel(metric)
-    for lab in ax.get_xticklabels():
-        lab.set_rotation(30)
+    tuple(map(lambda lab: lab.set_rotation(30), ax.get_xticklabels()))
     return fig
 
 
