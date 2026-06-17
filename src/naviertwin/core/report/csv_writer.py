@@ -31,8 +31,12 @@ def write_csv(
     with p.open("w", newline="", encoding=encoding) as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
-        for row in rows_list:
-            w.writerow({k: row.get(k, "") for k in fieldnames})
+        tuple(
+            map(
+                lambda row: w.writerow(dict(map(lambda k: (k, row.get(k, "")), fieldnames))),
+                rows_list,
+            )
+        )
     return p
 
 
@@ -47,9 +51,7 @@ def write_metrics_table(
     metrics: Mapping[str, Mapping[str, float]],
 ) -> Path:
     """{'config_name': {'rmse': 0.1, 'r2': 0.9}} → CSV."""
-    rows = []
-    for name, m in metrics.items():
-        rows.append({"config": name, **m})
+    rows = list(map(lambda item: {"config": item[0], **item[1]}, metrics.items()))
     return write_csv(path, rows)
 
 
