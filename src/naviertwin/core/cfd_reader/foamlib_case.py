@@ -99,22 +99,38 @@ def parameter_sweep(
 
     # 모든 파라미터 조합 생성
     keys = list(sweep.keys())
-    grids = np.meshgrid(*(np.asarray(sweep[k]) for k in keys), indexing="ij")
-    combos = np.stack([g.ravel() for g in grids], axis=1)
+    arrays = []
+    key_idx = 0
+    while key_idx < len(keys):
+        arrays.append(np.asarray(sweep[keys[key_idx]]))
+        key_idx += 1
+    grids = np.meshgrid(*arrays, indexing="ij")
+    flat_grids = []
+    grid_idx = 0
+    while grid_idx < len(grids):
+        flat_grids.append(grids[grid_idx].ravel())
+        grid_idx += 1
+    combos = np.stack(flat_grids, axis=1)
 
     created: list[Path] = []
-    for i, combo in enumerate(combos):
+    i = 0
+    while i < len(combos):
+        combo = combos[i]
         case_dir = out / f"case_{i:03d}"
         if case_dir.exists():
             shutil.rmtree(case_dir)
         shutil.copytree(template, case_dir)
         # 파라미터 설정 — nu 는 transportProperties 에
-        for j, k in enumerate(keys):
+        j = 0
+        while j < len(keys):
+            k = keys[j]
             if k == "nu":
                 modify_transport_properties(case_dir, nu=float(combo[j]))
             # 필요 시 다른 키 확장
+            j += 1
         _ = FoamCase(str(case_dir))  # 검증
         created.append(case_dir)
+        i += 1
 
     logger.info("%d 케이스 생성: %s", len(created), out)
     return created
