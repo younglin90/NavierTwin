@@ -101,17 +101,11 @@ def lof_score(
     knn_idx = np.argsort(d, axis=1)[:, :k]
     k_dist = np.sort(d, axis=1)[:, k - 1]
     # reachability dist: rd(x, y) = max(k-dist(y), d(x, y))
-    rd = np.zeros((N, k))
-    for i in range(N):
-        for j_pos, j in enumerate(knn_idx[i]):
-            rd[i, j_pos] = max(k_dist[j], d[i, j])
+    rd = np.maximum(k_dist[knn_idx], np.take_along_axis(d, knn_idx, axis=1))
     # local reachability density
     lrd = 1.0 / (rd.mean(axis=1) + 1e-30)
     # LOF
-    lof = np.zeros(N)
-    for i in range(N):
-        lof[i] = lrd[knn_idx[i]].mean() / (lrd[i] + 1e-30)
-    return lof
+    return lrd[knn_idx].mean(axis=1) / (lrd + 1e-30)
 
 
 def isolation_depth(
@@ -149,12 +143,16 @@ def isolation_depth(
     rng = np.random.default_rng(seed)
 
     depths = np.zeros((n_trees, N))
-    for t in range(n_trees):
+    t = 0
+    while t < n_trees:
         sample_idx = rng.choice(N, size=sample_size, replace=False)
         X_sub = X[sample_idx]
         # 모든 점에 대해 깊이 측정
-        for i in range(N):
+        i = 0
+        while i < N:
             depths[t, i] = _isolation_depth_single(X[i], X_sub, rng)
+            i += 1
+        t += 1
 
     return depths.mean(axis=0)
 
@@ -228,15 +226,15 @@ def hampel_score_1d(
     N = len(x)
     half = window // 2
     padded = np.pad(x, half, mode="reflect")
-    out = np.zeros(N)
-    for i in range(N):
-        win = padded[i : i + window]
-        med = float(np.median(win))
-        mad = float(np.median(np.abs(win - med))) * 1.4826
-        if mad < 1e-30:
-            out[i] = 0.0
-        else:
-            out[i] = abs(x[i] - med) / mad
+    wins = np.lib.stride_tricks.sliding_window_view(padded, window)[:N]
+    med = np.median(wins, axis=1)
+    mad = np.median(np.abs(wins - med[:, np.newaxis]), axis=1) * 1.4826
+    out = np.divide(
+        np.abs(x - med),
+        mad,
+        out=np.zeros(N, dtype=np.float64),
+        where=mad >= 1e-30,
+    )
     return out
 
 
