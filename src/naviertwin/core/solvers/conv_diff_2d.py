@@ -16,13 +16,24 @@ from typing import Callable
 import numpy as np
 from numpy.typing import NDArray
 
+try:
+    from naviertwin._native import _kernels
+except Exception:  # pragma: no cover - optional extension
+    _kernels = None
+
 
 def solve_conv_diff_2d(
-    nx: int = 64, ny: int = 64,
-    Lx: float = 1.0, Ly: float = 1.0, T: float = 0.1,
-    u0: float = 1.0, v0: float = 0.5, D: float = 0.01,
+    nx: int = 64,
+    ny: int = 64,
+    Lx: float = 1.0,
+    Ly: float = 1.0,
+    T: float = 0.1,
+    u0: float = 1.0,
+    v0: float = 0.5,
+    D: float = 0.01,
     c0: Callable | None = None,
-    *, dt_factor: float = 0.3,
+    *,
+    dt_factor: float = 0.3,
 ) -> tuple[NDArray, NDArray, NDArray, NDArray]:
     dx = Lx / (nx - 1)
     dy = Ly / (ny - 1)
@@ -42,12 +53,17 @@ def solve_conv_diff_2d(
     else:
         c = c0(X, Y)
 
+    if _kernels is not None:
+        t, c_hist = _kernels.conv_diff_2d_evolve(c, n_steps, u0, v0, D, dx, dy, dt)
+        return x, y, t, c_hist
+
     C = np.zeros((nx, ny, n_steps + 1), dtype=np.float64)
     C[:, :, 0] = c
     t = np.zeros(n_steps + 1)
 
-    for k in range(n_steps):
-        # 1차 upwind for convection
+    k = 0
+    while k < n_steps:
+        # 1차 upwind convection
         if u0 >= 0:
             dcdx = (c[1:-1, 1:-1] - c[:-2, 1:-1]) / dx
         else:
@@ -56,10 +72,10 @@ def solve_conv_diff_2d(
             dcdy = (c[1:-1, 1:-1] - c[1:-1, :-2]) / dy
         else:
             dcdy = (c[1:-1, 2:] - c[1:-1, 1:-1]) / dy
-        # 2차 중심차분 for diffusion
+        # 2차 중심차분 diffusion
         d2c = (
-            (c[2:, 1:-1] - 2 * c[1:-1, 1:-1] + c[:-2, 1:-1]) / dx ** 2
-            + (c[1:-1, 2:] - 2 * c[1:-1, 1:-1] + c[1:-1, :-2]) / dy ** 2
+            (c[2:, 1:-1] - 2 * c[1:-1, 1:-1] + c[:-2, 1:-1]) / dx**2
+            + (c[1:-1, 2:] - 2 * c[1:-1, 1:-1] + c[1:-1, :-2]) / dy**2
         )
         c_new = c.copy()
         c_new[1:-1, 1:-1] = c[1:-1, 1:-1] + dt * (
@@ -68,6 +84,7 @@ def solve_conv_diff_2d(
         c = c_new
         C[:, :, k + 1] = c
         t[k + 1] = (k + 1) * dt
+        k += 1
     return x, y, t, C
 
 

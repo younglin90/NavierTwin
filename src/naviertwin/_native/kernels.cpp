@@ -3194,6 +3194,69 @@ static py::array_t<double> adi_heat_2d_step_native(Array2D u, double dt, double 
     return out;
 }
 
+static py::tuple conv_diff_2d_evolve_native(
+    Array2D c0, int n_steps, double u0, double v0, double diffusivity, double dx, double dy, double dt
+) {
+    if (c0.ndim() != 2) {
+        throw std::invalid_argument("c0 must be a 2D array");
+    }
+    if (n_steps < 0) {
+        throw std::invalid_argument("n_steps must be non-negative");
+    }
+    if (dx == 0.0 || dy == 0.0) {
+        throw std::invalid_argument("dx and dy must be non-zero");
+    }
+    const py::ssize_t nx = c0.shape(0);
+    const py::ssize_t ny = c0.shape(1);
+    const py::ssize_t nt = static_cast<py::ssize_t>(n_steps + 1);
+    auto t = py::array_t<double>({nt});
+    auto C = py::array_t<double>({nx, ny, nt});
+    double* tp = t.mutable_data();
+    double* Cp = C.mutable_data();
+    std::vector<double> c(static_cast<std::size_t>(nx * ny));
+    std::vector<double> next(static_cast<std::size_t>(nx * ny));
+    std::copy(c0.data(), c0.data() + nx * ny, c.begin());
+
+    for (py::ssize_t i = 0; i < nx; ++i) {
+        for (py::ssize_t j = 0; j < ny; ++j) {
+            Cp[(i * ny + j) * nt] = c[static_cast<std::size_t>(i * ny + j)];
+        }
+    }
+    tp[0] = 0.0;
+
+    for (int k = 0; k < n_steps; ++k) {
+        next = c;
+        for (py::ssize_t i = 1; i < nx - 1; ++i) {
+            for (py::ssize_t j = 1; j < ny - 1; ++j) {
+                const py::ssize_t idx = i * ny + j;
+                const double center = c[static_cast<std::size_t>(idx)];
+                const double dcdx = u0 >= 0.0
+                    ? (center - c[static_cast<std::size_t>((i - 1) * ny + j)]) / dx
+                    : (c[static_cast<std::size_t>((i + 1) * ny + j)] - center) / dx;
+                const double dcdy = v0 >= 0.0
+                    ? (center - c[static_cast<std::size_t>(i * ny + j - 1)]) / dy
+                    : (c[static_cast<std::size_t>(i * ny + j + 1)] - center) / dy;
+                const double d2c =
+                    (c[static_cast<std::size_t>((i + 1) * ny + j)] - 2.0 * center +
+                     c[static_cast<std::size_t>((i - 1) * ny + j)]) /
+                        (dx * dx) +
+                    (c[static_cast<std::size_t>(i * ny + j + 1)] - 2.0 * center +
+                     c[static_cast<std::size_t>(i * ny + j - 1)]) /
+                        (dy * dy);
+                next[static_cast<std::size_t>(idx)] = center + dt * (-u0 * dcdx - v0 * dcdy + diffusivity * d2c);
+            }
+        }
+        c.swap(next);
+        tp[k + 1] = static_cast<double>(k + 1) * dt;
+        for (py::ssize_t i = 0; i < nx; ++i) {
+            for (py::ssize_t j = 0; j < ny; ++j) {
+                Cp[(i * ny + j) * nt + k + 1] = c[static_cast<std::size_t>(i * ny + j)];
+            }
+        }
+    }
+    return py::make_tuple(t, C);
+}
+
 static py::array_t<double> kep_flux_native(ArrayD UL, ArrayD UR, double gamma) {
     if (UL.ndim() != 1 || UR.ndim() != 1 || UL.shape(0) < 3 || UR.shape(0) < 3) {
         throw std::invalid_argument("UL and UR must be 1D conservative states with at least three entries");
@@ -5214,6 +5277,10 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("winslow_smooth", &winslow_smooth_native, py::arg("X"), py::arg("Y"), py::arg("n_iter") = 30);
     m.def("fd_heat_2d_evolve", &fd_heat_2d_evolve, py::arg("u0"), py::arg("n_steps"), py::arg("cx"), py::arg("cy"), py::arg("dt"));
     m.def("adi_heat_2d_step", &adi_heat_2d_step_native, py::arg("u"), py::arg("dt"), py::arg("dx"), py::arg("dy"), py::arg("alpha") = 1.0);
+    m.def(
+        "conv_diff_2d_evolve", &conv_diff_2d_evolve_native, py::arg("c0"), py::arg("n_steps"),
+        py::arg("u0"), py::arg("v0"), py::arg("diffusivity"), py::arg("dx"), py::arg("dy"), py::arg("dt")
+    );
     m.def("kep_flux", &kep_flux_native, py::arg("UL"), py::arg("UR"), py::arg("gamma") = 1.4);
     m.def("ppm_face_values", &ppm_face_values_native, py::arg("u"));
     m.def(
