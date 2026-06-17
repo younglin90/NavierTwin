@@ -27,18 +27,47 @@ def write_restart(
     arr = np.asarray(data, dtype=np.float64)
     if arr.shape[1] != len(columns):
         raise ValueError(f"data ncols={arr.shape[1]} != columns={len(columns)}")
-    header = "\t".join(f'"{c}"' for c in columns)
+    header_parts = []
+    col_idx = 0
+    while col_idx < len(columns):
+        header_parts.append(f'"{columns[col_idx]}"')
+        col_idx += 1
+    header = "\t".join(header_parts)
     lines = [header]
-    lines.extend("\t".join(f"{x:.16e}" for x in row) for row in arr)
+    row_idx = 0
+    while row_idx < len(arr):
+        row = arr[row_idx]
+        values = []
+        value_idx = 0
+        while value_idx < len(row):
+            values.append(f"{row[value_idx]:.16e}")
+            value_idx += 1
+        lines.append("\t".join(values))
+        row_idx += 1
     Path(path).write_text("\n".join(lines) + "\n")
 
 
 def read_restart(path: str | Path) -> tuple[list[str], NDArray[np.float64]]:
     text = Path(path).read_text().strip().splitlines()
-    cols = [c.strip().strip('"') for c in text[0].split("\t")]
-    data = np.array([
-        [float(x) for x in line.split("\t")] for line in text[1:]
-    ])
+    cols = []
+    raw_cols = text[0].split("\t")
+    col_idx = 0
+    while col_idx < len(raw_cols):
+        cols.append(raw_cols[col_idx].strip().strip('"'))
+        col_idx += 1
+
+    rows = []
+    line_idx = 1
+    while line_idx < len(text):
+        parts = text[line_idx].split("\t")
+        row = []
+        part_idx = 0
+        while part_idx < len(parts):
+            row.append(float(parts[part_idx]))
+            part_idx += 1
+        rows.append(row)
+        line_idx += 1
+    data = np.array(rows)
     return cols, data
 
 
