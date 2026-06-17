@@ -18,9 +18,11 @@ Examples:
     ... )
     >>> twin.initialize(rng.standard_normal((40, 2)))
     >>> # 시뮬레이션된 관측
-    >>> for _ in range(5):
+    >>> repeat = 0
+    >>> while repeat < 5:
     ...     twin.step()
     ...     twin.assimilate(np.array([0.5, -0.3]) + 0.01 * rng.standard_normal(2))
+    ...     repeat += 1
     >>> est = twin.estimate()
     >>> est.shape
     (2,)
@@ -77,9 +79,9 @@ class StreamingDigitalTwin:
         """앙상블을 1 스텝 전파 (모델 + 프로세스 잡음)."""
         if self._ensemble is None:
             raise RuntimeError("initialize() 먼저 호출")
-        new_ens = np.zeros_like(self._ensemble)
-        for i in range(self.n_ensemble):
-            new_ens[i] = self.model_fn(self._ensemble[i])
+        new_ens = np.stack(tuple(map(self.model_fn, self._ensemble))).astype(
+            np.float64, copy=False
+        )
         noise = self.rng.standard_normal(new_ens.shape) * self.process_noise
         self._ensemble = new_ens + noise
         self.history.append(self.estimate())
