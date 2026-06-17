@@ -124,21 +124,28 @@ class IKNO(BaseTimeSeries):
         if self.seed is not None:
             torch.manual_seed(self.seed)
         Cp = _build_coupling(self.n_features, self.hidden)
-        self._blocks = nn.ModuleList(
-            [Cp(swap=(i % 2 == 1)) for i in range(self.n_blocks)]
-        )
+        blocks = nn.ModuleList()
+        block_idx = 0
+        while block_idx < self.n_blocks:
+            blocks.append(Cp(swap=(block_idx % 2 == 1)))
+            block_idx += 1
+        self._blocks = blocks
         self._K = nn.Linear(self.n_features, self.n_features, bias=False)
 
     def _encode(self, x: Any) -> Any:
         z = x
-        for blk in self._blocks:
-            z = blk(z)
+        block_idx = 0
+        while block_idx < len(self._blocks):
+            z = self._blocks[block_idx](z)
+            block_idx += 1
         return z
 
     def _decode(self, z: Any) -> Any:
         x = z
-        for blk in reversed(self._blocks):
-            x = blk.inverse(x)
+        block_idx = len(self._blocks) - 1
+        while block_idx >= 0:
+            x = self._blocks[block_idx].inverse(x)
+            block_idx -= 1
         return x
 
     def fit(self, dataset: dict[str, Any]) -> None:
@@ -151,14 +158,8 @@ class IKNO(BaseTimeSeries):
         if seqs.shape[2] != self.n_features:
             raise ValueError("F 불일치")
 
-        X_list: list[np.ndarray] = []
-        Y_list: list[np.ndarray] = []
-        for s in seqs:
-            for t in range(s.shape[0] - 1):
-                X_list.append(s[t])
-                Y_list.append(s[t + 1])
-        Xa = np.asarray(X_list, dtype=np.float32)
-        Ya = np.asarray(Y_list, dtype=np.float32)
+        Xa = np.ascontiguousarray(seqs[:, :-1, :]).reshape(-1, self.n_features)
+        Ya = np.ascontiguousarray(seqs[:, 1:, :]).reshape(-1, self.n_features)
 
         self._device = self._resolve_device()
         self._build()
@@ -175,9 +176,15 @@ class IKNO(BaseTimeSeries):
             shuffle=True,
         )
         self.train_losses_ = []
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             epoch = 0.0
-            for xb, yb in loader:
+            batches = iter(loader)
+            while True:
+                try:
+                    xb, yb = next(batches)
+                except StopIteration:
+                    break
                 xb = xb.to(self._device)
                 yb = yb.to(self._device)
                 optim.zero_grad()
@@ -190,6 +197,7 @@ class IKNO(BaseTimeSeries):
                 epoch += float(loss.item()) * xb.shape[0]
             epoch /= max(len(Xa), 1)
             self.train_losses_.append(epoch)
+            epoch_idx += 1
 
         self.is_fitted = True
         logger.info("IKNO 학습 완료: loss=%.6g", self.train_losses_[-1])
@@ -205,10 +213,12 @@ class IKNO(BaseTimeSeries):
         with torch.no_grad():
             x = torch.tensor(x0[None, :], device=self._device)
             z = self._encode(x)
-            for _ in range(n_steps):
+            step = 0
+            while step < n_steps:
                 z = self._K(z)
                 x_next = self._decode(z).cpu().numpy()[0]
                 preds.append(x_next.copy())
+                step += 1
         return np.stack(preds)
 
 
