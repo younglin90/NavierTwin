@@ -1,4 +1,4 @@
-"""FMI/FMU export adapter for NavierTwin digital twins.
+"""FMI/FMU export adapter exporting NavierTwin digital twins.
 
 The exporter writes a deterministic FMI 2.0 Co-Simulation FMU archive containing
 ``modelDescription.xml`` and a pickled ``TwinEngine`` resource. It is intentionally
@@ -147,13 +147,19 @@ def validate_fmu_archive(path: str | Path) -> dict[str, Any]:
     if root.find("CoSimulation") is None:
         errors.append("CoSimulation element missing")
 
-    scalar_names = {
-        element.attrib.get("name")
-        for element in root.findall("./ModelVariables/ScalarVariable")
-    }
-    for name in [*manifest.get("input_names", []), *manifest.get("output_names", [])]:
+    scalar_names = set(
+        map(
+            lambda element: element.attrib.get("name"),
+            root.findall("./ModelVariables/ScalarVariable"),
+        )
+    )
+    variable_names = [*manifest.get("input_names", []), *manifest.get("output_names", [])]
+    variable_idx = 0
+    while variable_idx < len(variable_names):
+        name = variable_names[variable_idx]
         if name not in scalar_names:
             errors.append(f"ScalarVariable missing: {name}")
+        variable_idx += 1
 
     return {
         "status": "error" if errors else "ok",
@@ -169,7 +175,7 @@ def _resolve_input_names(engine: object, names: list[str] | None) -> list[str]:
         return _validate_names(names, label="input_names")
     surrogate = getattr(engine, "surrogate", None)
     dim = int(getattr(surrogate, "input_dim", 0) or getattr(engine, "input_dim", 0) or 1)
-    return [f"param_{idx}" for idx in range(max(1, dim))]
+    return list(map(lambda idx: f"param_{idx}", range(max(1, dim))))
 
 
 def _resolve_output_names(engine: object, names: list[str] | None) -> list[str]:
@@ -181,12 +187,12 @@ def _resolve_output_names(engine: object, names: list[str] | None) -> list[str]:
         count = int(getattr(modes, "shape", [1])[0])
     else:
         count = int(getattr(engine, "output_dim", 0) or 1)
-    # Keep modelDescription compact for large CFD fields while documenting the full count.
-    return [f"field_{idx}" for idx in range(min(max(1, count), 16))]
+    # Keep modelDescription compact with large CFD fields while documenting the full count.
+    return list(map(lambda idx: f"field_{idx}", range(min(max(1, count), 16))))
 
 
 def _validate_names(names: list[str], *, label: str) -> list[str]:
-    cleaned = [name.strip() for name in names if name.strip()]
+    cleaned = list(filter(None, map(str.strip, names)))
     if not cleaned:
         raise ValueError(f"{label} must include at least one name")
     if len(set(cleaned)) != len(cleaned):
@@ -250,14 +256,23 @@ def _render_model_description(
 ) -> str:
     variables: list[str] = []
     value_ref = 1
-    for name in input_names:
+    input_idx = 0
+    while input_idx < len(input_names):
+        name = input_names[input_idx]
         variables.append(_scalar_variable(name, value_ref, causality="input"))
         value_ref += 1
-    for name in output_names:
+        input_idx += 1
+    output_idx = 0
+    while output_idx < len(output_names):
+        name = output_names[output_idx]
         variables.append(_scalar_variable(name, value_ref, causality="output"))
         value_ref += 1
+        output_idx += 1
     model_structure = "\n".join(
-        f'    <Unknown index="{idx}"/>' for idx in range(len(input_names) + 1, len(input_names) + len(output_names) + 1)
+        map(
+            lambda idx: f'    <Unknown index="{idx}"/>',
+            range(len(input_names) + 1, len(input_names) + len(output_names) + 1),
+        )
     )
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
@@ -307,7 +322,7 @@ def _documentation_html(manifest: dict[str, Any]) -> str:
         f"<h1>{model_name}</h1>\n"
         f"<p>{description}</p>\n"
         "<p>This FMU contains FMI 2.0 metadata and a NavierTwin Python resource "
-        "for evaluating the exported digital twin.</p>\n"
+        "to evaluate the exported digital twin.</p>\n"
         "</body></html>\n"
     )
 
