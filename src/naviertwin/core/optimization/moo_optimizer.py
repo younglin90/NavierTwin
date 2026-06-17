@@ -36,30 +36,41 @@ def _dominates(a: NDArray[np.float64], b: NDArray[np.float64]) -> bool:
 def _fast_non_dominated_sort(F: NDArray[np.float64]) -> list[list[int]]:
     """F: (N, m) → front 별 인덱스 리스트."""
     N = F.shape[0]
-    S: list[list[int]] = [[] for _ in range(N)]
+    S: list[list[int]] = list(map(lambda _: [], range(N)))
     n = np.zeros(N, dtype=int)
     rank = np.zeros(N, dtype=int)
     fronts: list[list[int]] = [[]]
-    for p in range(N):
-        for q in range(N):
+    p = 0
+    while p < N:
+        q = 0
+        while q < N:
             if p == q:
+                q += 1
                 continue
             if _dominates(F[p], F[q]):
                 S[p].append(q)
             elif _dominates(F[q], F[p]):
                 n[p] += 1
+            q += 1
         if n[p] == 0:
             rank[p] = 0
             fronts[0].append(p)
+        p += 1
     i = 0
     while fronts[i]:
         nxt: list[int] = []
-        for p in fronts[i]:
-            for q in S[p]:
+        front_pos = 0
+        while front_pos < len(fronts[i]):
+            p = fronts[i][front_pos]
+            dominated_pos = 0
+            while dominated_pos < len(S[p]):
+                q = S[p][dominated_pos]
                 n[q] -= 1
                 if n[q] == 0:
                     rank[q] = i + 1
                     nxt.append(q)
+                dominated_pos += 1
+            front_pos += 1
         i += 1
         fronts.append(nxt)
     return fronts[:-1]
@@ -73,15 +84,20 @@ def _crowding_distance(F: NDArray[np.float64], idx: list[int]) -> NDArray[np.flo
         dist[:] = np.inf
         return dist
     sub = F[idx]
-    for k in range(m):
+    k = 0
+    while k < m:
         order = np.argsort(sub[:, k])
         dist[order[0]] = np.inf
         dist[order[-1]] = np.inf
         fmin, fmax = sub[order[0], k], sub[order[-1], k]
         if fmax - fmin == 0:
+            k += 1
             continue
-        for i in range(1, len(idx) - 1):
+        i = 1
+        while i < len(idx) - 1:
             dist[order[i]] += (sub[order[i + 1], k] - sub[order[i - 1], k]) / (fmax - fmin)
+            i += 1
+        k += 1
     return dist
 
 
@@ -129,12 +145,14 @@ class NSGA2:
         self, objective: Callable[[NDArray[np.float64]], list[float]]
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         P = self._init_pop()
-        F = np.array([objective(x) for x in P])
+        F = np.array(list(map(objective, P)))
 
-        for _ in range(self.n_gen):
+        gen = 0
+        while gen < self.n_gen:
             # 자손 생성
             Q = np.zeros_like(P)
-            for i in range(0, self.pop_size, 2):
+            i = 0
+            while i < self.pop_size:
                 a, b = P[self.rng.integers(self.pop_size, size=2)]
                 c1, c2 = self._crossover(a, b)
                 c1 = self._mutate(c1)
@@ -142,7 +160,8 @@ class NSGA2:
                 Q[i] = c1
                 if i + 1 < self.pop_size:
                     Q[i + 1] = c2
-            FQ = np.array([objective(x) for x in Q])
+                i += 2
+            FQ = np.array(list(map(objective, Q)))
 
             # P+Q 에서 비지배 정렬
             R = np.vstack([P, Q])
@@ -150,18 +169,25 @@ class NSGA2:
             fronts = _fast_non_dominated_sort(FR)
 
             new_idx: list[int] = []
-            for front in fronts:
+            front_idx = 0
+            while front_idx < len(fronts):
+                front = fronts[front_idx]
                 if len(new_idx) + len(front) <= self.pop_size:
                     new_idx.extend(front)
                 else:
                     dist = _crowding_distance(FR, front)
                     order = np.argsort(-dist)
-                    for k in order:
+                    order_idx = 0
+                    while order_idx < len(order):
+                        k = order[order_idx]
                         if len(new_idx) < self.pop_size:
                             new_idx.append(front[k])
+                        order_idx += 1
                     break
+                front_idx += 1
             P = R[new_idx]
             F = FR[new_idx]
+            gen += 1
 
         # 최종 첫 번째 프론트
         fronts = _fast_non_dominated_sort(F)
