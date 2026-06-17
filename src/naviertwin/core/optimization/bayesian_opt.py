@@ -98,14 +98,18 @@ class BayesianOptimizer:
 
         rng = np.random.default_rng(self.seed)
         X_init = self._sample(self.n_initial, rng)
-        for x in X_init:
+        init_idx = 0
+        while init_idx < X_init.shape[0]:
+            x = X_init[init_idx]
             val = float(f(x))
             self.X_.append(x)
             self.y_.append(val)
+            init_idx += 1
 
         kernel = ConstantKernel(1.0) * Matern(length_scale=1.0, nu=2.5)
 
-        for _ in range(self.max_iter):
+        step = 0
+        while step < self.max_iter:
             X_arr = np.vstack(self.X_)
             y_arr = np.asarray(self.y_, dtype=np.float64)
             gp = GaussianProcessRegressor(
@@ -120,6 +124,7 @@ class BayesianOptimizer:
 
             self.X_.append(x_next)
             self.y_.append(y_next)
+            step += 1
 
         y_arr = np.asarray(self.y_, dtype=np.float64)
         best_idx = int(np.argmin(y_arr))
