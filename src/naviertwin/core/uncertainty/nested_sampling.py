@@ -33,12 +33,13 @@ def nested_sample(
 ) -> tuple[NDArray, float]:
     """반환: (dead points, logZ 추정)."""
     rng = rng if rng is not None else np.random.default_rng(0)
-    live = [prior_sample(rng) for _ in range(n_live)]
-    live_ll = np.array([loglike(p) for p in live])
+    live = list(map(lambda _: prior_sample(rng), range(n_live)))
+    live_ll = np.fromiter(map(loglike, live), dtype=np.float64, count=n_live)
     dead = []
     log_w = -np.log(n_live)
     log_Z = -np.inf
-    for k in range(n_iter):
+    k = 0
+    while k < n_iter:
         idx = int(np.argmin(live_ll))
         ll_min = float(live_ll[idx])
         log_X = -(k + 1) / n_live  # log prior volume
@@ -46,12 +47,15 @@ def nested_sample(
         log_Z = np.logaddexp(log_Z, contribution + log_w)
         dead.append(live[idx])
         # replace with new sample exceeding ll_min
-        for _ in range(1000):
+        attempt = 0
+        while attempt < 1000:
             cand = prior_sample(rng)
             if loglike(cand) > ll_min:
                 live[idx] = cand
                 live_ll[idx] = loglike(cand)
                 break
+            attempt += 1
+        k += 1
     return np.asarray(dead), float(log_Z)
 
 
