@@ -18,7 +18,10 @@ def _torch():
 
 
 def VAE(
-    in_dim: int, latent_dim: int = 8, hidden: int = 64, n_layers: int = 2,
+    in_dim: int,
+    latent_dim: int = 8,
+    hidden: int = 64,
+    n_layers: int = 2,
 ):
     """MLP VAE (encoder → μ,log σ² → reparam → decoder)."""
     _torch()
@@ -27,10 +30,12 @@ def VAE(
 
     def _mlp(sizes):
         layers = []
-        for i in range(len(sizes) - 1):
+        i = 0
+        while i < len(sizes) - 1:
             layers.append(nn.Linear(sizes[i], sizes[i + 1]))
             if i < len(sizes) - 2:
                 layers.append(nn.GELU())
+            i += 1
         return nn.Sequential(*layers)
 
     class _VAE(nn.Module):
