@@ -26,23 +26,25 @@ def pso(
 ) -> tuple[NDArray[np.float64], float]:
     rng = np.random.default_rng(seed)
     d = len(bounds)
-    lo = np.array([b[0] for b in bounds])
-    hi = np.array([b[1] for b in bounds])
+    bounds_arr = np.asarray(bounds, dtype=np.float64)
+    lo = bounds_arr[:, 0]
+    hi = bounds_arr[:, 1]
     x = rng.uniform(lo, hi, size=(n_particles, d))
     v = rng.uniform(-(hi - lo), hi - lo, size=(n_particles, d)) * 0.1
-    f = np.array([float(objective(xi)) for xi in x])
+    f = np.fromiter(map(lambda xi: float(objective(xi)), x), dtype=np.float64)
     pbest = x.copy()
     pbest_f = f.copy()
     g_idx = int(np.argmin(pbest_f))
     gbest = pbest[g_idx].copy()
     gbest_f = float(pbest_f[g_idx])
 
-    for _ in range(n_iter):
+    iter_idx = 0
+    while iter_idx < n_iter:
         r1 = rng.random((n_particles, d))
         r2 = rng.random((n_particles, d))
         v = w * v + c1 * r1 * (pbest - x) + c2 * r2 * (gbest - x)
         x = np.clip(x + v, lo, hi)
-        f = np.array([float(objective(xi)) for xi in x])
+        f = np.fromiter(map(lambda xi: float(objective(xi)), x), dtype=np.float64)
         better = f < pbest_f
         pbest[better] = x[better]
         pbest_f[better] = f[better]
@@ -50,6 +52,7 @@ def pso(
         if pbest_f[g_idx] < gbest_f:
             gbest = pbest[g_idx].copy()
             gbest_f = float(pbest_f[g_idx])
+        iter_idx += 1
     return gbest, gbest_f
 
 
