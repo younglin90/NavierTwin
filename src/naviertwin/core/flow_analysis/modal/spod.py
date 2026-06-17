@@ -80,29 +80,28 @@ def compute_spod(
 
     # 블록별 FFT → (n_features, n_freq, n_blocks)
     n_freq = n_fft // 2 + 1
-    Q = np.zeros((n_features, n_freq, n_blocks), dtype=np.complex128)
-    for b in range(n_blocks):
-        start = b * step
-        block = X[:, start : start + n_fft] * win[None, :]
-        Q[:, :, b] = np.fft.rfft(block, axis=1) / n_fft
+    blocks = np.lib.stride_tricks.sliding_window_view(X, n_fft, axis=1)[
+        :, ::step, :
+    ][:, :n_blocks, :]
+    Q = np.fft.rfft(blocks * win[np.newaxis, np.newaxis, :], axis=2)
+    Q = np.transpose(Q / n_fft, (0, 2, 1))
 
     # 각 주파수마다 cross-spectral density 의 SVD
     eigvals = np.zeros((n_freq, n_modes), dtype=np.float64)
     modes = np.zeros((n_features, n_freq, n_modes), dtype=np.complex128)
 
-    for k in range(n_freq):
-        qk = Q[:, k, :]  # (n_features, n_blocks)
-        # 작은 블록 수에선 method-of-snapshots 사용
-        gram = (qk.conj().T @ qk) / (n_blocks * win_power)
-        w, v = np.linalg.eigh(gram)
-        order = np.argsort(w)[::-1]
-        w = w[order].real
-        v = v[:, order]
-        keep = min(n_modes, len(w))
-        eigvals[k, :keep] = np.maximum(w[:keep], 0.0)
-        # SPOD 모드 = qk @ v / sqrt(λ)
-        lam = np.sqrt(np.maximum(w[:keep], 1e-30))
-        modes[:, k, :keep] = qk @ v[:, :keep] / lam[None, :]
+    gram = np.einsum("fkb,fkc->kbc", Q.conj(), Q) / (n_blocks * win_power)
+    w, v = np.linalg.eigh(gram)
+    order = np.argsort(w, axis=1)[:, ::-1]
+    w = np.take_along_axis(w, order, axis=1).real
+    v = np.take_along_axis(v, order[:, np.newaxis, :], axis=2)
+    keep = min(n_modes, n_blocks)
+    eigvals[:, :keep] = np.maximum(w[:, :keep], 0.0)
+    lam = np.sqrt(np.maximum(w[:, :keep], 1e-30))
+    modes[:, :, :keep] = (
+        np.einsum("fkb,kbm->fkm", Q, v[:, :, :keep])
+        / lam[np.newaxis, :, :]
+    )
 
     frequencies = np.fft.rfftfreq(n_fft, d=dt)
     logger.info(
