@@ -33,10 +33,8 @@ def stft(
         w = np.hamming(window)
     else:
         w = np.ones(window)
-    Z = np.zeros((window // 2 + 1, n_frames), dtype=np.complex128)
-    for k in range(n_frames):
-        seg = x[k * step: k * step + window] * w
-        Z[:, k] = np.fft.rfft(seg)
+    frames = np.lib.stride_tricks.sliding_window_view(x, window)[::step][:n_frames]
+    Z = np.fft.rfft(frames * w, axis=1).T
     freqs = np.fft.rfftfreq(window, d=1.0 / fs)
     times = (np.arange(n_frames) * step + window / 2) / fs
     return freqs, times, Z
