@@ -94,15 +94,18 @@ class MIONet(BaseOperator):
         if self.seed is not None:
             torch.manual_seed(self.seed)
 
-        self._branches = nn.ModuleList(
-            [
+        branches = nn.ModuleList()
+        branch_idx = 0
+        while branch_idx < len(self.branch_in_list):
+            m = self.branch_in_list[branch_idx]
+            branches.append(
                 _mlp(
                     [m] + [self.hidden] * (self.n_layers - 1) + [self.latent],
                     self.activation,
                 )
-                for m in self.branch_in_list
-            ]
-        )
+            )
+            branch_idx += 1
+        self._branches = branches
         self._trunk = _mlp(
             [self.trunk_in]
             + [self.hidden] * (self.n_layers - 1)
@@ -127,8 +130,10 @@ class MIONet(BaseOperator):
 
         if self.merge == "product":
             out = branch_feats[0]
-            for f in branch_feats[1:]:
-                out = out * f
+            feat_idx = 1
+            while feat_idx < len(branch_feats):
+                out = out * branch_feats[feat_idx]
+                feat_idx += 1
             return out
         # concat
         return self._merge_net(torch.cat(branch_feats, dim=-1))
@@ -137,7 +142,7 @@ class MIONet(BaseOperator):
         import torch
         from torch.utils.data import DataLoader, TensorDataset
 
-        Bs = [np.asarray(b, dtype=np.float32) for b in dataset["branch_inputs"]]
+        Bs = tuple(map(lambda b: np.asarray(b, dtype=np.float32), dataset["branch_inputs"]))
         T = np.asarray(dataset["trunk_inputs"], dtype=np.float32)
         Y = np.asarray(dataset["outputs"], dtype=np.float32)
 
@@ -145,11 +150,15 @@ class MIONet(BaseOperator):
             raise ValueError(
                 f"branch_inputs 수({len(Bs)}) != branch_in_list({len(self.branch_in_list)})"
             )
-        for k, (b, m) in enumerate(zip(Bs, self.branch_in_list)):
+        k = 0
+        while k < len(Bs):
+            b = Bs[k]
+            m = self.branch_in_list[k]
             if b.shape[1] != m:
                 raise ValueError(
                     f"branch[{k}] shape[1]={b.shape[1]} != 기대값 {m}"
                 )
+            k += 1
         if Y.shape[1] != T.shape[0]:
             raise ValueError("outputs 쿼리 길이 불일치")
 
@@ -168,7 +177,7 @@ class MIONet(BaseOperator):
         optim = torch.optim.Adam(params, lr=self.lr)
         loss_fn = torch.nn.MSELoss()
 
-        tensors = [torch.tensor(b) for b in Bs] + [torch.tensor(Y)]
+        tensors = tuple(map(torch.tensor, Bs)) + (torch.tensor(Y),)
         loader = DataLoader(
             TensorDataset(*tensors),
             batch_size=min(self.batch_size, len(Bs[0])),
@@ -177,14 +186,24 @@ class MIONet(BaseOperator):
 
         self.train_losses_ = []
         n_branches = len(self.branch_in_list)
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             epoch_loss = 0.0
             trunk_feat = self._trunk(trunk_t)
-            for batch in loader:
-                bs = [b.to(self._device) for b in batch[:n_branches]]
+            batches = iter(loader)
+            while True:
+                try:
+                    batch = next(batches)
+                except StopIteration:
+                    break
+                bs = tuple(map(lambda b: b.to(self._device), batch[:n_branches]))
                 yb = batch[-1].to(self._device)
                 optim.zero_grad()
-                feats = [self._branches[k](bs[k]) for k in range(n_branches)]
+                feats = []
+                k = 0
+                while k < n_branches:
+                    feats.append(self._branches[k](bs[k]))
+                    k += 1
                 merged = self._combine(feats)
                 trunk_feat = self._trunk(trunk_t)
                 pred = merged @ trunk_feat.T + self._bias
@@ -194,6 +213,7 @@ class MIONet(BaseOperator):
                 epoch_loss += float(loss.item()) * bs[0].shape[0]
             epoch_loss /= max(len(Bs[0]), 1)
             self.train_losses_.append(epoch_loss)
+            epoch_idx += 1
 
         self._trunk_cache = T
         self.n_epochs = self.max_epochs
@@ -209,14 +229,18 @@ class MIONet(BaseOperator):
         import torch
 
         self._check_fitted()
-        Bs = [np.asarray(b, dtype=np.float32) for b in inputs["branch_inputs"]]
+        Bs = tuple(map(lambda b: np.asarray(b, dtype=np.float32), inputs["branch_inputs"]))
         T = np.asarray(
             inputs.get("trunk_inputs", self._trunk_cache), dtype=np.float32
         )
         with torch.no_grad():
-            bs = [torch.tensor(b, device=self._device) for b in Bs]
+            bs = tuple(map(lambda b: torch.tensor(b, device=self._device), Bs))
             tt = torch.tensor(T, device=self._device)
-            feats = [self._branches[k](bs[k]) for k in range(len(bs))]
+            feats = []
+            k = 0
+            while k < len(bs):
+                feats.append(self._branches[k](bs[k]))
+                k += 1
             merged = self._combine(feats)
             tf = self._trunk(tt)
             out = merged @ tf.T + self._bias
