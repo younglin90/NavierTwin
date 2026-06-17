@@ -15,10 +15,7 @@ Examples:
     >>> M = np.array([[0.9, 0.1], [0.0, 0.95]])
     >>> H = np.eye(2)
     >>> x_true = np.array([1.0, 0.5])
-    >>> traj = [x_true]
-    >>> for _ in range(5):
-    ...     traj.append(M @ traj[-1])
-    >>> Y = np.array(traj[1:])  # (5, 2)
+    >>> Y = np.vstack((M @ x_true, np.linalg.matrix_power(M, 2) @ x_true))
     >>> x_b = np.array([0.5, 0.2])
     >>> B = np.eye(2)
     >>> R = 0.01 * np.eye(2)
@@ -32,6 +29,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
 from naviertwin.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -63,6 +61,8 @@ def four_dvar_linear(
     Returns:
         최적 초기 상태 x_0 (n,).
     """
+    if _kernels is None:
+        raise ImportError("naviertwin._native._kernels is required by four_dvar_linear")
     x_b = np.asarray(x_b, dtype=np.float64).ravel()
     B = np.asarray(B, dtype=np.float64)
     Y = np.asarray(Y, dtype=np.float64)
@@ -82,14 +82,16 @@ def four_dvar_linear(
     A = B_inv.copy()
     b = np.zeros(n)
     Mk = np.eye(n)
-    for k in range(K):
+    k = 0
+    while k < K:
         Mk = M @ Mk  # M^{k+1}
         HM = H @ Mk
         innov = Y[k] - HM @ x_b
         A += HM.T @ R_inv @ HM
         b += HM.T @ R_inv @ innov
+        k += 1
 
-    delta = np.linalg.solve(A, b)
+    delta = _kernels.solve_dense(A, b)
     x0 = x_b + delta
     logger.info("4D-Var: K=%d, ||δ||=%.4g", K, float(np.linalg.norm(delta)))
     return x0
