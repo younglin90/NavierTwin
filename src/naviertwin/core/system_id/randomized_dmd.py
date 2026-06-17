@@ -15,11 +15,16 @@ Examples:
 from __future__ import annotations
 
 import numpy as np
+from numpy.linalg import svd as _svd
 from numpy.typing import NDArray
 
 
 def randomized_dmd(
-    X: NDArray[np.float64], *, rank: int = 5, oversamp: int = 5, seed: int = 0,
+    X: NDArray[np.float64],
+    *,
+    rank: int = 5,
+    oversamp: int = 5,
+    seed: int = 0,
 ) -> tuple[NDArray[np.complex128], NDArray[np.complex128]]:
     """Randomized DMD; 반환: (eigenvalues, modes)."""
     X = np.asarray(X, dtype=np.float64)
@@ -33,7 +38,7 @@ def randomized_dmd(
     Q, _ = np.linalg.qr(Y)
     B1 = Q.T @ X1  # (p, m-1)
     B2 = Q.T @ X2
-    U, s, Vt = np.linalg.svd(B1, full_matrices=False)
+    U, s, Vt = _svd(B1, full_matrices=False)
     r = min(rank, U.shape[1])
     U = U[:, :r]
     s = s[:r]
