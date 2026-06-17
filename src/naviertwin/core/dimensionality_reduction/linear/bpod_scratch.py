@@ -20,6 +20,7 @@ Examples:
 from __future__ import annotations
 
 import numpy as np
+from numpy.linalg import svd as _svd
 from numpy.typing import NDArray
 
 
@@ -30,11 +31,13 @@ def lyapunov_disc(
     """discrete Lyapunov: X = A X Aᵀ + Q, 반복 누적."""
     X = np.zeros_like(Q)
     term = Q.copy()
-    for _ in range(max_iter):
+    iteration = 0
+    while iteration < max_iter:
         X = X + term
         term = A @ term @ A.T
         if np.max(np.abs(term)) < tol:
             break
+        iteration += 1
     return X
 
 
@@ -51,7 +54,7 @@ def bpod_reduce(
     # Cholesky
     Lc = np.linalg.cholesky(Wc + 1e-12 * np.eye(Wc.shape[0]))
     Lo = np.linalg.cholesky(Wo + 1e-12 * np.eye(Wo.shape[0]))
-    U, s, Vt = np.linalg.svd(Lo.T @ Lc, full_matrices=False)
+    U, s, Vt = _svd(Lo.T @ Lc, full_matrices=False)
     k = int(min(r, s.size))
     s_sq = np.sqrt(s[:k])
     T = Lc @ Vt.T[:, :k] @ np.diag(1.0 / s_sq)
