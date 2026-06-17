@@ -34,18 +34,23 @@ def mads_minimize(
     while delta > delta_min and iter_count < max_iter:
         # poll: ±e_i
         success = False
-        for i in range(n):
-            for sign in (+1, -1):
+        i = 0
+        signs = (+1, -1)
+        while i < n:
+            sign_idx = 0
+            while sign_idx < len(signs):
                 trial = x.copy()
-                trial[i] += sign * delta
+                trial[i] += signs[sign_idx] * delta
                 ft = f(trial)
                 if ft < fx:
                     x = trial
                     fx = ft
                     success = True
                     break
+                sign_idx += 1
             if success:
                 break
+            i += 1
         if not success:
             delta *= 0.5
         else:
