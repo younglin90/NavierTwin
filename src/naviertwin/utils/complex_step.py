@@ -37,11 +37,13 @@ def cs_gradient(
     x = np.asarray(x, dtype=np.float64).ravel()
     g = np.zeros_like(x)
     xc = x.astype(np.complex128)
-    for i in range(x.size):
+    i = 0
+    while i < x.size:
         orig = xc[i]
         xc[i] = complex(x[i], h)
         g[i] = float(np.imag(f(xc)) / h)
         xc[i] = orig
+        i += 1
     return g
 
 
@@ -57,12 +59,14 @@ def cs_jacobian(
     f0 = np.asarray(f(xc), dtype=np.complex128).ravel()
     m = f0.size
     J = np.zeros((m, x.size))
-    for i in range(x.size):
+    i = 0
+    while i < x.size:
         orig = xc[i]
         xc[i] = complex(x[i], h)
         val = np.asarray(f(xc), dtype=np.complex128).ravel()
         J[:, i] = np.imag(val) / h
         xc[i] = orig
+        i += 1
     return J
 
 
