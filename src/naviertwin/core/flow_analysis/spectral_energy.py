@@ -25,6 +25,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import HAS_NATIVE_KERNELS, _kernels
 from naviertwin.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -117,13 +118,22 @@ def energy_spectrum_2d(
     k_max = np.min([kx.max(), np.abs(ky).max()])
     n_bins = min(Nx // 2, Ny // 2)
     k_bins = np.linspace(0, k_max, n_bins + 1)
-    E_radial = np.zeros(n_bins)
     k_radial = 0.5 * (k_bins[:-1] + k_bins[1:])
-
-    for i in range(n_bins):
-        mask = (K >= k_bins[i]) & (K < k_bins[i + 1])
-        if mask.any():
-            E_radial[i] = E2d[mask].sum()
+    native_radial = (
+        getattr(_kernels, "radial_energy_sum", None)
+        if HAS_NATIVE_KERNELS
+        else None
+    )
+    if native_radial is not None:
+        E_radial = np.asarray(native_radial(K, E2d, k_bins), dtype=np.float64)
+    else:
+        bin_idx = np.searchsorted(k_bins, K.ravel(), side="right") - 1
+        valid = (bin_idx >= 0) & (bin_idx < n_bins)
+        E_radial = np.bincount(
+            bin_idx[valid],
+            weights=E2d.ravel()[valid],
+            minlength=n_bins,
+        ).astype(np.float64)
 
     logger.debug("2D 에너지 스펙트럼: shape=%s, bins=%d", ux.shape, n_bins)
     return k_radial, E_radial
@@ -164,7 +174,7 @@ def kolmogorov_slope(
 
     if len(lk) < 2:
         raise ValueError(
-            "Not enough valid data points for fitting "
+            "Not enough valid data points to fit "
             f"(need >= 2, got {len(lk)}). Check k_range or E values."
         )
 
