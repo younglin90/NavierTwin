@@ -93,11 +93,11 @@ def verify_onnx(path: str | Path) -> dict[str, Any]:
     onnx.checker.check_model(model)
     info = {
         "ir_version": int(model.ir_version),
-        "opset_imports": [
-            (op.domain or "ai.onnx", int(op.version)) for op in model.opset_import
-        ],
-        "graph_inputs": [i.name for i in model.graph.input],
-        "graph_outputs": [o.name for o in model.graph.output],
+        "opset_imports": list(
+            map(lambda op: (op.domain or "ai.onnx", int(op.version)), model.opset_import)
+        ),
+        "graph_inputs": list(map(lambda i: i.name, model.graph.input)),
+        "graph_outputs": list(map(lambda o: o.name, model.graph.output)),
     }
     logger.info("ONNX 검증 통과: %s", info)
     return info
