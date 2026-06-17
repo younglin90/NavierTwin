@@ -13,6 +13,8 @@ from typing import Any, Callable
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin.core.preprocessing.splitter import k_fold_indices
+
 
 def kfold_scores(
     X: NDArray[np.float64], y: NDArray[np.float64],
@@ -21,17 +23,12 @@ def kfold_scores(
     *, k: int = 5, seed: int | None = 0,
 ) -> list[float]:
     """fit_predict(X_tr, y_tr, X_val) → y_pred.  반환: k개 fold 점수."""
-    rng = np.random.default_rng(seed)
-    idx = np.arange(X.shape[0])
-    rng.shuffle(idx)
-    folds = np.array_split(idx, k)
-    scores: list[float] = []
-    for i in range(k):
-        val_idx = folds[i]
-        tr_idx = np.concatenate([folds[j] for j in range(k) if j != i])
+    def _score(split: tuple[NDArray[np.int64], NDArray[np.int64]]) -> float:
+        tr_idx, val_idx = split
         y_pred = fit_predict(X[tr_idx], y[tr_idx], X[val_idx])
-        scores.append(float(score_fn(y[val_idx], y_pred)))
-    return scores
+        return float(score_fn(y[val_idx], y_pred))
+
+    return list(map(_score, k_fold_indices(X.shape[0], k, seed=seed)))
 
 
 def grid_search(
@@ -43,16 +40,21 @@ def grid_search(
 ) -> dict:
     keys = list(param_grid.keys())
     best: dict = {"score": np.inf if not higher_better else -np.inf, "params": None}
-    history = []
-    for vals in product(*[param_grid[k] for k in keys]):
-        params = dict(zip(keys, vals))
+
+    def _evaluate(vals: tuple[Any, ...]) -> dict:
+        params = dict(zip(keys, vals, strict=True))
         fp = fit_predict_factory(params)
         scores = kfold_scores(X, y, fp, score_fn, k=k, seed=seed)
         mean_s = float(np.mean(scores))
-        history.append({"params": params, "mean_score": mean_s, "scores": scores})
-        if (higher_better and mean_s > best["score"]) or \
-           (not higher_better and mean_s < best["score"]):
-            best = {"score": mean_s, "params": params}
+        return {"params": params, "mean_score": mean_s, "scores": scores}
+
+    param_values = tuple(map(param_grid.__getitem__, keys))
+    history = list(map(_evaluate, product(*param_values)))
+    if history:
+        chosen = max(history, key=lambda row: row["mean_score"]) if higher_better else min(
+            history, key=lambda row: row["mean_score"]
+        )
+        best = {"score": chosen["mean_score"], "params": chosen["params"]}
     return {"best": best, "history": history}
 
 
