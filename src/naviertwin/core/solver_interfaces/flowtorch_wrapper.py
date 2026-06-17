@@ -17,6 +17,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin.core.linalg.svd_utils import truncated_svd
 from naviertwin.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -40,8 +41,8 @@ def pod_gpu(
         )
     except ImportError:
         logger.warning("torch 미설치 — numpy SVD 폴백")
-        U, s, Vh = np.linalg.svd(snapshots, full_matrices=False)
-        return U[:, :n_modes], s[:n_modes], Vh[:n_modes].T
+        U, s, Vh = truncated_svd(snapshots, k=n_modes)
+        return U, s, Vh.T
 
 
 __all__ = ["pod_gpu"]
