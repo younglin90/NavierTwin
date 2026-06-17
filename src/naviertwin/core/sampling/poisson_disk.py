@@ -28,12 +28,12 @@ def poisson_disk_2d(
 
     def fits(p):
         gi, gj = grid_idx(p)
-        for i in range(max(0, gi - 2), min(gx, gi + 3)):
-            for j in range(max(0, gj - 2), min(gy, gj + 3)):
-                idx = grid[i, j]
-                if idx >= 0 and np.linalg.norm(p - points[idx]) < r:
-                    return False
-        return True
+        idx = grid[max(0, gi - 2) : min(gx, gi + 3), max(0, gj - 2) : min(gy, gj + 3)]
+        idx = idx[idx >= 0]
+        if idx.size == 0:
+            return True
+        nearby = np.asarray(points, dtype=np.float64)[idx]
+        return bool(np.all(np.linalg.norm(nearby - p, axis=1) >= r))
 
     p0 = np.array([rng.uniform(0, Lx), rng.uniform(0, Ly)])
     points: list[NDArray] = [p0]
@@ -45,7 +45,8 @@ def poisson_disk_2d(
         idx = rng.integers(0, len(active))
         i = active[idx]
         found = False
-        for _ in range(k):
+        trial = 0
+        while trial < k:
             theta = rng.uniform(0, 2 * np.pi)
             rr = rng.uniform(r, 2 * r)
             cand = points[i] + np.array([rr * np.cos(theta), rr * np.sin(theta)])
@@ -56,6 +57,7 @@ def poisson_disk_2d(
                 active.append(len(points) - 1)
                 found = True
                 break
+            trial += 1
         if not found:
             active.pop(idx)
     return np.asarray(points)
