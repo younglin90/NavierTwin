@@ -17,6 +17,8 @@ Examples:
 from __future__ import annotations
 
 import numpy as np
+from numpy.lib.stride_tricks import sliding_window_view
+from numpy.linalg import svd as _svd
 from numpy.typing import NDArray
 
 
@@ -34,11 +36,9 @@ class SpaceTimePOD:
         if m < w:
             raise ValueError("snapshots must be >= window")
         # build space-time matrix: each column = stacked w consecutive snapshots
-        cols = []
-        for k in range(m - w + 1):
-            cols.append(X[:, k:k + w].reshape(-1, order="F"))
-        Y = np.column_stack(cols)  # (n*w, m-w+1)
-        U, s, _ = np.linalg.svd(Y, full_matrices=False)
+        windows = sliding_window_view(X, window_shape=w, axis=1)
+        Y = windows.transpose(0, 2, 1).reshape(n * w, m - w + 1, order="F")
+        U, s, _ = _svd(Y, full_matrices=False)
         r = min(self.rank, U.shape[1])
         self.modes = U[:, :r]
         self.singular_values = s[:r]
