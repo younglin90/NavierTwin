@@ -18,6 +18,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import HAS_NATIVE_KERNELS, _kernels
 from naviertwin.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -42,6 +43,14 @@ def fvm_upwind_1d(
     Returns:
         (times, U[n_steps, N]).
     """
+    native_upwind = (
+        getattr(_kernels, "fvm_upwind_1d", None)
+        if HAS_NATIVE_KERNELS
+        else None
+    )
+    if native_upwind is not None:
+        return native_upwind(u0, c, L, T, cfl)
+
     u0 = np.asarray(u0, dtype=np.float64)
     N = u0.size
     dx = L / N
@@ -51,7 +60,8 @@ def fvm_upwind_1d(
     U = np.zeros((n_steps, N))
     u = u0.copy()
 
-    for k in range(n_steps):
+    k = 0
+    while k < n_steps:
         if c > 0:
             flux = u
             u = u - cfl * (flux - np.roll(flux, 1))
@@ -59,6 +69,7 @@ def fvm_upwind_1d(
             flux = u
             u = u - cfl * (np.roll(flux, -1) - flux)
         U[k] = u
+        k += 1
     return times, U
 
 
@@ -70,6 +81,14 @@ def fvm_musclhancock_1d(
     cfl: float = 0.5,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     """2차 정확 MUSCL-Hancock with minmod limiter."""
+    native_muscl = (
+        getattr(_kernels, "fvm_musclhancock_1d", None)
+        if HAS_NATIVE_KERNELS
+        else None
+    )
+    if native_muscl is not None:
+        return native_muscl(u0, c, L, T, cfl)
+
     u0 = np.asarray(u0, dtype=np.float64)
     N = u0.size
     dx = L / N
@@ -79,7 +98,8 @@ def fvm_musclhancock_1d(
     U = np.zeros((n_steps, N))
     u = u0.copy()
 
-    for k in range(n_steps):
+    k = 0
+    while k < n_steps:
         # slopes
         dup = np.roll(u, -1) - u
         dum = u - np.roll(u, 1)
@@ -95,6 +115,7 @@ def fvm_musclhancock_1d(
             flux = c * u_R
         u = u - dt / dx * (flux - np.roll(flux, 1))
         U[k] = u
+        k += 1
     return times, U
 
 

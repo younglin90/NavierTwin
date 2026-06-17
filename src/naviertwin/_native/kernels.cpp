@@ -1626,6 +1626,124 @@ static py::tuple conservation_1d_linear_native(
     return py::make_tuple(x, t, U);
 }
 
+static inline double minmod_scalar(double a, double b) {
+    const double sa = (a > 0.0) - (a < 0.0);
+    const double sb = (b > 0.0) - (b < 0.0);
+    return 0.5 * (sa + sb) * std::min(std::abs(a), std::abs(b));
+}
+
+static py::tuple fvm_upwind_1d_native(ArrayD u0, double c, double L, double T, double cfl) {
+    if (u0.ndim() != 1) {
+        throw std::invalid_argument("u0 must be a 1D array");
+    }
+    if (c == 0.0) {
+        throw std::invalid_argument("c must be non-zero");
+    }
+    const py::ssize_t n = u0.shape(0);
+    const double dx = L / static_cast<double>(n);
+    const double dt = cfl * dx / std::abs(c);
+    const int n_steps = static_cast<int>(T / dt) + 1;
+    auto times = py::array_t<double>({static_cast<py::ssize_t>(n_steps)});
+    auto U = py::array_t<double>({static_cast<py::ssize_t>(n_steps), n});
+    double* tp = times.mutable_data();
+    double* Up = U.mutable_data();
+    const double* u0p = u0.data();
+    std::vector<double> u(static_cast<std::size_t>(n));
+    std::vector<double> next(static_cast<std::size_t>(n));
+
+    if (n_steps == 1) {
+        tp[0] = dt;
+    } else {
+        const double step = (T - dt) / static_cast<double>(n_steps - 1);
+        for (int k = 0; k < n_steps; ++k) {
+            tp[k] = dt + static_cast<double>(k) * step;
+        }
+    }
+    for (py::ssize_t i = 0; i < n; ++i) {
+        u[static_cast<std::size_t>(i)] = u0p[i];
+    }
+    for (int k = 0; k < n_steps; ++k) {
+        for (py::ssize_t i = 0; i < n; ++i) {
+            const py::ssize_t im = (i + n - 1) % n;
+            const py::ssize_t ip = (i + 1) % n;
+            const double ui = u[static_cast<std::size_t>(i)];
+            if (c > 0.0) {
+                next[static_cast<std::size_t>(i)] = ui - cfl * (ui - u[static_cast<std::size_t>(im)]);
+            } else {
+                next[static_cast<std::size_t>(i)] = ui - cfl * (u[static_cast<std::size_t>(ip)] - ui);
+            }
+        }
+        u.swap(next);
+        const py::ssize_t row = static_cast<py::ssize_t>(k) * n;
+        for (py::ssize_t i = 0; i < n; ++i) {
+            Up[row + i] = u[static_cast<std::size_t>(i)];
+        }
+    }
+    return py::make_tuple(times, U);
+}
+
+static py::tuple fvm_musclhancock_1d_native(ArrayD u0, double c, double L, double T, double cfl) {
+    if (u0.ndim() != 1) {
+        throw std::invalid_argument("u0 must be a 1D array");
+    }
+    if (c == 0.0) {
+        throw std::invalid_argument("c must be non-zero");
+    }
+    const py::ssize_t n = u0.shape(0);
+    const double dx = L / static_cast<double>(n);
+    const double dt = cfl * dx / std::abs(c);
+    const int n_steps = static_cast<int>(T / dt) + 1;
+    auto times = py::array_t<double>({static_cast<py::ssize_t>(n_steps)});
+    auto U = py::array_t<double>({static_cast<py::ssize_t>(n_steps), n});
+    double* tp = times.mutable_data();
+    double* Up = U.mutable_data();
+    const double* u0p = u0.data();
+    std::vector<double> u(static_cast<std::size_t>(n));
+    std::vector<double> slope(static_cast<std::size_t>(n));
+    std::vector<double> flux(static_cast<std::size_t>(n));
+    std::vector<double> next(static_cast<std::size_t>(n));
+
+    if (n_steps == 1) {
+        tp[0] = dt;
+    } else {
+        const double step = (T - dt) / static_cast<double>(n_steps - 1);
+        for (int k = 0; k < n_steps; ++k) {
+            tp[k] = dt + static_cast<double>(k) * step;
+        }
+    }
+    for (py::ssize_t i = 0; i < n; ++i) {
+        u[static_cast<std::size_t>(i)] = u0p[i];
+    }
+    for (int k = 0; k < n_steps; ++k) {
+        for (py::ssize_t i = 0; i < n; ++i) {
+            const py::ssize_t im = (i + n - 1) % n;
+            const py::ssize_t ip = (i + 1) % n;
+            const double dup = u[static_cast<std::size_t>(ip)] - u[static_cast<std::size_t>(i)];
+            const double dum = u[static_cast<std::size_t>(i)] - u[static_cast<std::size_t>(im)];
+            slope[static_cast<std::size_t>(i)] = minmod_scalar(dum, dup);
+        }
+        for (py::ssize_t i = 0; i < n; ++i) {
+            const py::ssize_t ip = (i + 1) % n;
+            if (c > 0.0) {
+                flux[static_cast<std::size_t>(i)] = c * (u[static_cast<std::size_t>(i)] + 0.5 * slope[static_cast<std::size_t>(i)]);
+            } else {
+                flux[static_cast<std::size_t>(i)] = c * (u[static_cast<std::size_t>(ip)] - 0.5 * slope[static_cast<std::size_t>(ip)]);
+            }
+        }
+        for (py::ssize_t i = 0; i < n; ++i) {
+            const py::ssize_t im = (i + n - 1) % n;
+            next[static_cast<std::size_t>(i)] = u[static_cast<std::size_t>(i)]
+                - (dt / dx) * (flux[static_cast<std::size_t>(i)] - flux[static_cast<std::size_t>(im)]);
+        }
+        u.swap(next);
+        const py::ssize_t row = static_cast<py::ssize_t>(k) * n;
+        for (py::ssize_t i = 0; i < n; ++i) {
+            Up[row + i] = u[static_cast<std::size_t>(i)];
+        }
+    }
+    return py::make_tuple(times, U);
+}
+
 static py::tuple fd_burgers_1d_evolve(ArrayD u0, int n_steps, double dt, double dx, double nu) {
     if (u0.ndim() != 1) {
         throw std::invalid_argument("u0 must be a 1D array");
@@ -4929,6 +5047,11 @@ PYBIND11_MODULE(_kernels, m) {
     m.def(
         "conservation_1d_linear", &conservation_1d_linear_native, py::arg("n_cells"),
         py::arg("L"), py::arg("T"), py::arg("scheme"), py::arg("dt_factor"), py::arg("c_max")
+    );
+    m.def("fvm_upwind_1d", &fvm_upwind_1d_native, py::arg("u0"), py::arg("c"), py::arg("L"), py::arg("T"), py::arg("cfl"));
+    m.def(
+        "fvm_musclhancock_1d", &fvm_musclhancock_1d_native, py::arg("u0"),
+        py::arg("c"), py::arg("L"), py::arg("T"), py::arg("cfl")
     );
     m.def("fd_burgers_1d_evolve", &fd_burgers_1d_evolve, py::arg("u0"), py::arg("n_steps"), py::arg("dt"), py::arg("dx"), py::arg("nu"));
     m.def("poisson_2d_jacobi", &poisson_2d_jacobi_native, py::arg("f"), py::arg("dx") = 1.0, py::arg("dy") = 1.0, py::arg("max_iter") = 5000, py::arg("tol") = 1e-6);
