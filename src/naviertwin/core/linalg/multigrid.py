@@ -26,12 +26,16 @@ def _gauss_seidel_sweep(u: NDArray, f: NDArray, h: float, n: int = 1) -> NDArray
     """-Δu = f, Dirichlet 0. GS 업데이트: u = 0.25 (Σ neighbors + h² f)."""
     u = u.copy()
     h2 = h * h
-    for _ in range(n):
+    sweep = 0
+    while sweep < n:
         u[1:-1, 1:-1] = 0.25 * (
-            u[2:, 1:-1] + u[:-2, 1:-1]
-            + u[1:-1, 2:] + u[1:-1, :-2]
+            u[2:, 1:-1]
+            + u[:-2, 1:-1]
+            + u[1:-1, 2:]
+            + u[1:-1, :-2]
             + h2 * f[1:-1, 1:-1]
         )
+        sweep += 1
     return u
 
 
@@ -53,15 +57,23 @@ def _restrict(r: NDArray) -> NDArray:
     m = (n - 1) // 2 + 1
     out = np.zeros((m, m))
     # 내부만 가중 평균 (경계는 0)
-    for i in range(1, m - 1):
-        for j in range(1, m - 1):
-            ii, jj = 2 * i, 2 * j
-            out[i, j] = (
-                4 * r[ii, jj]
-                + 2 * (r[ii + 1, jj] + r[ii - 1, jj] + r[ii, jj + 1] + r[ii, jj - 1])
-                + (r[ii + 1, jj + 1] + r[ii + 1, jj - 1]
-                   + r[ii - 1, jj + 1] + r[ii - 1, jj - 1])
-            ) / 16.0
+    c = r[2:-2:2, 2:-2:2]
+    out[1:-1, 1:-1] = (
+        4 * c
+        + 2
+        * (
+            r[3:-1:2, 2:-2:2]
+            + r[1:-3:2, 2:-2:2]
+            + r[2:-2:2, 3:-1:2]
+            + r[2:-2:2, 1:-3:2]
+        )
+        + (
+            r[3:-1:2, 3:-1:2]
+            + r[3:-1:2, 1:-3:2]
+            + r[1:-3:2, 3:-1:2]
+            + r[1:-3:2, 1:-3:2]
+        )
+    ) / 16.0
     return out
 
 
@@ -78,8 +90,13 @@ def _prolong(e: NDArray, n_fine: int) -> NDArray:
 
 
 def v_cycle_poisson(
-    u: NDArray[np.float64], f: NDArray[np.float64], h: float,
-    *, n_pre: int = 2, n_post: int = 2, levels: int = 3,
+    u: NDArray[np.float64],
+    f: NDArray[np.float64],
+    h: float,
+    *,
+    n_pre: int = 2,
+    n_post: int = 2,
+    levels: int = 3,
 ) -> NDArray[np.float64]:
     """2D Poisson -∇²u = f (Dirichlet 0) V-cycle 1 회."""
     if levels <= 1 or u.shape[0] <= 3:
@@ -97,17 +114,25 @@ def v_cycle_poisson(
 
 
 def solve_poisson_multigrid(
-    f: NDArray[np.float64], h: float,
-    *, max_cycles: int = 20, tol: float = 1e-8,
-    n_pre: int = 2, n_post: int = 2, levels: int = 4,
+    f: NDArray[np.float64],
+    h: float,
+    *,
+    max_cycles: int = 20,
+    tol: float = 1e-8,
+    n_pre: int = 2,
+    n_post: int = 2,
+    levels: int = 4,
 ) -> tuple[NDArray[np.float64], dict]:
     u = np.zeros_like(f)
-    for i in range(max_cycles):
+    cycle = 0
+    res = float("inf")
+    while cycle < max_cycles:
         u = v_cycle_poisson(u, f, h, n_pre=n_pre, n_post=n_post, levels=levels)
         r = _residual(u, f, h)
         res = float(np.linalg.norm(r))
         if res < tol:
-            return u, {"cycles": i + 1, "residual": res, "converged": True}
+            return u, {"cycles": cycle + 1, "residual": res, "converged": True}
+        cycle += 1
     return u, {"cycles": max_cycles, "residual": res, "converged": False}
 
 
