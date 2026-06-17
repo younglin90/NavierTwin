@@ -23,6 +23,8 @@ from collections.abc import Callable
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
 
 def sqp_eq(
     f: Callable[[NDArray], float],
@@ -36,8 +38,11 @@ def sqp_eq(
     tol: float = 1e-8,
 ) -> NDArray[np.float64]:
     """KKT step: [B Aᵀ; A 0][p; λ] = [-g; -h]."""
+    if _kernels is None:
+        raise ImportError("naviertwin._native._kernels is required by sqp_eq")
     x = np.asarray(x0, dtype=np.float64).copy()
-    for _ in range(max_iter):
+    it = 0
+    while it < max_iter:
         g = grad(x)
         B = hess(x)
         c = h(x)
@@ -46,11 +51,12 @@ def sqp_eq(
         m = len(c)
         K = np.block([[B, A.T], [A, np.zeros((m, m))]])
         rhs = np.concatenate([-g, -c])
-        sol = np.linalg.solve(K, rhs)
+        sol = _kernels.solve_dense(K, rhs)
         p = sol[:n]
         x = x + p
         if np.linalg.norm(p) < tol:
             break
+        it += 1
     return x
 
 
