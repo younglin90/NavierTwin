@@ -49,22 +49,28 @@ def nsga2_constrained(
     rng = rng if rng is not None else np.random.default_rng(0)
     lo, hi = bounds
     pop = rng.uniform(lo, hi, size=(n_pop, dim))
-    for _ in range(n_gen):
+    gen = 0
+    while gen < n_gen:
         # offspring via blend
         idx = rng.integers(0, n_pop, n_pop)
         kids = 0.5 * (pop + pop[idx]) + 0.1 * rng.standard_normal((n_pop, dim))
         kids = np.clip(kids, lo, hi)
         big = np.vstack([pop, kids])
-        objs = np.array([objectives(x) for x in big])
-        viols = np.array([_violation(constraints(x)) for x in big])
+        objs = np.array(list(map(objectives, big)))
+        viols = np.array(list(map(lambda x: _violation(constraints(x)), big)))
         # sort by (violation asc, then dominance score)
         scores = np.zeros(len(big))
-        for i in range(len(big)):
-            for j in range(len(big)):
+        i = 0
+        while i < len(big):
+            j = 0
+            while j < len(big):
                 if i != j and _constrained_dominate(objs[j], viols[j], objs[i], viols[i]):
                     scores[i] += 1
+                j += 1
+            i += 1
         order = np.lexsort((scores, viols))
         pop = big[order[:n_pop]]
+        gen += 1
     return pop
 
 
