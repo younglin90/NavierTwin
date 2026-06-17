@@ -46,11 +46,9 @@ class EnKFSimple:
         # perturb observations
         m = self.R.shape[0]
         L = np.linalg.cholesky(self.R + 1e-12 * np.eye(m))
-        Xnew = np.zeros_like(X)
-        for i in range(N):
-            z_i = z + L @ rng.standard_normal(m)
-            Xnew[i] = X[i] + K @ (z_i - self.H @ X[i])
-        return Xnew
+        perturb = rng.standard_normal((N, m)) @ L.T
+        innovations = z[np.newaxis, :] + perturb - X @ self.H.T
+        return X + innovations @ K.T
 
 
 __all__ = ["EnKFSimple"]
