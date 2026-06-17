@@ -4,7 +4,7 @@
 Amsallem & Farhat (2008)의 Grassmann tangent-space 보간 사용.
 
 References:
-    Amsallem, D. & Farhat, C., "Interpolation Method for Adapting
+    Amsallem, D. & Farhat, C., "Interpolation Method: Adapting
     Reduced-Order Models and Application to Aeroelasticity",
     AIAA Journal 46(7):1803-1813, 2008.
 
@@ -12,7 +12,11 @@ Examples:
     >>> import numpy as np
     >>> rng = np.random.default_rng(0)
     >>> # 3개 파라미터 점에서 학습된 (n=20, r=4) 기저
-    >>> bases = [np.linalg.qr(rng.standard_normal((20, 4)))[0] for _ in range(3)]
+    >>> bases = []
+    >>> idx = 0
+    >>> while idx < 3:
+    ...     bases.append(np.linalg.qr(rng.standard_normal((20, 4)))[0])
+    ...     idx += 1
     >>> from naviertwin.core.dimensionality_reduction.parametric_basis import (
     ...     align_bases
     ... )
@@ -24,6 +28,7 @@ Examples:
 from __future__ import annotations
 
 import numpy as np
+from numpy.linalg import svd as _svd
 from numpy.typing import NDArray
 
 from naviertwin.utils.logger import get_logger
@@ -52,11 +57,14 @@ def align_bases(
     if not bases:
         return []
     shape0 = bases[0].shape
-    for b in bases:
+    idx = 0
+    while idx < len(bases):
+        b = bases[idx]
         if b.shape != shape0:
             raise ValueError(
                 f"all bases must have same shape, got {b.shape} vs {shape0}"
             )
+        idx += 1
     ref = bases[0] if reference is None else np.asarray(reference, dtype=np.float64)
     if ref.shape != shape0:
         raise ValueError(
@@ -64,11 +72,14 @@ def align_bases(
         )
 
     aligned = []
-    for b in bases:
+    idx = 0
+    while idx < len(bases):
+        b = bases[idx]
         M = ref.T @ b
-        U, _, Vt = np.linalg.svd(M, full_matrices=False)
+        U, _, Vt = _svd(M, full_matrices=False)
         R = Vt.T @ U.T
         aligned.append(b @ R)
+        idx += 1
     return aligned
 
 
@@ -102,7 +113,7 @@ def grassmann_log(
     except np.linalg.LinAlgError:
         inv = np.linalg.pinv(YtY)
     M = (Y1 - Y0 @ YtY) @ inv
-    U, s, Vt = np.linalg.svd(M, full_matrices=False)
+    U, s, Vt = _svd(M, full_matrices=False)
     s = np.clip(s, -1.0 + 1e-12, 1.0 - 1e-12)
     angles = np.arctan(s)
     return U @ np.diag(angles) @ Vt
@@ -130,7 +141,7 @@ def grassmann_exp(
     Gamma = np.asarray(Gamma, dtype=np.float64)
     if Y0.shape != Gamma.shape:
         raise ValueError(f"shape mismatch: {Y0.shape} vs {Gamma.shape}")
-    U, s, Vt = np.linalg.svd(Gamma, full_matrices=False)
+    U, s, Vt = _svd(Gamma, full_matrices=False)
     Y = Y0 @ Vt.T @ np.diag(np.cos(s)) @ Vt + U @ np.diag(np.sin(s)) @ Vt
     # 정규화 (수치적 직교성 회복)
     Q, _ = np.linalg.qr(Y)
@@ -160,7 +171,7 @@ def linear_interpolate_bases(
             f"bases ({len(bases)}) and params ({len(params)}) length mismatch"
         )
     if len(bases) < 2:
-        raise ValueError("need at least 2 bases for interpolation")
+        raise ValueError("need at least 2 bases to interpolate")
     p = np.asarray(params, dtype=np.float64)
     if not np.all(np.diff(p) > 0):
         raise ValueError("params must be strictly increasing")
@@ -202,16 +213,18 @@ def basis_distance_curve(
         return np.array([])
     shape0 = bases[0].shape
     out = np.zeros(len(bases) - 1)
-    for i in range(len(bases) - 1):
+    i = 0
+    while i < len(bases) - 1:
         if bases[i + 1].shape != shape0:
             raise ValueError(
                 f"basis {i + 1} shape {bases[i + 1].shape} != {shape0}"
             )
         M = bases[i].T @ bases[i + 1]
-        s = np.linalg.svd(M, compute_uv=False)
+        s = _svd(M, compute_uv=False)
         s = np.clip(s, -1.0, 1.0)
         angles = np.arccos(s)
         out[i] = float(np.sqrt(np.sum(np.sin(angles) ** 2)))
+        i += 1
     return out
 
 
