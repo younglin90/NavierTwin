@@ -16,11 +16,11 @@ import numpy as np
 
 def csg_union(*phis: Any) -> Any:
     """min: outside both → +; inside either → −."""
-    return np.minimum.reduce([np.asarray(p) for p in phis])
+    return np.minimum.reduce(list(map(np.asarray, phis)))
 
 
 def csg_intersect(*phis: Any) -> Any:
-    return np.maximum.reduce([np.asarray(p) for p in phis])
+    return np.maximum.reduce(list(map(np.asarray, phis)))
 
 
 def csg_diff(phi_a: Any, phi_b: Any) -> Any:
@@ -31,9 +31,9 @@ def csg_diff(phi_a: Any, phi_b: Any) -> Any:
 def composed(phi_funcs: list[Callable], op: str = "union") -> Callable:
     """Compose multiple SDF functions p → φ via `op`."""
     if op == "union":
-        return lambda p: csg_union(*[f(p) for f in phi_funcs])
+        return lambda p: csg_union(*map(lambda f: f(p), phi_funcs))
     if op == "intersect":
-        return lambda p: csg_intersect(*[f(p) for f in phi_funcs])
+        return lambda p: csg_intersect(*map(lambda f: f(p), phi_funcs))
     raise ValueError(f"unknown op: {op}")
 
 
