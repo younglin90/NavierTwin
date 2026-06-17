@@ -41,9 +41,13 @@ def clear_cache(cache_dir: str | Path) -> int:
     if not root.exists():
         return 0
     n = 0
-    for p in root.glob("*.pkl"):
+    paths = list(root.glob("*.pkl"))
+    idx = 0
+    while idx < len(paths):
+        p = paths[idx]
         p.unlink()
         n += 1
+        idx += 1
     return n
 
 
