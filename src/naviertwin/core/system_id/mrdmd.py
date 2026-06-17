@@ -15,15 +15,17 @@ Examples:
 from __future__ import annotations
 
 import numpy as np
+from numpy.linalg import svd as _svd
 from numpy.typing import NDArray
 
 
 def _exact_dmd(
-    X: NDArray[np.float64], rank: int,
+    X: NDArray[np.float64],
+    rank: int,
 ) -> tuple[NDArray[np.complex128], NDArray[np.complex128]]:
     X1 = X[:, :-1]
     X2 = X[:, 1:]
-    U, s, Vt = np.linalg.svd(X1, full_matrices=False)
+    U, s, Vt = _svd(X1, full_matrices=False)
     r = min(rank, U.shape[1])
     U = U[:, :r]
     s = s[:r]
