@@ -1,4 +1,4 @@
-"""Physics AI model adapter for the digital twin panel.
+"""Physics AI model adapter used by the digital twin panel.
 
 PhysicsNeMo/PINN-style models often predict the solution field directly from
 coordinates or operating parameters. They do not necessarily produce reduced
@@ -117,14 +117,14 @@ class PhysicsAITwinEngine:
 
 
 def _positive_int(*values: object) -> int:
-    for value in values:
+    def _parse(value: object) -> int:
         try:
             parsed = int(value)  # type: ignore[arg-type]
         except (TypeError, ValueError):
-            continue
-        if parsed > 0:
-            return parsed
-    return 0
+            return 0
+        return parsed if parsed > 0 else 0
+
+    return next(filter(lambda parsed: parsed > 0, map(_parse, values)), 0)
 
 
 __all__ = ["PhysicsAITwinEngine"]
