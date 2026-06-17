@@ -119,21 +119,26 @@ def find_critical_points(
     nx, ny = u.shape
     crits: list[dict] = []
 
-    for i in range(nx - 1):
-        for j in range(ny - 1):
+    i = 0
+    while i < nx - 1:
+        j = 0
+        while j < ny - 1:
             # 셀 4개 모서리
             uc = np.array([u[i, j], u[i + 1, j], u[i + 1, j + 1], u[i, j + 1]])
             vc = np.array([v[i, j], v[i + 1, j], v[i + 1, j + 1], v[i, j + 1]])
-            # 셀 내 영점 가능 조건: min*max ≤ 0 for both u and v
+            # 셀 내 영점 가능 조건: u/v 모두 min*max ≤ 0
             if uc.min() * uc.max() > tol * tol:
+                j += 1
                 continue
             if vc.min() * vc.max() > tol * tol:
+                j += 1
                 continue
 
             # 셀 내 단순 이중선형 보간 영점 (중심 근사)
             local_x = 0.5
             local_y = 0.5
-            for _ in range(20):
+            refine_iter = 0
+            while refine_iter < 20:
                 # bilinear interp
                 u_eval = ((1 - local_x) * (1 - local_y) * uc[0]
                           + local_x * (1 - local_y) * uc[1]
@@ -162,10 +167,13 @@ def find_critical_points(
                 # bounds
                 if not (0.0 <= local_x <= 1.0 and 0.0 <= local_y <= 1.0):
                     break
+                refine_iter += 1
 
             if not (0.0 <= local_x <= 1.0 and 0.0 <= local_y <= 1.0):
+                j += 1
                 continue
             if abs(u_eval) > 10 * tol or abs(v_eval) > 10 * tol:
+                j += 1
                 continue
 
             # 분류
@@ -183,6 +191,8 @@ def find_critical_points(
                 "i": i,
                 "j": j,
             })
+            j += 1
+        i += 1
 
     logger.info("임계점 검출 완료: %d개", len(crits))
     return crits
@@ -214,31 +224,21 @@ def poincare_index(
     if not (1 <= center_i < nx - 1 and 1 <= center_j < ny - 1):
         raise ValueError(
             f"center ({center_i}, {center_j}) too close to boundary "
-            f"for shape {u.shape}"
+            f"with shape {u.shape}"
         )
 
     # 4 corners, CCW
-    pts = [
+    pts = np.array([
         (center_i + 1, center_j),
         (center_i + 1, center_j + 1),
         (center_i - 1, center_j + 1),
         (center_i - 1, center_j),
         (center_i - 1, center_j - 1),
         (center_i + 1, center_j - 1),
-    ]
-    angles = []
-    for i, j in pts:
-        angles.append(np.arctan2(v[i, j], u[i, j]))
-
-    total = 0.0
-    for k in range(len(angles)):
-        d = angles[(k + 1) % len(angles)] - angles[k]
-        # wrap to [-π, π]
-        if d > np.pi:
-            d -= 2 * np.pi
-        elif d < -np.pi:
-            d += 2 * np.pi
-        total += d
+    ], dtype=np.intp)
+    angles = np.arctan2(v[pts[:, 0], pts[:, 1]], u[pts[:, 0], pts[:, 1]])
+    diffs = np.roll(angles, -1) - angles
+    total = float(np.sum((diffs + np.pi) % (2 * np.pi) - np.pi))
     return int(round(total / (2.0 * np.pi)))
 
 
