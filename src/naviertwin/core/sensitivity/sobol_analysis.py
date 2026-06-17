@@ -58,19 +58,15 @@ def saltelli_sample(
     A = rng.random((n_base, n))
     B = rng.random((n_base, n))
 
-    mats = [A, B]
     # A_B^{(i)}: A 에서 i 번째 컬럼만 B 로 교체
-    for i in range(n):
-        AB = A.copy()
-        AB[:, i] = B[:, i]
-        mats.append(AB)
+    idx = np.arange(n)
+    AB = np.broadcast_to(A, (n, n_base, n)).copy()
+    AB[idx, :, idx] = B.T
     # BA^{(i)}: B 에서 i 번째 컬럼만 A 로 교체 (Total effect)
-    for i in range(n):
-        BA = B.copy()
-        BA[:, i] = A[:, i]
-        mats.append(BA)
+    BA = np.broadcast_to(B, (n, n_base, n)).copy()
+    BA[idx, :, idx] = A.T
 
-    X01 = np.vstack(mats)  # (n_base * (2n+2), n)
+    X01 = np.concatenate((A[None, :, :], B[None, :, :], AB, BA), axis=0).reshape(-1, n)
     # bounds 로 스케일
     lows = bounds[:, 0]
     highs = bounds[:, 1]
@@ -107,12 +103,9 @@ def sobol_indices(
     if var_Y == 0:
         var_Y = 1e-30
 
-    S1 = np.zeros(n_params)
-    ST = np.zeros(n_params)
-    for i in range(n_params):
-        # Saltelli 2010 estimator
-        S1[i] = float(np.mean(Y_B * (Y_AB[i] - Y_A))) / var_Y
-        ST[i] = 0.5 * float(np.mean((Y_A - Y_BA[i]) ** 2)) / var_Y
+    # Saltelli 2010 estimator
+    S1 = np.mean(Y_B[None, :] * (Y_AB - Y_A[None, :]), axis=1) / var_Y
+    ST = 0.5 * np.mean((Y_A[None, :] - Y_BA) ** 2, axis=1) / var_Y
 
     return {"S1": S1, "ST": ST}
 
