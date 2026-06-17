@@ -16,18 +16,21 @@ from numpy.typing import NDArray
 
 
 def cut_cell_fraction_2d(phi: NDArray[np.float64]) -> NDArray[np.float64]:
-    """For each cell (i, j), interpolate from corner phi values.
+    """Interpolate each cell fraction from corner phi values.
 
     fraction = mean(corners < 0).  Approximate.
     """
     phi = np.asarray(phi, dtype=np.float64)
-    nx, ny = phi.shape
-    f = np.zeros((nx - 1, ny - 1))
-    for i in range(nx - 1):
-        for j in range(ny - 1):
-            corners = phi[i:i + 2, j:j + 2].ravel()
-            f[i, j] = (corners < 0).mean()
-    return f
+    corners = np.stack(
+        [
+            phi[:-1, :-1],
+            phi[1:, :-1],
+            phi[:-1, 1:],
+            phi[1:, 1:],
+        ],
+        axis=0,
+    )
+    return (corners < 0).mean(axis=0)
 
 
 __all__ = ["cut_cell_fraction_2d"]
