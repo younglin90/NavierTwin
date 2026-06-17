@@ -3,8 +3,7 @@
 Examples:
     >>> from naviertwin.utils.rolling_stats import WelfordStats
     >>> s = WelfordStats()
-    >>> for v in [1.0, 2.0, 3.0, 4.0]:
-    ...     s.update(v)
+    >>> s.update(1.0); s.update(2.0); s.update(3.0); s.update(4.0)
     >>> round(s.mean, 3), round(s.variance, 3)
     (2.5, 1.667)
 """
