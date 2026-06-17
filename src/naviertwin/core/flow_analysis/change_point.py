@@ -71,24 +71,32 @@ def binary_segmentation(
 
     cps: list[int] = []
     segments = [(0, N)]
-    for _ in range(n_changepoints):
+    cp_iter = 0
+    while cp_iter < n_changepoints:
         best_gain = -np.inf
         best_cp = -1
         best_seg_idx = -1
-        for s_idx, (start, end) in enumerate(segments):
+        s_idx = 0
+        while s_idx < len(segments):
+            start, end = segments[s_idx]
             base = _segment_cost(x, start, end)
-            for k in range(start + min_size, end - min_size + 1):
+            k = start + min_size
+            stop = end - min_size + 1
+            while k < stop:
                 gain = base - _segment_cost(x, start, k) - _segment_cost(x, k, end)
                 if gain > best_gain:
                     best_gain = gain
                     best_cp = k
                     best_seg_idx = s_idx
+                k += 1
+            s_idx += 1
         if best_cp < 0 or best_gain <= 0:
             break
         cps.append(best_cp)
         s, e = segments.pop(best_seg_idx)
         segments.append((s, best_cp))
         segments.append((best_cp, e))
+        cp_iter += 1
 
     return sorted(cps)
 
@@ -129,13 +137,17 @@ def pelt(
     last = np.zeros(N + 1, dtype=int)
     candidates = [0]
 
-    for tau in range(min_size, N + 1):
+    tau = min_size
+    while tau <= N:
         best = np.inf
         best_t = 0
         new_candidates = []
-        for t in candidates:
+        cand_idx = 0
+        while cand_idx < len(candidates):
+            t = candidates[cand_idx]
             if tau - t < min_size:
                 new_candidates.append(t)
+                cand_idx += 1
                 continue
             cost = F[t] + _segment_cost(x, t, tau) + penalty
             if cost < best:
@@ -144,11 +156,13 @@ def pelt(
             # pruning condition (Killick): keep t if F[t] + cost(t,tau) ≤ F[tau]
             if F[t] + _segment_cost(x, t, tau) <= F[tau] + penalty + 1e-12:
                 new_candidates.append(t)
+            cand_idx += 1
         F[tau] = best
         last[tau] = best_t
         if tau not in new_candidates:
             new_candidates.append(tau)
         candidates = new_candidates
+        tau += 1
 
     # 역추적
     cps: list[int] = []
@@ -188,13 +202,15 @@ def window_method(
     N = len(x)
     sigma = float(x.std()) + 1e-30
     cps: list[int] = []
-    for i in range(width, N - width):
+    i = width
+    while i < N - width:
         left_mean = x[i - width : i].mean()
         right_mean = x[i : i + width].mean()
         if abs(right_mean - left_mean) > threshold * sigma:
             # NMS: 인접 변화점 제외
             if not cps or i - cps[-1] >= width:
                 cps.append(i)
+        i += 1
     return cps
 
 
@@ -217,12 +233,14 @@ def segment_means(
         return []
     boundaries = [0, *sorted(changepoints), N]
     means = []
-    for i in range(len(boundaries) - 1):
+    i = 0
+    while i < len(boundaries) - 1:
         s, e = boundaries[i], boundaries[i + 1]
         if e <= s:
             means.append(0.0)
         else:
             means.append(float(x[s:e].mean()))
+        i += 1
     return means
 
 
@@ -248,11 +266,13 @@ def detection_score(
     var_total = float(np.var(x)) * N
     boundaries = [0, *sorted(changepoints), N]
     var_segments = 0.0
-    for i in range(len(boundaries) - 1):
+    i = 0
+    while i < len(boundaries) - 1:
         s, e = boundaries[i], boundaries[i + 1]
         if e - s > 0:
             seg = x[s:e]
             var_segments += float(np.var(seg)) * (e - s)
+        i += 1
     if var_total < 1e-30:
         return 0.0
     return 1.0 - var_segments / var_total
