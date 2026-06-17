@@ -47,25 +47,33 @@ class PINNTrainer:
         *, verbose: bool = False,
     ) -> list[dict[str, float]]:
         """loss_fns: {"data": fn, "physics": fn, "boundary": fn}. fn(model) → scalar tensor."""
-        for epoch in range(n_epochs):
+        epoch = 0
+        while epoch < n_epochs:
             def closure():
                 self.opt.zero_grad()
                 total = 0.0
                 parts: dict[str, float] = {}
-                for name, fn in loss_fns.items():
+
+                def add_loss(item: tuple[str, Callable[[Any], Any]]) -> None:
+                    nonlocal total
+                    name, fn = item
                     w = self.weights.get(name, 1.0)
                     loss = fn(self.model)
                     total = total + w * loss
                     parts[name] = float(loss.detach())
+
+                tuple(map(add_loss, loss_fns.items()))
                 total.backward()
                 self._parts = parts
                 self._total = float(total.detach())
                 return total
+
             self.opt.step(closure)
             self.history.append({"epoch": epoch, "total": self._total, **self._parts})
             if verbose and epoch % max(1, n_epochs // 10) == 0:
                 import sys
                 sys.stderr.write(f"[pinn] ep={epoch} total={self._total:.4g}\n")
+            epoch += 1
         return self.history
 
 
