@@ -28,16 +28,20 @@ logger = get_logger(__name__)
 def _collect_deps() -> dict[str, str]:
     """주요 의존성 버전 수집."""
     versions: dict[str, str] = {}
-    for lib in [
+    libs = [
         "numpy", "scipy", "pyvista", "meshio", "h5py", "torch",
         "sklearn", "smt", "SALib", "botorch", "nlopt", "pydmd",
         "pymor", "PySide6", "foamlib", "pymeshlab",
-    ]:
+    ]
+    idx = 0
+    while idx < len(libs):
+        lib = libs[idx]
         try:
             mod = __import__(lib)
             versions[lib] = getattr(mod, "__version__", "unknown")
         except ImportError:
             pass
+        idx += 1
     return versions
 
 
