@@ -28,8 +28,8 @@ def read_parquet(path: str | Path) -> dict[str, Any]:
     import pyarrow.parquet as pq
 
     table = pq.read_table(str(path))
-    return {col: np.asarray(table.column(col).to_pylist())
-            for col in table.column_names}
+    columns = map(lambda col: (col, np.asarray(table.column(col).to_pylist())), table.column_names)
+    return dict(columns)
 
 
 def write_parquet(path: str | Path, data: dict[str, Any]) -> None:
