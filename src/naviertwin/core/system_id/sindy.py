@@ -16,8 +16,26 @@ Examples:
 
 from __future__ import annotations
 
+from itertools import combinations_with_replacement
+
 import numpy as np
 from numpy.typing import NDArray
+
+from naviertwin._native import _kernels
+
+
+def _solve_dense_rhs(A: NDArray[np.float64], B: NDArray[np.float64]) -> NDArray[np.float64]:
+    if _kernels is None:
+        raise ImportError("naviertwin._native._kernels is required by SINDy")
+    rhs = np.asarray(B, dtype=np.float64)
+    if rhs.ndim == 1:
+        return _kernels.solve_dense(A, rhs)
+    out = np.empty_like(rhs)
+    j = 0
+    while j < rhs.shape[1]:
+        out[:, j] = _kernels.solve_dense(A, rhs[:, j])
+        j += 1
+    return out
 
 
 def polynomial_library(
@@ -34,15 +52,27 @@ def polynomial_library(
         cols.append(np.ones(n))
         names.append("1")
     # degree 1..degree
-    for deg in range(1, degree + 1):
+    deg = 1
+    while deg <= degree:
         # all monomials of total degree = deg (with repetition)
-        from itertools import combinations_with_replacement
-        for idx in combinations_with_replacement(range(d), deg):
+        combos = list(combinations_with_replacement(range(d), deg))
+        combo_idx = 0
+        while combo_idx < len(combos):
+            idx = combos[combo_idx]
             col = np.ones(n)
-            for i in idx:
-                col = col * X[:, i]
+            pos = 0
+            while pos < len(idx):
+                col = col * X[:, idx[pos]]
+                pos += 1
             cols.append(col)
-            names.append("*".join(f"x{i}" for i in idx))
+            parts = []
+            pos = 0
+            while pos < len(idx):
+                parts.append(f"x{idx[pos]}")
+                pos += 1
+            names.append("*".join(parts))
+            combo_idx += 1
+        deg += 1
     return np.stack(cols, axis=1)
 
 
@@ -67,23 +97,28 @@ def stls(
     if reg > 0:
         n, m = Theta.shape
         # ridge
-        Xi = np.linalg.solve(Theta.T @ Theta + reg * np.eye(m), Theta.T @ dX)
+        Xi = _solve_dense_rhs(Theta.T @ Theta + reg * np.eye(m), Theta.T @ dX)
     else:
         Xi, *_ = np.linalg.lstsq(Theta, dX, rcond=None)
-    for _ in range(max_iter):
+    it = 0
+    while it < max_iter:
         small = np.abs(Xi) < threshold
         Xi_new = Xi.copy()
         Xi_new[small] = 0.0
         # 각 target 별 활성 인덱스로 재-회귀
-        for k in range(Xi.shape[1]):
+        k = 0
+        while k < Xi.shape[1]:
             big = ~small[:, k]
             if big.sum() == 0:
+                k += 1
                 continue
             sol, *_ = np.linalg.lstsq(Theta[:, big], dX[:, k], rcond=None)
             Xi_new[big, k] = sol
+            k += 1
         if np.allclose(Xi_new, Xi):
             break
         Xi = Xi_new
+        it += 1
     return Xi
 
 
