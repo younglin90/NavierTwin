@@ -13,6 +13,7 @@ Examples:
 from __future__ import annotations
 
 import numpy as np
+from numpy.linalg import svd as _svd
 from numpy.typing import NDArray
 
 
@@ -24,7 +25,7 @@ class POD_AnomalyDetector:  # noqa: N801
 
     def fit(self, X: NDArray[np.float64]) -> "POD_AnomalyDetector":
         X = np.asarray(X, dtype=np.float64)
-        U, _, _ = np.linalg.svd(X, full_matrices=False)
+        U, _, _ = _svd(X, full_matrices=False)
         self.Phi = U[:, :self.rank]
         # threshold = 95th percentile of training reconstruction errors
         rec = self.Phi @ (self.Phi.T @ X)
