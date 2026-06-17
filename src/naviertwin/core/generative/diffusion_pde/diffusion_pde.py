@@ -147,9 +147,15 @@ class DiffusionPDE:
         )
 
         self.train_losses_ = []
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             epoch_loss = 0.0
-            for (xb,) in loader:
+            batches = iter(loader)
+            while True:
+                try:
+                    (xb,) = next(batches)
+                except StopIteration:
+                    break
                 xb = xb.to(self._device)
                 B = xb.shape[0]
                 t = torch.randint(0, self.n_steps, (B,), device=self._device)
@@ -166,6 +172,7 @@ class DiffusionPDE:
                 epoch_loss += float(loss.item()) * B
             epoch_loss /= max(len(X_arr), 1)
             self.train_losses_.append(epoch_loss)
+            epoch_idx += 1
 
         self.is_fitted = True
         logger.info(
@@ -190,7 +197,8 @@ class DiffusionPDE:
             (n_samples, self.n_features), device=self._device, generator=gen
         )
         with torch.no_grad():
-            for t in reversed(range(self.n_steps)):
+            t = self.n_steps - 1
+            while t >= 0:
                 t_tensor = torch.full((n_samples,), t, device=self._device)
                 alpha = self._alphas[t]
                 alpha_bar = self._alpha_bars[t]
@@ -206,6 +214,7 @@ class DiffusionPDE:
                     x = mean + torch.sqrt(beta) * noise
                 else:
                     x = mean
+                t -= 1
         return x.cpu().numpy().astype(np.float64)
 
 
