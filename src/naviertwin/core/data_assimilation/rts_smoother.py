@@ -10,6 +10,8 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin.core.data_assimilation.iterated_ekf import _right_solve
+
 
 def rts_smoother(
     F: NDArray[np.float64], H: NDArray[np.float64],
@@ -30,7 +32,8 @@ def rts_smoother(
     xp[0] = x0
     Pp[0] = P0
 
-    for k in range(T):
+    k = 0
+    while k < T:
         # predict
         x_pred = F @ xf[k]
         P_pred = F @ Pf[k] @ F.T + Q
@@ -39,17 +42,20 @@ def rts_smoother(
         # update
         y = measurements[k] - H @ x_pred
         S = H @ P_pred @ H.T + R
-        K = P_pred @ H.T @ np.linalg.inv(S)
+        K = _right_solve(S, P_pred @ H.T)
         xf[k + 1] = x_pred + K @ y
         Pf[k + 1] = (np.eye(d) - K @ H) @ P_pred
+        k += 1
 
     # Backward
     xs = xf.copy()
     Ps = Pf.copy()
-    for k in range(T - 1, -1, -1):
-        G = Pf[k] @ F.T @ np.linalg.inv(Pp[k + 1])
+    k = T - 1
+    while k >= 0:
+        G = _right_solve(Pp[k + 1], Pf[k] @ F.T)
         xs[k] = xf[k] + G @ (xs[k + 1] - xp[k + 1])
         Ps[k] = Pf[k] + G @ (Ps[k + 1] - Pp[k + 1]) @ G.T
+        k -= 1
     return xs, Ps
 
 
