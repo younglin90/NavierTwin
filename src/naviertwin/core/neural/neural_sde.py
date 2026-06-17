@@ -45,14 +45,16 @@ def NeuralSDE(
             n = int((t1 - t0) / dt)
             x = x0
             traj = [x]
-            for k in range(n):
+            k = 0
+            while k < n:
                 t = t0 + k * dt
                 x = self.step(x, t, dt)
                 traj.append(x)
+                k += 1
             return torch.stack(traj, dim=0)
 
         def forward(self, x):
-            return self.drift(x)  # only for inference of drift
+            return self.drift(x)
 
     return _SDE()
 
