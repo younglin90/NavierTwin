@@ -33,10 +33,14 @@ class HTMLReport:
         return self
 
     def table(self, headers: list[str], rows: list[list[Any]]) -> "HTMLReport":
-        thead = "".join(f"<th>{h}</th>" for h in headers)
+        thead = "".join(map(lambda h: f"<th>{h}</th>", headers))
         tbody = "".join(
-            "<tr>" + "".join(f"<td>{c}</td>" for c in row) + "</tr>"
-            for row in rows
+            map(
+                lambda row: "<tr>"
+                + "".join(map(lambda c: f"<td>{c}</td>", row))
+                + "</tr>",
+                rows,
+            )
         )
         self._body.append(
             f'<table border="1" cellpadding="4">'
