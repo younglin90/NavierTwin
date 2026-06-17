@@ -44,7 +44,12 @@ def _dump_value(v: Any) -> str:
     if isinstance(v, str):
         return '"' + v.replace('"', '\\"') + '"'
     if isinstance(v, list):
-        return "[" + ", ".join(_dump_value(x) for x in v) + "]"
+        values = []
+        value_idx = 0
+        while value_idx < len(v):
+            values.append(_dump_value(v[value_idx]))
+            value_idx += 1
+        return "[" + ", ".join(values) + "]"
     return '"' + str(v) + '"'
 
 
@@ -52,15 +57,27 @@ def toml_dump(data: dict[str, Any]) -> str:
     """간단 TOML 덤프 — 최상위 key only (표준 TOML 포맷은 아니지만 round-trip)."""
     lines = []
     tables = {}
-    for k, v in data.items():
+    items = list(data.items())
+    item_idx = 0
+    while item_idx < len(items):
+        k, v = items[item_idx]
         if isinstance(v, dict):
             tables[k] = v
         else:
             lines.append(f"{k} = {_dump_value(v)}")
-    for name, tbl in tables.items():
+        item_idx += 1
+    table_items = list(tables.items())
+    table_idx = 0
+    while table_idx < len(table_items):
+        name, tbl = table_items[table_idx]
         lines.append(f"\n[{name}]")
-        for k, v in tbl.items():
+        tbl_items = list(tbl.items())
+        tbl_idx = 0
+        while tbl_idx < len(tbl_items):
+            k, v = tbl_items[tbl_idx]
             lines.append(f"{k} = {_dump_value(v)}")
+            tbl_idx += 1
+        table_idx += 1
     return "\n".join(lines) + "\n"
 
 
