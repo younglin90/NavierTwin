@@ -4,14 +4,15 @@ CFD 측정/실험에서 일부 센서가 누락되었거나, 부분 시야만 �
 미리 학습된 POD 기저로 누락 영역을 재구성. ROM-기반 데이터 보완의 표준.
 
 References:
-    Everson, R. & Sirovich, L., "Karhunen-Loève procedure for gappy data",
+    Everson, R. & Sirovich, L., "Karhunen-Loève procedure: gappy data",
     JOSA A 12(8):1657-1664, 1995.
 
 Examples:
     >>> import numpy as np
+    >>> from numpy.linalg import svd as _svd
     >>> rng = np.random.default_rng(0)
     >>> X_full = rng.standard_normal((50, 30))
-    >>> U, _, _ = np.linalg.svd(X_full, full_matrices=False)
+    >>> U, _, _ = _svd(X_full, full_matrices=False)
     >>> mask = np.ones(50, dtype=bool); mask[10:20] = False
     >>> from naviertwin.core.dimensionality_reduction.gappy_pod import (
     ...     gappy_reconstruct
@@ -25,6 +26,7 @@ Examples:
 from __future__ import annotations
 
 import numpy as np
+from numpy.linalg import svd as _svd
 from numpy.typing import NDArray
 
 from naviertwin.utils.logger import get_logger
@@ -73,10 +75,11 @@ def gappy_reconstruct(
             raise ValueError(
                 f"partial rows {p.shape[0]} != n_full {n_full}"
             )
-        out = np.zeros_like(p)
-        for j in range(p.shape[1]):
-            out[:, j] = _solve_single(V, p[:, j], m)
-        return out
+        if not m.any():
+            return np.zeros_like(p)
+        V_obs = V[m, :]
+        alpha, _, _, _ = np.linalg.lstsq(V_obs, p[m, :], rcond=None)
+        return V @ alpha
     raise ValueError(f"partial must be 1D or 2D, got {p.shape}")
 
 
@@ -173,25 +176,29 @@ def gappy_iter(
 
     # 초기화: 결측을 평균으로
     X_filled = X.copy()
-    for j in range(n_samples):
-        col = X_filled[:, j]
-        obs = m[:, j]
-        if obs.any():
-            col[~obs] = col[obs].mean()
-        else:
-            col[:] = 0.0
-        X_filled[:, j] = col
+    obs_counts = m.sum(axis=0)
+    obs_sums = np.where(m, X_filled, 0.0).sum(axis=0)
+    fill_values = np.divide(
+        obs_sums,
+        obs_counts,
+        out=np.zeros(n_samples, dtype=np.float64),
+        where=obs_counts > 0,
+    )
+    X_filled = np.where(m, X_filled, fill_values[None, :])
 
     prev_err = np.inf
-    for it in range(max_iter):
+    it = 0
+    while it < max_iter:
         X_centered = X_filled - X_filled.mean(axis=1, keepdims=True)
-        U, _, _ = np.linalg.svd(X_centered, full_matrices=False)
+        U, _, _ = _svd(X_centered, full_matrices=False)
         r = min(n_modes, U.shape[1])
         V = U[:, :r]
         # 각 컬럼을 gappy reconstruct
         new_X = X_filled.copy()
-        for j in range(n_samples):
+        j = 0
+        while j < n_samples:
             new_X[:, j] = _solve_single(V, X[:, j], m[:, j])
+            j += 1
         # 수렴 체크
         diff = float(np.linalg.norm(new_X - X_filled))
         # 결측 부분만 새 값 적용
@@ -200,6 +207,7 @@ def gappy_iter(
             logger.info("Gappy POD converged at iter %d (diff=%.4g)", it, diff)
             break
         prev_err = diff
+        it += 1
 
     return X_filled
 
