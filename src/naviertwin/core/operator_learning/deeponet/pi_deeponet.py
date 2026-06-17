@@ -104,10 +104,16 @@ class PIDeepONet(DeepONet):
         self.data_losses_ = []
         self.phys_losses_ = []
 
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             epoch_data = 0.0
             epoch_phys = 0.0
-            for bb, yb in loader:
+            batches = iter(loader)
+            while True:
+                try:
+                    bb, yb = next(batches)
+                except StopIteration:
+                    break
                 bb = bb.to(self._device)
                 yb = yb.to(self._device)
                 optim.zero_grad()
@@ -133,6 +139,7 @@ class PIDeepONet(DeepONet):
             self.train_losses_.append(
                 self.data_losses_[-1] + self.physics_weight * self.phys_losses_[-1]
             )
+            epoch_idx += 1
 
         self._trunk_cache = T
         self.n_epochs = self.max_epochs
