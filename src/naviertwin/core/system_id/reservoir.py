@@ -20,6 +20,22 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+
+def _solve_dense_rhs(A: NDArray[np.float64], B: NDArray[np.float64]) -> NDArray[np.float64]:
+    if _kernels is None:
+        raise ImportError("naviertwin._native._kernels is required by EchoStateNetwork")
+    rhs = np.asarray(B, dtype=np.float64)
+    if rhs.ndim == 1:
+        return _kernels.solve_dense(A, rhs)
+    out = np.empty_like(rhs)
+    j = 0
+    while j < rhs.shape[1]:
+        out[:, j] = _kernels.solve_dense(A, rhs[:, j])
+        j += 1
+    return out
+
 
 class EchoStateNetwork:
     def __init__(
@@ -48,10 +64,12 @@ class EchoStateNetwork:
         T = X.shape[0]
         H = np.zeros((T, self.n_res))
         h = self.h.copy()
-        for t in range(T):
+        t = 0
+        while t < T:
             h_new = np.tanh(self.W_in @ X[t] + self.W_res @ h)
             h = (1.0 - self.leaky) * h + self.leaky * h_new
             H[t] = h
+            t += 1
         self.h = h
         return H
 
@@ -65,7 +83,7 @@ class EchoStateNetwork:
         H_ = H[discard:]
         Y_ = Y[discard:]
         # ridge regression
-        self.W_out = np.linalg.solve(
+        self.W_out = _solve_dense_rhs(
             H_.T @ H_ + ridge * np.eye(self.n_res), H_.T @ Y_
         )
         return self
