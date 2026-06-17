@@ -122,19 +122,24 @@ class KANO1D(BaseOperator):
             def __init__(self) -> None:
                 super().__init__()
                 self.lift = _kan_layer(in_c, W, G)
-                self.specs = nn.ModuleList(
-                    [_build_spectral_conv_1d(W, W, M) for _ in range(n_layers)]
-                )
-                self.kan_post = nn.ModuleList(
-                    [_kan_layer(W, W, G) for _ in range(n_layers)]
-                )
+                specs = nn.ModuleList()
+                kan_post = nn.ModuleList()
+                layer_idx = 0
+                while layer_idx < n_layers:
+                    specs.append(_build_spectral_conv_1d(W, W, M))
+                    kan_post.append(_kan_layer(W, W, G))
+                    layer_idx += 1
+                self.specs = specs
+                self.kan_post = kan_post
                 self.proj = _kan_layer(W, out_c, G)
 
             def forward(self, x: Any) -> Any:  # (B, N, C_in)
                 x = self.lift(x).permute(0, 2, 1)  # (B, W, N)
-                for sp, kp in zip(self.specs, self.kan_post):
-                    sp_out = sp(x).permute(0, 2, 1)  # (B, N, W)
-                    x = kp(sp_out).permute(0, 2, 1)
+                layer_idx = 0
+                while layer_idx < len(self.specs):
+                    sp_out = self.specs[layer_idx](x).permute(0, 2, 1)  # (B, N, W)
+                    x = self.kan_post[layer_idx](sp_out).permute(0, 2, 1)
+                    layer_idx += 1
                 x = x.permute(0, 2, 1)
                 return self.proj(x)
 
@@ -160,9 +165,15 @@ class KANO1D(BaseOperator):
             shuffle=True,
         )
         self.train_losses_ = []
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             epoch_loss = 0.0
-            for xb, yb in loader:
+            batches = iter(loader)
+            while True:
+                try:
+                    xb, yb = next(batches)
+                except StopIteration:
+                    break
                 xb = xb.to(self._device)
                 yb = yb.to(self._device)
                 optim.zero_grad()
@@ -173,6 +184,7 @@ class KANO1D(BaseOperator):
                 epoch_loss += float(loss.item()) * xb.shape[0]
             epoch_loss /= max(len(X), 1)
             self.train_losses_.append(epoch_loss)
+            epoch_idx += 1
 
         self.is_fitted = True
         logger.info(
