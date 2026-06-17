@@ -3,7 +3,7 @@
 Examples:
     >>> from naviertwin.core.twin.replay_buffer import ReplayBuffer
     >>> r = ReplayBuffer(capacity=3)
-    >>> for k in range(5): r.add(k, k * 2)
+    >>> r.add(0, 0); r.add(1, 2); r.add(2, 4); r.add(3, 6); r.add(4, 8)
     >>> len(r)
     3
 """
