@@ -29,6 +29,10 @@ from naviertwin.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _stack_predictions(predictions: list[NDArray[np.float64]]) -> NDArray[np.float64]:
+    return np.stack(tuple(map(lambda p: np.asarray(p, dtype=np.float64), predictions)))
+
+
 def equal_weight_average(
     predictions: list[NDArray[np.float64]],
 ) -> NDArray[np.float64]:
@@ -45,7 +49,7 @@ def equal_weight_average(
     """
     if len(predictions) == 0:
         raise ValueError("predictions list is empty")
-    arr = np.stack([np.asarray(p, dtype=np.float64) for p in predictions])
+    arr = _stack_predictions(predictions)
     return arr.mean(axis=0)
 
 
@@ -76,7 +80,7 @@ def weighted_average(
         raise ValueError("weights sum to zero")
     w = w / w_sum
 
-    arr = np.stack([np.asarray(p, dtype=np.float64) for p in predictions])
+    arr = _stack_predictions(predictions)
     return np.einsum("i,i...->...", w, arr)
 
 
@@ -185,7 +189,7 @@ def ensemble_variance(
     M = len(predictions)
     if M == 0:
         raise ValueError("predictions list is empty")
-    arr = np.stack([np.asarray(p, dtype=np.float64) for p in predictions])
+    arr = _stack_predictions(predictions)
     if weights is None:
         w = np.ones(M) / M
     else:
