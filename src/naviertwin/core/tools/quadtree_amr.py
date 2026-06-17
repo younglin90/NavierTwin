@@ -50,8 +50,13 @@ class QuadCell:
         if self.is_leaf:
             return [self]
         out: list[QuadCell] = []
-        for c in self.children:
-            out.extend(c.leaves())
+        stack = list(reversed(self.children))
+        while stack:
+            cell = stack.pop()
+            if cell.is_leaf:
+                out.append(cell)
+            else:
+                stack.extend(reversed(cell.children))
         return out
 
 
