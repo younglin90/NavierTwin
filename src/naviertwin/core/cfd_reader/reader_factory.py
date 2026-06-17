@@ -69,11 +69,15 @@ class ReaderFactory:
             ... class FooReader(BaseReader):
             ...     supported_extensions = frozenset({".foo"})
         """
-        for ext in reader_cls.supported_extensions:
+        extensions = tuple(reader_cls.supported_extensions)
+        idx = 0
+        while idx < len(extensions):
+            ext = extensions[idx]
             cls._registry[ext.lower()] = reader_cls
             logger.debug(
                 "리더 등록: %s → %s", ext.lower(), reader_cls.__name__
             )
+            idx += 1
         return reader_cls
 
     @classmethod
@@ -88,7 +92,7 @@ class ReaderFactory:
         """
         if not path.is_dir():
             return False
-        children = {p.name for p in path.iterdir()}
+        children = set(map(lambda p: p.name, path.iterdir()))
         # polyMesh 하위디렉토리가 있거나 OpenFOAM 대표 디렉토리가 2개 이상 존재
         if "polyMesh" in children:
             return True
