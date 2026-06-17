@@ -3879,6 +3879,85 @@ static double kmeans_inertia_native(ArrayD x, ArrayD centers, ArrayI labels) {
     return total;
 }
 
+static py::dict haar_forward_native(ArrayD x, int level) {
+    if (x.ndim() != 1) {
+        throw std::invalid_argument("x must be a 1D array");
+    }
+    constexpr double inv_sqrt2 = 0.707106781186547524400844362104849039;
+    std::vector<double> a(x.data(), x.data() + x.shape(0));
+    std::vector<std::vector<double>> details;
+    details.reserve(static_cast<std::size_t>(std::max(level, 0)));
+    for (int lev = 0; lev < level; ++lev) {
+        if (a.size() % 2 != 0) {
+            throw std::invalid_argument("length must be divisible by 2 at each level");
+        }
+        const std::size_t n = a.size() / 2;
+        std::vector<double> next_a(n);
+        std::vector<double> d(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            next_a[i] = (a[2 * i] + a[2 * i + 1]) * inv_sqrt2;
+            d[i] = (a[2 * i] - a[2 * i + 1]) * inv_sqrt2;
+        }
+        details.push_back(std::move(d));
+        a = std::move(next_a);
+    }
+    auto approx = py::array_t<double>({static_cast<py::ssize_t>(a.size())});
+    std::copy(a.begin(), a.end(), approx.mutable_data());
+    py::list detail_list;
+    for (auto it = details.rbegin(); it != details.rend(); ++it) {
+        auto arr = py::array_t<double>({static_cast<py::ssize_t>(it->size())});
+        std::copy(it->begin(), it->end(), arr.mutable_data());
+        detail_list.append(arr);
+    }
+    py::dict out;
+    out["approx"] = approx;
+    out["details"] = detail_list;
+    return out;
+}
+
+static py::array_t<double> haar_inverse_native(py::dict coeffs) {
+    constexpr double inv_sqrt2 = 0.707106781186547524400844362104849039;
+    ArrayD approx = py::cast<ArrayD>(coeffs["approx"]);
+    std::vector<double> a(approx.data(), approx.data() + approx.size());
+    py::sequence details = py::cast<py::sequence>(coeffs["details"]);
+    for (py::handle item : details) {
+        ArrayD d_arr = py::cast<ArrayD>(item);
+        if (d_arr.ndim() != 1 || static_cast<std::size_t>(d_arr.shape(0)) != a.size()) {
+            throw std::invalid_argument("detail arrays must be 1D and match current approximation length");
+        }
+        const double* dp = d_arr.data();
+        std::vector<double> up(a.size() * 2);
+        for (std::size_t i = 0; i < a.size(); ++i) {
+            up[2 * i] = (a[i] + dp[i]) * inv_sqrt2;
+            up[2 * i + 1] = (a[i] - dp[i]) * inv_sqrt2;
+        }
+        a = std::move(up);
+    }
+    auto out = py::array_t<double>({static_cast<py::ssize_t>(a.size())});
+    std::copy(a.begin(), a.end(), out.mutable_data());
+    return out;
+}
+
+static py::dict haar_threshold_native(py::dict coeffs, double tau) {
+    py::dict out;
+    out["approx"] = coeffs["approx"];
+    py::list detail_list;
+    py::sequence details = py::cast<py::sequence>(coeffs["details"]);
+    for (py::handle item : details) {
+        ArrayD d_arr = py::cast<ArrayD>(item);
+        auto arr = py::array_t<double>({d_arr.shape(0)});
+        const double* dp = d_arr.data();
+        double* ap = arr.mutable_data();
+        for (py::ssize_t i = 0; i < d_arr.shape(0); ++i) {
+            const double mag = std::max(std::abs(dp[i]) - tau, 0.0);
+            ap[i] = (dp[i] > 0.0 ? 1.0 : (dp[i] < 0.0 ? -1.0 : 0.0)) * mag;
+        }
+        detail_list.append(arr);
+    }
+    out["details"] = detail_list;
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -4039,5 +4118,8 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("augment_symmetric", &augment_symmetric_native, py::arg("U"), py::arg("axes"));
     m.def("kmeans_lloyd", &kmeans_lloyd_native, py::arg("X"), py::arg("initial_centers"), py::arg("max_iter") = 100, py::arg("tol") = 1e-6);
     m.def("kmeans_inertia", &kmeans_inertia_native, py::arg("X"), py::arg("centers"), py::arg("labels"));
+    m.def("haar_forward", &haar_forward_native, py::arg("x"), py::arg("level") = 1);
+    m.def("haar_inverse", &haar_inverse_native, py::arg("coeffs"));
+    m.def("haar_threshold", &haar_threshold_native, py::arg("coeffs"), py::arg("tau"));
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
