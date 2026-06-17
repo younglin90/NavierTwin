@@ -82,8 +82,10 @@ class HybridROM:
             torch.manual_seed(self.seed)
 
         layers: list[nn.Module] = [nn.Linear(latent_dim, self.hidden), nn.Tanh()]
-        for _ in range(self.n_layers - 1):
+        layer_idx = 0
+        while layer_idx < self.n_layers - 1:
             layers.extend([nn.Linear(self.hidden, self.hidden), nn.Tanh()])
+            layer_idx += 1
         layers.append(nn.Linear(self.hidden, n_features))
         return nn.Sequential(*layers)
 
@@ -108,13 +110,15 @@ class HybridROM:
         R = torch.tensor(resid, dtype=torch.float32, device=self._device)
 
         self.train_losses_ = []
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             optim.zero_grad()
             pred = self._model(A)
             loss = mse(pred, R)
             loss.backward()
             optim.step()
             self.train_losses_.append(float(loss.item()))
+            epoch_idx += 1
 
         self.is_fitted = True
         logger.info(
