@@ -51,15 +51,17 @@ class MeshGraphNet(nn.Module):
         super().__init__()
         self.node_enc = _mlp(node_in, hidden, hidden)
         self.edge_enc = _mlp(edge_in, hidden, hidden)
-        self.steps = nn.ModuleList([MGNStep(hidden) for _ in range(n_steps)])
+        self.steps = nn.ModuleList(map(lambda _: MGNStep(hidden), range(n_steps)))
         self.dec = _mlp(hidden, hidden, out_dim)
 
     def forward(self, x: torch.Tensor, e_attr: torch.Tensor,
-                edges: torch.Tensor) -> torch.Tensor:
+        edges: torch.Tensor) -> torch.Tensor:
         h_n = self.node_enc(x)
         h_e = self.edge_enc(e_attr)
-        for s in self.steps:
-            h_n, h_e = s(h_n, h_e, edges)
+        step_idx = 0
+        while step_idx < len(self.steps):
+            h_n, h_e = self.steps[step_idx](h_n, h_e, edges)
+            step_idx += 1
         return self.dec(h_n)
 
 
