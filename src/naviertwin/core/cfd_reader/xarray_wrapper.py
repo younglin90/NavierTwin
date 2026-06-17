@@ -25,7 +25,7 @@ def read_netcdf(path: str | Path) -> dict[str, Any]:
         raise ImportError("xarray not installed; pip install xarray netcdf4")
     import xarray as xr
     ds = xr.open_dataset(str(path))
-    out = {var: ds[var].values for var in ds.data_vars}
+    out = dict(map(lambda var: (var, ds[var].values), ds.data_vars))
     ds.close()
     return out
 
@@ -34,7 +34,7 @@ def write_netcdf(path: str | Path, data: dict[str, Any]) -> None:
     if not has_xarray():
         raise ImportError("xarray not installed; pip install xarray netcdf4")
     import xarray as xr
-    ds = xr.Dataset({k: ("dim_0", v) for k, v in data.items()})
+    ds = xr.Dataset(dict(map(lambda item: (item[0], ("dim_0", item[1])), data.items())))
     ds.to_netcdf(str(path))
 
 
