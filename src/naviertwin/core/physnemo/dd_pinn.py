@@ -71,7 +71,8 @@ class DomainDecompPINN:
     def _split_domain(self) -> list[tuple[float, float]]:
         a, b = self.domain
         xs = np.linspace(a, b, self.n_sub + 1)
-        return [(float(xs[i]), float(xs[i + 1])) for i in range(self.n_sub)]
+        pairs = np.column_stack([xs[:-1], xs[1:]])
+        return list(map(lambda p: (float(p[0]), float(p[1])), pairs))
 
     def fit(
         self,
@@ -85,7 +86,9 @@ class DomainDecompPINN:
         bc_u = np.asarray(boundary["u"], dtype=np.float32)
 
         self._subs = []
-        for k, (a, b) in enumerate(self._boundaries):
+        k = 0
+        while k < len(self._boundaries):
+            a, b = self._boundaries[k]
             sub = PINNSolver(
                 in_dim=1, out_dim=1, hidden=self.hidden, n_layers=self.n_layers,
                 max_epochs=self.max_epochs // max(self.n_sub, 1),
@@ -94,12 +97,9 @@ class DomainDecompPINN:
             col = np.linspace(a, b, self.n_collocation, dtype=np.float32).reshape(-1, 1)
 
             # 이 서브의 경계조건 = 외부 BC 중 [a,b] 영역 + 이웃 서브와의 일치
-            sub_bc_x: list[np.ndarray] = []
-            sub_bc_u: list[np.ndarray] = []
-            for i in range(bc_x.shape[0]):
-                if a - 1e-9 <= float(bc_x[i, 0]) <= b + 1e-9:
-                    sub_bc_x.append(bc_x[i])
-                    sub_bc_u.append(bc_u[i])
+            inside = (a - 1e-9 <= bc_x[:, 0]) & (bc_x[:, 0] <= b + 1e-9)
+            sub_bc_x: list[np.ndarray] = list(bc_x[inside])
+            sub_bc_u: list[np.ndarray] = list(bc_u[inside])
 
             # 이웃 인터페이스 — 이미 학습된 이전 서브의 값 사용
             if k > 0:
@@ -118,6 +118,7 @@ class DomainDecompPINN:
                 sub_bc = None
             sub.fit(residual_fn, col, sub_bc)
             self._subs.append(sub)
+            k += 1
 
         self.is_fitted = True
         logger.info(
@@ -132,12 +133,15 @@ class DomainDecompPINN:
         if x.ndim == 1:
             x = x.reshape(-1, 1)
         out = np.zeros((x.shape[0], 1), dtype=np.float64)
-        for i, xv in enumerate(x[:, 0]):
-            # 어느 서브에 속하는지
-            for k, (a, b) in enumerate(self._boundaries):
-                if a - 1e-9 <= xv <= b + 1e-9:
-                    out[i] = self._subs[k].predict(np.array([[xv]]))[0]
-                    break
+        assigned = np.zeros(x.shape[0], dtype=bool)
+        k = 0
+        while k < len(self._boundaries):
+            a, b = self._boundaries[k]
+            mask = (~assigned) & (a - 1e-9 <= x[:, 0]) & (x[:, 0] <= b + 1e-9)
+            if mask.any():
+                out[mask] = self._subs[k].predict(x[mask])
+                assigned[mask] = True
+            k += 1
         return out
 
 
