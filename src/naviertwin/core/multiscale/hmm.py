@@ -22,7 +22,8 @@ def hmm_macro_flux(
 ) -> NDArray[np.float64]:
     """At each macro DOF, evaluate micro_solver and return result."""
     u = np.asarray(macro_state, dtype=np.float64)
-    return np.array([float(micro_solver(float(ui))) for ui in u])
+    values = map(lambda ui: float(micro_solver(float(ui))), u)
+    return np.fromiter(values, dtype=float, count=u.size)
 
 
 __all__ = ["hmm_macro_flux"]
