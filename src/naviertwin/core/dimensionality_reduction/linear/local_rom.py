@@ -15,6 +15,7 @@ Examples:
 from __future__ import annotations
 
 import numpy as np
+from numpy.linalg import svd as _svd
 from numpy.typing import NDArray
 
 
@@ -26,16 +27,18 @@ def _kmeans(
     m = X.shape[1]
     centers = X[:, rng.choice(m, size=k, replace=False)].copy()
     labels = np.zeros(m, dtype=int)
-    for _ in range(n_iter):
+    iteration = 0
+    while iteration < n_iter:
         d = np.linalg.norm(X[:, :, None] - centers[:, None, :], axis=0)  # (m, k)
         new_labels = np.argmin(d, axis=1)
         if np.array_equal(new_labels, labels):
             break
         labels = new_labels
-        for j in range(k):
-            mask = labels == j
-            if mask.any():
-                centers[:, j] = X[:, mask].mean(axis=1)
+        counts = np.bincount(labels, minlength=k)
+        membership = (labels[:, None] == np.arange(k)).astype(np.float64)
+        nonempty = counts > 0
+        centers[:, nonempty] = (X @ membership[:, nonempty]) / counts[nonempty]
+        iteration += 1
     return centers, labels
 
 
@@ -51,16 +54,19 @@ class LocalROM:
         X = np.asarray(X, dtype=np.float64)
         self.centers, labels = _kmeans(X, self.n_clusters, seed=self.seed)
         self.bases = []
-        for j in range(self.n_clusters):
+        j = 0
+        while j < self.n_clusters:
             Xj = X[:, labels == j]
             if Xj.shape[1] == 0:
                 self.bases.append(np.zeros((X.shape[0], self.rank)))
+                j += 1
                 continue
-            U, _, _ = np.linalg.svd(Xj, full_matrices=False)
+            U, _, _ = _svd(Xj, full_matrices=False)
             r = min(self.rank, U.shape[1])
             B = np.zeros((X.shape[0], self.rank))
             B[:, :r] = U[:, :r]
             self.bases.append(B)
+            j += 1
         return self
 
     def _assign(self, x: NDArray) -> int:
