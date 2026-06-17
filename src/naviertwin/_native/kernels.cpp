@@ -2764,6 +2764,11 @@ static double battery_steady_temperature_native(double T_amb, double Q_gen, doub
     return T_amb + Q_gen / (h * A);
 }
 
+static double greenhouse_temperature_step_native(double T_in, double T_out, double Q_solar, double U, double A, double m, double cp, double dt) {
+    const double dTdt = (Q_solar - U * A * (T_in - T_out)) / (m * cp);
+    return T_in + dt * dTdt;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -2874,6 +2879,11 @@ PYBIND11_MODULE(_kernels, m) {
     m.def(
         "battery_steady_temperature", &battery_steady_temperature_native, py::arg("T_amb"),
         py::arg("Q_gen"), py::arg("h"), py::arg("A")
+    );
+    m.def(
+        "greenhouse_temperature_step", &greenhouse_temperature_step_native, py::arg("T_in"),
+        py::arg("T_out"), py::arg("Q_solar"), py::arg("U"), py::arg("A"), py::arg("m"),
+        py::arg("cp"), py::arg("dt")
     );
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
