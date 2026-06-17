@@ -63,23 +63,30 @@ class WaveletDiffusionNO:
         """각 샘플에 대해 DWT → flat 1D 벡터 packed."""
         pywt = _require_pywt()
         out = []
-        for i in range(X.shape[0]):
+        i = 0
+        while i < X.shape[0]:
             coeffs = pywt.wavedec(X[i], self.wavelet, level=self.level)
             if i == 0:
-                self._coef_shapes = [len(c) for c in coeffs]
+                self._coef_shapes = list(map(len, coeffs))
             out.append(np.concatenate(coeffs))
+            i += 1
         return np.stack(out).astype(np.float32)
 
     def _unpack(self, V: NDArray[np.float64]) -> NDArray[np.float64]:
         """flat → coeffs 리스트 → IDWT 로 원 시그널."""
         pywt = _require_pywt()
         out = []
-        for v in V:
+        sample_idx = 0
+        while sample_idx < V.shape[0]:
+            v = V[sample_idx]
             coeffs: list[NDArray[np.float64]] = []
             idx = 0
-            for size in self._coef_shapes:
+            shape_idx = 0
+            while shape_idx < len(self._coef_shapes):
+                size = self._coef_shapes[shape_idx]
                 coeffs.append(v[idx : idx + size])
                 idx += size
+                shape_idx += 1
             x = pywt.waverec(coeffs, self.wavelet)
             # 길이 정규화
             if x.shape[0] > self.n_features:
@@ -87,6 +94,7 @@ class WaveletDiffusionNO:
             elif x.shape[0] < self.n_features:
                 x = np.pad(x, (0, self.n_features - x.shape[0]))
             out.append(x)
+            sample_idx += 1
         return np.stack(out).astype(np.float64)
 
     def fit(self, X: NDArray[np.float64]) -> None:
