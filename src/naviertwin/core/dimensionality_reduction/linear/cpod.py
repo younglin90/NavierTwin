@@ -25,6 +25,8 @@ Examples:
 from __future__ import annotations
 
 import numpy as np
+from numpy.linalg import solve as _solve
+from numpy.linalg import svd as _svd
 from numpy.typing import NDArray
 
 from naviertwin.core.dimensionality_reduction.base import BaseReducer
@@ -72,7 +74,7 @@ class ConstrainedPOD(BaseReducer):
         C = self.C
         CCt = C @ C.T
         CM = C @ M  # (m, k)
-        lam = np.linalg.solve(CCt, CM)  # (m, k)
+        lam = _solve(CCt, CM)  # (m, k)
         return M - C.T @ lam
 
     def _constrained_mean(self, mean: NDArray[np.float64]) -> NDArray[np.float64]:
@@ -82,7 +84,7 @@ class ConstrainedPOD(BaseReducer):
         C = self.C
         CCt = C @ C.T
         residual = C @ mean - self.d
-        lam = np.linalg.solve(CCt, residual)
+        lam = _solve(CCt, residual)
         return mean - C.T @ lam
 
     def fit(self, snapshots: NDArray[np.float64]) -> None:
@@ -98,7 +100,7 @@ class ConstrainedPOD(BaseReducer):
         self.mean_ = mean
         X_c = X - mean[:, None]
 
-        U, s, _ = np.linalg.svd(X_c, full_matrices=False)
+        U, s, _ = _svd(X_c, full_matrices=False)
         U = U[:, :n_modes]
         # 제약 null-space 로 투영
         U_proj = self._project_nullspace(U)
