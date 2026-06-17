@@ -2840,6 +2840,37 @@ static py::tuple mean_std_axis0_native(ArrayD values) {
     return py::make_tuple(mean, std_arr);
 }
 
+static py::tuple winslow_smooth_native(ArrayD X, ArrayD Y, int n_iter) {
+    if (X.ndim() != 2 || Y.ndim() != 2 || X.shape(0) != Y.shape(0) || X.shape(1) != Y.shape(1)) {
+        throw std::invalid_argument("X and Y must be matching 2D arrays");
+    }
+    const py::ssize_t nx = X.shape(0);
+    const py::ssize_t ny = X.shape(1);
+    auto Xout = py::array_t<double>({nx, ny});
+    auto Yout = py::array_t<double>({nx, ny});
+    const py::ssize_t size = nx * ny;
+    std::copy(X.data(), X.data() + size, Xout.mutable_data());
+    std::copy(Y.data(), Y.data() + size, Yout.mutable_data());
+    std::vector<double> x_next(static_cast<std::size_t>(size));
+    std::vector<double> y_next(static_cast<std::size_t>(size));
+    double* xp = Xout.mutable_data();
+    double* yp = Yout.mutable_data();
+    for (int it = 0; it < n_iter; ++it) {
+        std::copy(xp, xp + size, x_next.begin());
+        std::copy(yp, yp + size, y_next.begin());
+        for (py::ssize_t i = 1; i < nx - 1; ++i) {
+            for (py::ssize_t j = 1; j < ny - 1; ++j) {
+                const py::ssize_t idx = i * ny + j;
+                x_next[static_cast<std::size_t>(idx)] = 0.25 * (xp[(i + 1) * ny + j] + xp[(i - 1) * ny + j] + xp[i * ny + j + 1] + xp[i * ny + j - 1]);
+                y_next[static_cast<std::size_t>(idx)] = 0.25 * (yp[(i + 1) * ny + j] + yp[(i - 1) * ny + j] + yp[i * ny + j + 1] + yp[i * ny + j - 1]);
+            }
+        }
+        std::copy(x_next.begin(), x_next.end(), xp);
+        std::copy(y_next.begin(), y_next.end(), yp);
+    }
+    return py::make_tuple(Xout, Yout);
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -2960,5 +2991,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("vector_dot", &vector_dot_native, py::arg("a"), py::arg("b"));
     m.def("aitken_relax", &aitken_relax_native, py::arg("omega_prev"), py::arg("r_prev"), py::arg("r_curr"));
     m.def("mean_std_axis0", &mean_std_axis0_native, py::arg("values"));
+    m.def("winslow_smooth", &winslow_smooth_native, py::arg("X"), py::arg("Y"), py::arg("n_iter") = 30);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

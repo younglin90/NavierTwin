@@ -19,21 +19,22 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required by Winslow smoothing")
+
 
 def winslow_smooth(
     X: NDArray[np.float64], Y: NDArray[np.float64], *, n_iter: int = 30,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     """fixed boundary, Gauss-Seidel ∇² = 0."""
-    X = np.asarray(X, dtype=np.float64).copy()
-    Y = np.asarray(Y, dtype=np.float64).copy()
-    for _ in range(n_iter):
-        X[1:-1, 1:-1] = 0.25 * (
-            X[2:, 1:-1] + X[:-2, 1:-1] + X[1:-1, 2:] + X[1:-1, :-2]
-        )
-        Y[1:-1, 1:-1] = 0.25 * (
-            Y[2:, 1:-1] + Y[:-2, 1:-1] + Y[1:-1, 2:] + Y[1:-1, :-2]
-        )
-    return X, Y
+    Xs, Ys = _kernels.winslow_smooth(
+        np.asarray(X, dtype=np.float64),
+        np.asarray(Y, dtype=np.float64),
+        int(n_iter),
+    )
+    return np.asarray(Xs, dtype=np.float64), np.asarray(Ys, dtype=np.float64)
 
 
 __all__ = ["winslow_smooth"]
