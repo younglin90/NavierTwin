@@ -4190,6 +4190,32 @@ static py::tuple connected_components_2d_native(ArrayB mask, int connectivity) {
     return py::make_tuple(labels, n_components);
 }
 
+static py::array_t<double> expected_improvement_native(ArrayD mu, ArrayD sigma, double y_best, double xi) {
+    if (mu.ndim() != 1 || sigma.ndim() != 1 || mu.shape(0) != sigma.shape(0)) {
+        throw std::invalid_argument("mu and sigma must be matching 1D arrays");
+    }
+    const py::ssize_t n = mu.shape(0);
+    const double* mp = mu.data();
+    const double* sp = sigma.data();
+    auto out = py::array_t<double>({n});
+    double* op = out.mutable_data();
+    constexpr double inv_sqrt2 = 0.707106781186547524400844362104849039;
+    constexpr double inv_sqrt2pi = 0.398942280401432677939946059934381868;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const double s = sp[i];
+        if (s <= 0.0) {
+            op[i] = 0.0;
+            continue;
+        }
+        const double imp = y_best - mp[i] - xi;
+        const double z = imp / s;
+        const double cdf = 0.5 * (1.0 + std::erf(z * inv_sqrt2));
+        const double pdf = std::exp(-0.5 * z * z) * inv_sqrt2pi;
+        op[i] = imp * cdf + s * pdf;
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -4359,5 +4385,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("binary_dilation_2d", &binary_dilation_2d_native, py::arg("mask"), py::arg("iterations") = 1, py::arg("connectivity") = 1);
     m.def("binary_erosion_2d", &binary_erosion_2d_native, py::arg("mask"), py::arg("iterations") = 1, py::arg("connectivity") = 1);
     m.def("connected_components_2d", &connected_components_2d_native, py::arg("mask"), py::arg("connectivity") = 1);
+    m.def("expected_improvement", &expected_improvement_native, py::arg("mu"), py::arg("sigma"), py::arg("y_best"), py::arg("xi") = 0.0);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

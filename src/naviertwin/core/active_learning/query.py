@@ -13,6 +13,8 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
 
 def top_variance_query(
     variances: NDArray[np.float64], k: int = 1,
@@ -48,23 +50,11 @@ def expected_improvement(
 
     EI > 0 일 때 개선 기대.
     """
-    from math import erf, sqrt
-
     mu = np.asarray(mu, dtype=np.float64).ravel()
     sigma = np.asarray(sigma, dtype=np.float64).ravel()
-    with np.errstate(divide="ignore", invalid="ignore"):
-        imp = y_best - mu - xi
-        z = np.where(sigma > 0, imp / sigma, 0.0)
-
-        def _cdf(x):
-            return 0.5 * (1 + np.array([erf(xx / sqrt(2)) for xx in x.ravel()])).reshape(x.shape)
-
-        def _pdf(x):
-            return np.exp(-0.5 * x ** 2) / np.sqrt(2 * np.pi)
-
-        ei = imp * _cdf(z) + sigma * _pdf(z)
-        ei[sigma <= 0] = 0.0
-    return ei
+    if _kernels is None:
+        raise ImportError("NavierTwin native kernels are required by expected_improvement")
+    return _kernels.expected_improvement(mu, sigma, y_best, xi)
 
 
 __all__ = ["top_variance_query", "greedy_maxmin", "expected_improvement"]
