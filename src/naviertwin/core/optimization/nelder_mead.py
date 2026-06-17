@@ -25,18 +25,18 @@ def nelder_mead(
     tol: float = 1e-8,
 ) -> NDArray[np.float64]:
     n = len(x0)
-    simplex = [np.asarray(x0, dtype=np.float64).copy()]
-    for i in range(n):
-        v = x0.copy().astype(np.float64)
-        v[i] += step
-        simplex.append(v)
-    fvals = [f(v) for v in simplex]
-    for _ in range(max_iter):
+    x0_arr = np.asarray(x0, dtype=np.float64)
+    simplex = np.repeat(x0_arr[None, :], n + 1, axis=0)
+    simplex[1 + np.arange(n), np.arange(n)] += step
+    fvals = np.fromiter(map(f, simplex), dtype=np.float64, count=n + 1)
+    iter_idx = 0
+    while iter_idx < max_iter:
         order = np.argsort(fvals)
-        simplex = [simplex[i] for i in order]
-        fvals = [fvals[i] for i in order]
+        simplex = simplex[order]
+        fvals = fvals[order]
         if np.linalg.norm(np.asarray(simplex[-1]) - simplex[0]) < tol:
             break
+        iter_idx += 1
         centroid = np.mean(simplex[:-1], axis=0)
         # reflect
         xr = centroid + (centroid - simplex[-1])
@@ -63,9 +63,8 @@ def nelder_mead(
             fvals[-1] = fc
             continue
         # shrink
-        for i in range(1, n + 1):
-            simplex[i] = simplex[0] + 0.5 * (simplex[i] - simplex[0])
-            fvals[i] = f(simplex[i])
+        simplex[1:] = simplex[0] + 0.5 * (simplex[1:] - simplex[0])
+        fvals[1:] = np.fromiter(map(f, simplex[1:]), dtype=np.float64, count=n)
     return simplex[0]
 
 
