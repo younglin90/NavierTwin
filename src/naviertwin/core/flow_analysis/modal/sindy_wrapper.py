@@ -32,24 +32,32 @@ from naviertwin.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _combo_name(combo: tuple[int, ...]) -> str:
+    parts: list[str] = []
+    idx = 0
+    while idx < len(combo):
+        parts.append(f"x{combo[idx]}")
+        idx += 1
+    return "*".join(parts)
+
+
 def _polynomial_library(
     X: NDArray[np.float64], degree: int
 ) -> tuple[NDArray[np.float64], list[str]]:
     """X (N, n) → Θ (N, p), feature names."""
     X = np.asarray(X, dtype=np.float64)
     N, n = X.shape
-    features = [np.ones(N)]
-    names = ["1"]
-    for d in range(1, degree + 1):
-        for combo in combinations_with_replacement(range(n), d):
-            col = np.ones(N)
-            nm_parts: list[str] = []
-            for idx in combo:
-                col = col * X[:, idx]
-                nm_parts.append(f"x{idx}")
-            features.append(col)
-            names.append("*".join(nm_parts))
-    return np.stack(features, axis=1), names
+    combos: list[tuple[int, ...]] = []
+    d = 1
+    while d <= degree:
+        combos.extend(combinations_with_replacement(range(n), d))
+        d += 1
+    if combos:
+        columns = tuple(map(lambda combo: np.prod(X[:, combo], axis=1), combos))
+        theta = np.column_stack((np.ones(N), *columns))
+    else:
+        theta = np.ones((N, 1), dtype=np.float64)
+    return theta, ["1", *tuple(map(_combo_name, combos))]
 
 
 def _stlsq(
@@ -58,17 +66,21 @@ def _stlsq(
     threshold: float,
     max_iter: int = 10,
 ) -> NDArray[np.float64]:
-    """Sequentially-thresholded LSQ for Ξ: Theta Ξ ≈ dX."""
+    """Sequentially-thresholded LSQ solving Ξ in Theta Ξ ≈ dX."""
     Xi, *_ = np.linalg.lstsq(Theta, dX, rcond=None)
-    for _ in range(max_iter):
+    it = 0
+    while it < max_iter:
         small = np.abs(Xi) < threshold
         Xi[small] = 0
-        for j in range(Xi.shape[1]):
+        j = 0
+        while j < Xi.shape[1]:
             big = ~small[:, j]
             if np.any(big):
                 Xi[big, j], *_ = np.linalg.lstsq(
                     Theta[:, big], dX[:, j], rcond=None
                 )
+            j += 1
+        it += 1
     return Xi
 
 
@@ -148,13 +160,18 @@ class SINDy:
             except Exception:  # noqa: BLE001
                 pass
         eqs: list[str] = []
-        for i, row in enumerate(self.coef_):
-            terms = [
-                f"{c:.{precision}g}*{self.feature_names_[j]}"
-                for j, c in enumerate(row)
-                if abs(c) > 0
-            ]
+        i = 0
+        while i < self.coef_.shape[0]:
+            row = self.coef_[i]
+            terms: list[str] = []
+            j = 0
+            while j < row.shape[0]:
+                c = row[j]
+                if abs(c) > 0:
+                    terms.append(f"{c:.{precision}g}*{self.feature_names_[j]}")
+                j += 1
             eqs.append(f"dx{i}/dt = " + (" + ".join(terms) if terms else "0"))
+            i += 1
         return eqs
 
 
