@@ -227,11 +227,13 @@ class OpenFOAMReader(BaseReader):
             return path
 
         # 디렉토리에서 기존 .foam 파일 검색
-        for foam_file in path.glob("*.foam"):
+        foam_file = next(path.glob("*.foam"), None)
+        if foam_file is not None:
             logger.debug("기존 .foam 파일 발견: %s", foam_file)
             return foam_file
 
-        for foam_file in path.glob("*.OpenFOAM"):
+        foam_file = next(path.glob("*.OpenFOAM"), None)
+        if foam_file is not None:
             logger.debug("기존 .OpenFOAM 파일 발견: %s", foam_file)
             return foam_file
 
@@ -268,17 +270,23 @@ class OpenFOAMReader(BaseReader):
         _SKIP: frozenset[str] = frozenset({"constant", "system", "0.orig"})
         time_steps: list[float] = []
 
-        for child in case_dir.iterdir():
+        children = list(case_dir.iterdir())
+        child_idx = 0
+        while child_idx < len(children):
+            child = children[child_idx]
             if not child.is_dir():
+                child_idx += 1
                 continue
             name = child.name
             if name in _SKIP or name.startswith("processor"):
+                child_idx += 1
                 continue
             try:
                 t = float(name)
                 time_steps.append(t)
             except ValueError:
                 pass
+            child_idx += 1
 
         time_steps.sort()
         logger.debug("탐지된 타임스텝: %s", time_steps)
@@ -301,11 +309,14 @@ class OpenFOAMReader(BaseReader):
             logger.warning("타임 디렉토리 없음: %s", t_path)
             return []
 
-        field_names = [
-            p.name
-            for p in t_path.iterdir()
-            if p.is_file() and not p.name.startswith(".")
-        ]
+        field_names = []
+        paths = list(t_path.iterdir())
+        path_idx = 0
+        while path_idx < len(paths):
+            p = paths[path_idx]
+            if p.is_file() and not p.name.startswith("."):
+                field_names.append(p.name)
+            path_idx += 1
         logger.debug("필드 이름(%s): %s", time_dir, field_names)
         return sorted(field_names)
 
