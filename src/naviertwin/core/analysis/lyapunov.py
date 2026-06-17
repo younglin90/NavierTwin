@@ -25,12 +25,16 @@ def lyapunov_map(
 ) -> float:
     """1D map 의 LLE = <log|f'(x_k)|>."""
     x = float(x0)
-    for _ in range(warmup):
+    warmup_idx = 0
+    while warmup_idx < warmup:
         x = f(x)
+        warmup_idx += 1
     s = 0.0
-    for _ in range(n):
+    step_idx = 0
+    while step_idx < n:
         s += np.log(abs(fprime(x)) + 1e-30)
         x = f(x)
+        step_idx += 1
     return float(s / n)
 
 
@@ -57,7 +61,8 @@ def benettin_flow(
     s = 0.0
     steps = int(np.ceil(t_end / dt))
     t = 0.0
-    for k in range(steps):
+    k = 0
+    while k < steps:
         J = jac(t, y)
         # linear evolution of perturbation: q += dt J q (RK4 도 가능, 여기서는 Euler)
         q = q + dt * J @ q
@@ -67,6 +72,7 @@ def benettin_flow(
             norm = np.linalg.norm(q)
             s += np.log(norm + 1e-30)
             q = q / (norm + 1e-30)
+        k += 1
     return float(s / (steps * dt))
 
 
