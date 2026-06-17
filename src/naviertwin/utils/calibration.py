@@ -24,14 +24,16 @@ def ece(
     conf = np.max(p, axis=1)
     correct = (pred == y).astype(float)
     bins = np.linspace(0, 1, n_bins + 1)
-    e = 0.0
     n = len(y)
-    for i in range(n_bins):
-        mask = (conf > bins[i]) & (conf <= bins[i + 1])
-        if mask.any():
-            acc = correct[mask].mean()
-            avg_conf = conf[mask].mean()
-            e += (mask.sum() / n) * abs(acc - avg_conf)
+    bin_ids = np.searchsorted(bins, conf, side="left") - 1
+    valid = (bin_ids >= 0) & (bin_ids < n_bins)
+    counts = np.bincount(bin_ids[valid], minlength=n_bins).astype(float)
+    correct_sum = np.bincount(bin_ids[valid], weights=correct[valid], minlength=n_bins)
+    conf_sum = np.bincount(bin_ids[valid], weights=conf[valid], minlength=n_bins)
+    nonzero = counts > 0
+    acc = np.divide(correct_sum, counts, out=np.zeros_like(correct_sum), where=nonzero)
+    avg_conf = np.divide(conf_sum, counts, out=np.zeros_like(conf_sum), where=nonzero)
+    e = np.sum((counts / max(n, 1)) * np.abs(acc - avg_conf))
     return float(e)
 
 
@@ -48,15 +50,20 @@ def temperature_scale(
     """Find T minimizing NLL on val set; returns (T*, calibrated probs)."""
     z = np.asarray(logits, dtype=np.float64)
     y = np.asarray(labels)
-    Ts = T_grid if T_grid is not None else np.linspace(0.5, 5.0, 50)
-    best_T = 1.0
-    best_nll = np.inf
-    for T in Ts:
-        p = _softmax(z / T)
-        nll = -np.mean(np.log(p[np.arange(len(y)), y] + 1e-12))
-        if nll < best_nll:
-            best_nll = nll
-            best_T = float(T)
+    Ts = np.asarray(T_grid if T_grid is not None else np.linspace(0.5, 5.0, 50))
+    probs_grid = _softmax(z[None, :, :] / Ts[:, None, None], axis=2)
+    nll = -np.mean(
+        np.log(
+            probs_grid[
+                np.arange(len(Ts))[:, None],
+                np.arange(len(y))[None, :],
+                y[None, :],
+            ]
+            + 1e-12
+        ),
+        axis=1,
+    )
+    best_T = float(Ts[int(np.argmin(nll))])
     return best_T, _softmax(z / best_T)
 
 
