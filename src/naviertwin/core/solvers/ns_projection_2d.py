@@ -51,11 +51,12 @@ def solve_cavity(
         u[:, -1] = U_lid
         v[:, -1] = 0.0
 
-    for _ in range(n_steps):
+    step = 0
+    while step < n_steps:
         _apply_bc(u, v)
 
         # convection (upwind) + diffusion (central)
-        # predictor for u*
+        # predictor stage
         du_x = (u[1:-1, 1:-1] - u[:-2, 1:-1]) / dx
         du_y = (u[1:-1, 1:-1] - u[1:-1, :-2]) / dy
         dv_x = (v[1:-1, 1:-1] - v[:-2, 1:-1]) / dx
@@ -90,6 +91,7 @@ def solve_cavity(
         dp_y = (p[1:-1, 2:] - p[1:-1, :-2]) / (2 * dy)
         u[1:-1, 1:-1] = u_star[1:-1, 1:-1] - dt * dp_x
         v[1:-1, 1:-1] = v_star[1:-1, 1:-1] - dt * dp_y
+        step += 1
     _apply_bc(u, v)
     return u, v, p
 
