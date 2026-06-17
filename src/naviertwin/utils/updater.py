@@ -1,4 +1,4 @@
-"""Offline update metadata contract for release channels."""
+"""Offline update metadata contract used by release channels."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ class ReleaseMetadata:
 
 @dataclass(frozen=True)
 class UpdateCheckResult:
-    """Deterministic update-check result for CLI and GUI callers."""
+    """Deterministic update-check result used by CLI and GUI callers."""
 
     current_version: str
     latest_version: str
@@ -57,7 +57,7 @@ class UpdateCheckResult:
 
 @dataclass(frozen=True)
 class ArtifactVerificationResult:
-    """SHA-256 verification result for a downloaded release artifact."""
+    """SHA-256 verification result of a downloaded release artifact."""
 
     path: str
     expected_sha256: str
@@ -74,9 +74,17 @@ class ArtifactVerificationResult:
 def _version_key(version: str) -> tuple[int, ...]:
     """Convert a numeric release version into a comparable tuple."""
     parts = version.strip().split(".")
-    if not parts or not all(part.isdigit() for part in parts):
+    if not parts:
         raise ValueError(f"numeric dotted version required: {version!r}")
-    return tuple(int(part) for part in parts)
+    values = []
+    part_idx = 0
+    while part_idx < len(parts):
+        part = parts[part_idx]
+        if not part.isdigit():
+            raise ValueError(f"numeric dotted version required: {version!r}")
+        values.append(int(part))
+        part_idx += 1
+    return tuple(values)
 
 
 def is_newer_version(candidate: str, current: str = __version__) -> bool:
@@ -119,7 +127,7 @@ def _normalize_thumbprint(value: str) -> str:
 
 
 def _validate_installer_signing(value: object) -> dict[str, object]:
-    """Validate optional release metadata for Windows Authenticode identity."""
+    """Validate optional release metadata with Windows Authenticode identity."""
     if not isinstance(value, dict):
         raise ValueError("installer_signing must be a JSON object")
     publisher = str(value.get("publisher", "")).strip()
