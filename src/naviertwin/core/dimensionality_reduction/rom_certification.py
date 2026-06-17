@@ -6,14 +6,15 @@ ROM(POD/PCA) 예측의 신뢰성을 데이터 기반으로 정량화. 새 입력
 상용 툴 대응:
     - Ansys Discovery: ROM Confidence Score
     - pyMOR: residual-based a posteriori error bounds
-    - 학술: Quarteroni et al., "Reduced Basis Methods for Partial Differential
+    - 학술: Quarteroni et al., "Reduced Basis Methods: Partial Differential
       Equations", Springer 2016, §3.5.
 
 Examples:
     >>> import numpy as np
+    >>> from numpy.linalg import svd as _svd
     >>> rng = np.random.default_rng(0)
     >>> X = rng.standard_normal((50, 30))
-    >>> U, s, _ = np.linalg.svd(X, full_matrices=False)
+    >>> U, s, _ = _svd(X, full_matrices=False)
     >>> from naviertwin.core.dimensionality_reduction.rom_certification import (
     ...     reconstruction_residual
     ... )
@@ -25,6 +26,7 @@ Examples:
 from __future__ import annotations
 
 import numpy as np
+from numpy.linalg import svd as _svd
 from numpy.typing import NDArray
 
 from naviertwin.utils.logger import get_logger
@@ -118,18 +120,19 @@ def leave_one_out_score(
         raise ValueError(f"X must be 2D, got {X.shape}")
     n_t, n_x = X.shape
     if n_t < 3:
-        raise ValueError(f"need n_t >= 3 for LOO, got {n_t}")
+        raise ValueError(f"need n_t >= 3 to run LOO, got {n_t}")
     if n_modes <= 0:
         raise ValueError(f"n_modes must be > 0, got {n_modes}")
 
     errs = []
     rel_errs = []
-    for i in range(n_t):
+    i = 0
+    while i < n_t:
         mask = np.ones(n_t, dtype=bool)
         mask[i] = False
         X_train = X[mask]
         X_train = X_train - X_train.mean(axis=0, keepdims=True)
-        U, s, Vt = np.linalg.svd(X_train.T, full_matrices=False)
+        U, s, Vt = _svd(X_train.T, full_matrices=False)
         r = min(n_modes, U.shape[1])
         V = U[:, :r]
         x_test = X[i] - X[mask].mean(axis=0)
@@ -138,6 +141,7 @@ def leave_one_out_score(
         errs.append(err)
         norm_x = np.linalg.norm(x_test) + 1e-30
         rel_errs.append(err / norm_x)
+        i += 1
 
     return {
         "loo_mse": float(np.mean(np.array(errs) ** 2)),
