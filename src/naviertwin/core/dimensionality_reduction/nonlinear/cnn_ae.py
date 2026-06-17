@@ -118,9 +118,15 @@ class CNNAE:
             shuffle=True,
         )
         self.train_losses_ = []
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             epoch = 0.0
-            for (xb,) in loader:
+            batches = iter(loader)
+            while True:
+                try:
+                    (xb,) = next(batches)
+                except StopIteration:
+                    break
                 xb = xb.to(self._device)
                 xb = xb.permute(0, 3, 1, 2)  # (B, C, H, W)
                 optim.zero_grad()
@@ -132,6 +138,7 @@ class CNNAE:
                 epoch += float(loss.item()) * xb.shape[0]
             epoch /= max(len(X_arr), 1)
             self.train_losses_.append(epoch)
+            epoch_idx += 1
 
         self.is_fitted = True
         logger.info("CNNAE 학습 완료: latent=%d, loss=%.6g", self.latent_dim, self.train_losses_[-1])
