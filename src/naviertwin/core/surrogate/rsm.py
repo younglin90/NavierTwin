@@ -13,21 +13,16 @@ Examples:
 
 from __future__ import annotations
 
-from itertools import combinations_with_replacement
-
 import numpy as np
 from numpy.typing import NDArray
 
 
 def _quadratic_design(X: NDArray[np.float64]) -> NDArray[np.float64]:
-    """full quadratic: [1, x_i, x_i*x_j for i<=j]."""
+    """full quadratic design: constant, linear terms, and upper-triangle products."""
     n, d = X.shape
-    cols = [np.ones(n)]
-    for i in range(d):
-        cols.append(X[:, i])
-    for i, j in combinations_with_replacement(range(d), 2):
-        cols.append(X[:, i] * X[:, j])
-    return np.stack(cols, axis=1)
+    tri_i, tri_j = np.triu_indices(d)
+    quadratic = X[:, tri_i] * X[:, tri_j]
+    return np.concatenate((np.ones((n, 1)), X, quadratic), axis=1)
 
 
 class RSMQuadratic:
