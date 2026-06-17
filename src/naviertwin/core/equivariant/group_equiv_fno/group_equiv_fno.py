@@ -4,9 +4,9 @@
 대해 실행하고 출력을 역회전 후 평균내어 equivariance 를 근사적으로
 확보한다. e3nn 없이 PyTorch 만으로 동작.
 
-For rigorous G-equivariance one should parameterize the spectral
+A rigorous G-equivariance implementation should parameterize the spectral
 weights directly in an equivariant basis; this wrapper is a pragmatic
-augmentation-averaging approximation suitable for CFD cases where
+augmentation-averaging approximation suitable in CFD cases where
 exact equivariance is not strictly required but the bias helps.
 
 Examples:
@@ -73,8 +73,9 @@ class C4EquivariantFNO2D(BaseOperator):
         self, X: np.ndarray, Y: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
         """C4 회전 증강 — axis (1, 2) 90°씩 4 번 회전."""
-        Xs = [np.ascontiguousarray(np.rot90(X, k=k, axes=(1, 2))) for k in range(4)]
-        Ys = [np.ascontiguousarray(np.rot90(Y, k=k, axes=(1, 2))) for k in range(4)]
+        ks = range(4)
+        Xs = tuple(map(lambda k: np.ascontiguousarray(np.rot90(X, k=k, axes=(1, 2))), ks))
+        Ys = tuple(map(lambda k: np.ascontiguousarray(np.rot90(Y, k=k, axes=(1, 2))), range(4)))
         return np.concatenate(Xs, axis=0), np.concatenate(Ys, axis=0)
 
     def fit(self, dataset: dict[str, Any]) -> None:
@@ -97,12 +98,21 @@ class C4EquivariantFNO2D(BaseOperator):
         if squeeze:
             x = x[None, ...]
 
-        preds = []
-        for k in range(4):
-            x_rot = np.ascontiguousarray(np.rot90(x, k=k, axes=(1, 2)))
-            y_rot = self._fno.predict({"x": x_rot})
-            y_back = np.ascontiguousarray(np.rot90(y_rot, k=-k, axes=(1, 2)))
-            preds.append(y_back)
+        ks = np.arange(4)
+        rotated = np.concatenate(
+            tuple(map(lambda k: np.ascontiguousarray(np.rot90(x, k=int(k), axes=(1, 2))), ks)),
+            axis=0,
+        )
+        rotated_preds = self._fno.predict({"x": rotated})
+        chunks = np.split(rotated_preds, 4, axis=0)
+        preds = tuple(
+            map(
+                lambda item: np.ascontiguousarray(
+                    np.rot90(item[1], k=-int(item[0]), axes=(1, 2))
+                ),
+                zip(ks, chunks, strict=True),
+            )
+        )
         mean = np.mean(np.stack(preds), axis=0)
         return mean[0] if squeeze else mean
 
