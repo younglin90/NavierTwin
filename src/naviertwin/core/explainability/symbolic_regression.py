@@ -50,15 +50,25 @@ class SymbolicRegressor:
         N, d = X.shape
         feats = [np.ones(N)]
         names = ["1"]
-        for deg in range(1, self.max_degree + 1):
-            for combo in combinations_with_replacement(range(d), deg):
+        deg = 1
+        while deg <= self.max_degree:
+            combo_iter = combinations_with_replacement(range(d), deg)
+            while True:
+                try:
+                    combo = next(combo_iter)
+                except StopIteration:
+                    break
                 col = np.ones(N)
                 nm: list[str] = []
-                for idx in combo:
+                combo_idx = 0
+                while combo_idx < len(combo):
+                    idx = combo[combo_idx]
                     col = col * X[:, idx]
                     nm.append(f"x{idx}")
+                    combo_idx += 1
                 feats.append(col)
                 names.append("*".join(nm))
+            deg += 1
         return np.stack(feats, axis=1), names
 
     def fit(self, X: NDArray[np.float64], y: NDArray[np.float64]) -> None:
@@ -95,11 +105,14 @@ class SymbolicRegressor:
         # threshold 아래는 0 으로
         coef = np.where(np.abs(coef) < self.threshold, 0.0, coef)
         self.coef_ = dict(zip(names, coef.tolist()))
-        terms = [
-            f"{c:.4g}*{n}" if n != "1" else f"{c:.4g}"
-            for n, c in self.coef_.items()
-            if c != 0
-        ]
+        terms = list(
+            map(
+                lambda item: f"{item[1]:.4g}*{item[0]}"
+                if item[0] != "1"
+                else f"{item[1]:.4g}",
+                filter(lambda item: item[1] != 0, self.coef_.items()),
+            )
+        )
         self.expression_ = " + ".join(terms) if terms else "0"
         self.is_fitted = True
         logger.info("SymbolicRegressor(poly): %s", self.expression_)
@@ -110,7 +123,11 @@ class SymbolicRegressor:
         if self._use_pysr and self._pysr_model is not None:
             return np.asarray(self._pysr_model.predict(X), dtype=np.float64)
         Phi, names = self._poly_basis(np.asarray(X, dtype=np.float64))
-        coef_vec = np.array([self.coef_.get(n, 0.0) for n in names])
+        coef_vec = np.fromiter(
+            map(lambda n: self.coef_.get(n, 0.0), names),
+            dtype=np.float64,
+            count=len(names),
+        )
         return Phi @ coef_vec
 
 
