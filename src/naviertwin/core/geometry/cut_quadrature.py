@@ -31,7 +31,7 @@ def mc_integrate(
         rng.uniform(x0, x1, n_samples),
         rng.uniform(y0, y1, n_samples),
     ])
-    vals = np.array([f(p) for p in pts])
+    vals = np.fromiter(map(f, pts), dtype=float, count=n_samples)
     area = (x1 - x0) * (y1 - y0)
     return float(vals.mean()) * area
 
