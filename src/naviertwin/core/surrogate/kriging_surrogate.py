@@ -120,17 +120,17 @@ class KrigingSurrogate(BaseSurrogate):
         try:
             from smt.surrogate_models import KRG  # type: ignore[import]
 
-            models = []
-            for i in range(y.shape[1]):
+            def fit_column(target: NDArray[np.float64]) -> Any:
                 sm = KRG(
                     corr=self.corr,
                     poly=self.poly,
                     print_global=False,
                 )
-                sm.set_training_values(X, y[:, i])
+                sm.set_training_values(X, target)
                 sm.train()
-                models.append(sm)
-            self._model = models
+                return sm
+
+            self._model = list(map(fit_column, y.T))
             return True
         except ImportError:
             logger.warning("smt 미설치 — 대체 백엔드를 시도합니다.")
@@ -156,17 +156,17 @@ class KrigingSurrogate(BaseSurrogate):
             from sklearn.gaussian_process.kernels import RBF, ConstantKernel  # type: ignore[import]
 
             kernel = ConstantKernel(1.0) * RBF(length_scale=1.0)
-            models = []
-            for i in range(y.shape[1]):
+            def fit_column(target: NDArray[np.float64]) -> Any:
                 gpr = GaussianProcessRegressor(
                     kernel=kernel,
                     n_restarts_optimizer=3,
                     normalize_y=True,
                     random_state=42,
                 )
-                gpr.fit(X, y[:, i])
-                models.append(gpr)
-            self._model = models
+                gpr.fit(X, target)
+                return gpr
+
+            self._model = list(map(fit_column, y.T))
             return True
         except ImportError:
             logger.warning("sklearn 미설치 — LinearRegression으로 폴백합니다.")
@@ -223,11 +223,11 @@ class KrigingSurrogate(BaseSurrogate):
 
         if self._backend == "smt":
             preds = np.column_stack(
-                [sm.predict_values(X).ravel() for sm in self._model]
+                tuple(map(lambda sm: sm.predict_values(X).ravel(), self._model))
             )
         elif self._backend == "sklearn_gp":
             preds = np.column_stack(
-                [gpr.predict(X) for gpr in self._model]
+                tuple(map(lambda gpr: gpr.predict(X), self._model))
             )
         elif self._backend == "sklearn_linear":
             preds = self._linear_model.predict(X)
@@ -272,15 +272,20 @@ class KrigingSurrogate(BaseSurrogate):
 
         if self._backend == "smt":
             preds = np.column_stack(
-                [sm.predict_values(X).ravel() for sm in self._model]
+                tuple(map(lambda sm: sm.predict_values(X).ravel(), self._model))
             )
             variances = np.column_stack(
-                [np.maximum(sm.predict_variances(X).ravel(), 0.0) for sm in self._model]
+                tuple(
+                    map(
+                        lambda sm: np.maximum(sm.predict_variances(X).ravel(), 0.0),
+                        self._model,
+                    )
+                )
             )
         elif self._backend == "sklearn_gp":
-            results = [gpr.predict(X, return_std=True) for gpr in self._model]
-            preds = np.column_stack([r[0] for r in results])
-            variances = np.column_stack([r[1] ** 2 for r in results])
+            results = tuple(map(lambda gpr: gpr.predict(X, return_std=True), self._model))
+            preds = np.column_stack(tuple(map(lambda r: r[0], results)))
+            variances = np.column_stack(tuple(map(lambda r: r[1] ** 2, results)))
         elif self._backend == "sklearn_linear":
             # LinearRegression 폴백 — 분산을 0으로 반환
             preds_raw = self._linear_model.predict(X)
