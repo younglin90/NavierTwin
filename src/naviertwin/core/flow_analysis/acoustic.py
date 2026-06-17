@@ -19,6 +19,8 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
 
 def duct_modes_dirichlet(
     L: float,
@@ -31,12 +33,9 @@ def duct_modes_dirichlet(
     Returns:
         (frequencies[Hz], modes[n_points, n_modes]).
     """
-    x = np.linspace(0, L, n_points)
-    freqs = np.array([n * c / (2 * L) for n in range(1, n_modes + 1)])
-    modes = np.zeros((n_points, n_modes))
-    for n in range(1, n_modes + 1):
-        modes[:, n - 1] = np.sin(n * np.pi * x / L)
-    return freqs, modes
+    if _kernels is None:
+        raise ImportError("NavierTwin native kernels are required by duct_modes_dirichlet")
+    return _kernels.duct_modes_dirichlet(L, c, n_modes, n_points)
 
 
 def duct_modes_neumann(
@@ -49,12 +48,9 @@ def duct_modes_neumann(
 
     cos 모드; k_n = n π / L, n = 0, 1, 2, ....
     """
-    x = np.linspace(0, L, n_points)
-    freqs = np.array([n * c / (2 * L) for n in range(n_modes)])
-    modes = np.zeros((n_points, n_modes))
-    for n in range(n_modes):
-        modes[:, n] = np.cos(n * np.pi * x / L)
-    return freqs, modes
+    if _kernels is None:
+        raise ImportError("NavierTwin native kernels are required by duct_modes_neumann")
+    return _kernels.duct_modes_neumann(L, c, n_modes, n_points)
 
 
 def strouhal(f: float, L: float, U: float) -> float:

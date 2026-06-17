@@ -3268,6 +3268,50 @@ static py::array_t<double> svgd_step_update_native(Array2D x, Array2D grad_logp,
     return out;
 }
 
+static py::tuple duct_modes_dirichlet_native(double L, double c, int n_modes, int n_points) {
+    if (n_modes < 0 || n_points < 0) {
+        throw std::invalid_argument("n_modes and n_points must be non-negative");
+    }
+    auto freqs = py::array_t<double>({static_cast<py::ssize_t>(n_modes)});
+    auto modes = py::array_t<double>({static_cast<py::ssize_t>(n_points), static_cast<py::ssize_t>(n_modes)});
+    double* fp = freqs.mutable_data();
+    double* mp = modes.mutable_data();
+    const double denom = (n_points > 1) ? static_cast<double>(n_points - 1) : 1.0;
+    constexpr double pi = 3.141592653589793238462643383279502884;
+    for (int m = 1; m <= n_modes; ++m) {
+        fp[m - 1] = static_cast<double>(m) * c / (2.0 * L);
+    }
+    for (int i = 0; i < n_points; ++i) {
+        const double x = (n_points > 1) ? L * static_cast<double>(i) / denom : 0.0;
+        for (int m = 1; m <= n_modes; ++m) {
+            mp[i * n_modes + (m - 1)] = std::sin(static_cast<double>(m) * pi * x / L);
+        }
+    }
+    return py::make_tuple(freqs, modes);
+}
+
+static py::tuple duct_modes_neumann_native(double L, double c, int n_modes, int n_points) {
+    if (n_modes < 0 || n_points < 0) {
+        throw std::invalid_argument("n_modes and n_points must be non-negative");
+    }
+    auto freqs = py::array_t<double>({static_cast<py::ssize_t>(n_modes)});
+    auto modes = py::array_t<double>({static_cast<py::ssize_t>(n_points), static_cast<py::ssize_t>(n_modes)});
+    double* fp = freqs.mutable_data();
+    double* mp = modes.mutable_data();
+    const double denom = (n_points > 1) ? static_cast<double>(n_points - 1) : 1.0;
+    constexpr double pi = 3.141592653589793238462643383279502884;
+    for (int m = 0; m < n_modes; ++m) {
+        fp[m] = static_cast<double>(m) * c / (2.0 * L);
+    }
+    for (int i = 0; i < n_points; ++i) {
+        const double x = (n_points > 1) ? L * static_cast<double>(i) / denom : 0.0;
+        for (int m = 0; m < n_modes; ++m) {
+            mp[i * n_modes + m] = std::cos(static_cast<double>(m) * pi * x / L);
+        }
+    }
+    return py::make_tuple(freqs, modes);
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -3410,5 +3454,7 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("multi_output_r2_raw", &multi_output_r2_raw_native, py::arg("y_true"), py::arg("y_pred"));
     m.def("cross_channel_correlation", &cross_channel_correlation_native, py::arg("y_true"), py::arg("y_pred"));
     m.def("svgd_step_update", &svgd_step_update_native, py::arg("x"), py::arg("grad_logp"), py::arg("lr") = 0.01, py::arg("h") = -1.0);
+    m.def("duct_modes_dirichlet", &duct_modes_dirichlet_native, py::arg("L"), py::arg("c"), py::arg("n_modes") = 5, py::arg("n_points") = 128);
+    m.def("duct_modes_neumann", &duct_modes_neumann_native, py::arg("L"), py::arg("c"), py::arg("n_modes") = 5, py::arg("n_points") = 128);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
