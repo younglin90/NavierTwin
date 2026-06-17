@@ -48,23 +48,35 @@ def _candidate_paths(project_root: Path, token: str) -> list[Path]:
     ]
     uniq: list[Path] = []
     seen: set[str] = set()
-    for c in candidates:
+    candidate_idx = 0
+    while candidate_idx < len(candidates):
+        c = candidates[candidate_idx]
         key = str(c)
         if key in seen:
+            candidate_idx += 1
             continue
         uniq.append(c)
         seen.add(key)
+        candidate_idx += 1
     return uniq
 
 
 def _extract_rel_path(task_body: str, project_root: Path) -> tuple[str | None, str | None, bool]:
     """태스크 본문에서 경로를 추출하고 실제 파일 존재 여부를 계산한다."""
-    for token in _BACKTICK_RE.findall(task_body):
+    tokens = _BACKTICK_RE.findall(task_body)
+    token_idx = 0
+    while token_idx < len(tokens):
+        token = tokens[token_idx]
         if "/" not in token and not token.endswith(".py") and not token.endswith(".md"):
+            token_idx += 1
             continue
-        for cand in _candidate_paths(project_root, token):
+        candidates = _candidate_paths(project_root, token)
+        candidate_idx = 0
+        while candidate_idx < len(candidates):
+            cand = candidates[candidate_idx]
             if cand.exists():
                 return token.strip(), str(cand.relative_to(project_root)), True
+            candidate_idx += 1
         return token.strip(), None, False
     return None, None, False
 
@@ -72,9 +84,14 @@ def _extract_rel_path(task_body: str, project_root: Path) -> tuple[str | None, s
 def parse_unchecked_tasks(roadmap_text: str, project_root: Path) -> list[RoadmapTask]:
     """미완료 태스크를 파싱한다."""
     tasks: list[RoadmapTask] = []
-    for idx, line in enumerate(roadmap_text.splitlines(), start=1):
+    lines = roadmap_text.splitlines()
+    line_idx = 0
+    while line_idx < len(lines):
+        idx = line_idx + 1
+        line = lines[line_idx]
         m = _UNCHECKED_RE.match(line)
         if not m:
+            line_idx += 1
             continue
         body = m.group("body")
         rel, resolved, exists = _extract_rel_path(body, project_root)
@@ -87,25 +104,38 @@ def parse_unchecked_tasks(roadmap_text: str, project_root: Path) -> list[Roadmap
                 path_exists=exists,
             )
         )
+        line_idx += 1
     return tasks
 
 
 def apply_auto_completion(roadmap_text: str, tasks: list[RoadmapTask]) -> tuple[str, int]:
     """자동 완료 가능한 태스크를 `[x]`로 반영한다."""
-    line_numbers = {task.line_no for task in tasks if task.auto_completable}
+    line_numbers: set[int] = set()
+    task_idx = 0
+    while task_idx < len(tasks):
+        task = tasks[task_idx]
+        if task.auto_completable:
+            line_numbers.add(task.line_no)
+        task_idx += 1
     if not line_numbers:
         return roadmap_text, 0
 
     updated_count = 0
     out_lines: list[str] = []
-    for idx, line in enumerate(roadmap_text.splitlines(), start=1):
+    lines = roadmap_text.splitlines()
+    line_idx = 0
+    while line_idx < len(lines):
+        idx = line_idx + 1
+        line = lines[line_idx]
         if idx in line_numbers:
             replaced, n = _CHECKBOX_RE.subn(r"\1[x]", line, count=1)
             if n > 0:
                 out_lines.append(replaced)
                 updated_count += 1
+                line_idx += 1
                 continue
         out_lines.append(line)
+        line_idx += 1
     return "\n".join(out_lines) + ("\n" if roadmap_text.endswith("\n") else ""), updated_count
 
 
@@ -117,9 +147,24 @@ def _build_report(
     project_root: Path,
 ) -> dict[str, Any]:
     pending = len(tasks)
-    auto_candidates = sum(task.auto_completable for task in tasks)
-    blocked = [task for task in tasks if task.rel_path and not task.path_exists]
-    top_pending = [task.body for task in tasks[:10]]
+    auto_candidates = 0
+    blocked = []
+    top_pending = []
+    task_idx = 0
+    while task_idx < len(tasks):
+        task = tasks[task_idx]
+        if task.auto_completable:
+            auto_candidates += 1
+        if task.rel_path and not task.path_exists:
+            blocked.append(task)
+        if task_idx < 10:
+            top_pending.append(task.body)
+        task_idx += 1
+    blocked_examples = []
+    blocked_idx = 0
+    while blocked_idx < min(len(blocked), 10):
+        blocked_examples.append(asdict(blocked[blocked_idx]))
+        blocked_idx += 1
     return {
         "timestamp_utc": datetime.now(UTC).isoformat(),
         "iteration": iteration,
@@ -129,7 +174,7 @@ def _build_report(
         "applied_count": applied,
         "blocked_count": len(blocked),
         "top_pending": top_pending,
-        "blocked_examples": [asdict(task) for task in blocked[:10]],
+        "blocked_examples": blocked_examples,
     }
 
 
@@ -158,7 +203,11 @@ def _write_report_files(report: dict[str, Any], artifact_dir: Path) -> None:
         "",
         "## Top Pending",
     ]
-    lines.extend([f"- {item}" for item in report["top_pending"]])
+    top_pending = report["top_pending"]
+    item_idx = 0
+    while item_idx < len(top_pending):
+        lines.append(f"- {top_pending[item_idx]}")
+        item_idx += 1
     md = "\n".join(lines) + "\n"
     latest_md.write_text(md, encoding="utf-8")
     hist_md.write_text(md, encoding="utf-8")
