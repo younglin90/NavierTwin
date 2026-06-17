@@ -49,7 +49,13 @@ class Translator:
     def available_languages(self) -> list[str]:
         if not self.locale_dir.exists():
             return []
-        return sorted(p.stem for p in self.locale_dir.glob("*.json"))
+        stems: list[str] = []
+        paths = list(self.locale_dir.glob("*.json"))
+        idx = 0
+        while idx < len(paths):
+            stems.append(paths[idx].stem)
+            idx += 1
+        return sorted(stems)
 
 
 __all__ = ["Translator"]
