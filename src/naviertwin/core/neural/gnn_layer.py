@@ -56,20 +56,19 @@ def build_edge_index_from_grid(
 ):
     """직사각 격자 → 4-neighbor edge_index (undirected)."""
     torch = _torch()
-    edges: list[tuple[int, int]] = []
-    for j in range(ny):
-        for i in range(nx):
-            u = j * nx + i
-            if i + 1 < nx:
-                v = j * nx + (i + 1)
-                edges.append((u, v))
-                edges.append((v, u))
-            if j + 1 < ny:
-                v = (j + 1) * nx + i
-                edges.append((u, v))
-                edges.append((v, u))
-    arr = torch.tensor(edges, dtype=torch.long).T
-    return arr
+    nodes = torch.arange(nx * ny, dtype=torch.long).reshape(ny, nx)
+    edge_blocks = []
+    if nx > 1:
+        left = nodes[:, :-1].reshape(-1)
+        right = nodes[:, 1:].reshape(-1)
+        edge_blocks.append(torch.stack((torch.cat((left, right)), torch.cat((right, left)))))
+    if ny > 1:
+        top = nodes[:-1, :].reshape(-1)
+        bottom = nodes[1:, :].reshape(-1)
+        edge_blocks.append(torch.stack((torch.cat((top, bottom)), torch.cat((bottom, top)))))
+    if not edge_blocks:
+        return torch.empty((2, 0), dtype=torch.long)
+    return torch.cat(edge_blocks, dim=1)
 
 
 __all__ = ["GraphConv", "build_edge_index_from_grid"]
