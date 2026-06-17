@@ -40,18 +40,19 @@ def mpc_step(
     # build block matrices: Ybar = Phi x + Psi U
     Phi = np.zeros((N * ny, nx))
     Psi = np.zeros((N * ny, N * nu))
-    Ak = np.eye(nx)
-    for k in range(N):
-        Ak = A @ Ak if k > 0 else np.eye(nx)
-        # above: Ak=I at k=0 is initial
-    # recompute
-    Ak = np.eye(nx)
-    for k in range(N):
-        Ak = Ak if k == 0 else (A @ Ak)
-        Phi[k * ny:(k + 1) * ny] = C @ Ak
-        for i in range(k + 1):
-            Ai = np.linalg.matrix_power(A, k - i)
+    powers = [np.eye(nx)]
+    while len(powers) < N:
+        powers.append(A @ powers[-1])
+
+    k = 0
+    while k < N:
+        Phi[k * ny:(k + 1) * ny] = C @ powers[k]
+        i = 0
+        while i <= k:
+            Ai = powers[k - i]
             Psi[k * ny:(k + 1) * ny, i * nu:(i + 1) * nu] = C @ Ai @ B
+            i += 1
+        k += 1
 
     # min ‖Ybar - Rbar‖_Q² + ‖U‖_R²
     # LS: [sqrt(Q) Psi;  sqrt(R) I] U = [sqrt(Q) (Rbar - Phi x); 0]
