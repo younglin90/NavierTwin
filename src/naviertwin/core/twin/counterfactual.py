@@ -25,16 +25,17 @@ def minimal_change(
     """Minimize (f(x)-target)² + lam ‖x-x0‖² via gradient descent (FD)."""
     x0 = np.asarray(x0, dtype=np.float64)
     x = x0.copy()
-    for _ in range(n_iter):
+    basis = np.eye(x.size, dtype=np.float64)
+    iteration = 0
+    while iteration < n_iter:
         # FD gradient of (f(x)-target)²
-        g = np.zeros_like(x)
         f_now = f(x) - target
-        for i in range(len(x)):
-            xi = x.copy()
-            xi[i] += eps
-            g[i] = ((f(xi) - target) - f_now) / eps * 2 * f_now
+        perturbed = x[None, :] + eps * basis
+        f_perturbed = np.fromiter(map(lambda xi: f(xi) - target, perturbed), dtype=np.float64, count=x.size)
+        g = (f_perturbed - f_now) / eps * 2 * f_now
         g += 2 * lam * (x - x0)
         x = x - lr * g
+        iteration += 1
     return x - x0  # delta
 
 
