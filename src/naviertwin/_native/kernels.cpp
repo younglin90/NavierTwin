@@ -3103,6 +3103,97 @@ static py::tuple fd_heat_2d_evolve(ArrayD u0, int n_steps, double cx, double cy,
     return py::make_tuple(t, U);
 }
 
+static void thomas_constant_tridiag(
+    const std::vector<double>& rhs, py::ssize_t systems, py::ssize_t n, double lower, double diag, double upper,
+    std::vector<double>& out
+) {
+    if (n <= 0) {
+        return;
+    }
+    std::vector<double> cp(static_cast<std::size_t>(systems * n), 0.0);
+    std::vector<double> dp(static_cast<std::size_t>(systems * n), 0.0);
+
+    for (py::ssize_t sys = 0; sys < systems; ++sys) {
+        const py::ssize_t base = sys * n;
+        cp[static_cast<std::size_t>(base)] = n == 1 ? 0.0 : upper / diag;
+        dp[static_cast<std::size_t>(base)] = rhs[static_cast<std::size_t>(base)] / diag;
+        for (py::ssize_t k = 1; k < n; ++k) {
+            const double a = lower;
+            const double c = k == n - 1 ? 0.0 : upper;
+            const double denom = diag - a * cp[static_cast<std::size_t>(base + k - 1)];
+            cp[static_cast<std::size_t>(base + k)] = c / denom;
+            dp[static_cast<std::size_t>(base + k)] =
+                (rhs[static_cast<std::size_t>(base + k)] - a * dp[static_cast<std::size_t>(base + k - 1)]) / denom;
+        }
+        out[static_cast<std::size_t>(base + n - 1)] = dp[static_cast<std::size_t>(base + n - 1)];
+        for (py::ssize_t k = n - 2; k >= 0; --k) {
+            out[static_cast<std::size_t>(base + k)] =
+                dp[static_cast<std::size_t>(base + k)] -
+                cp[static_cast<std::size_t>(base + k)] * out[static_cast<std::size_t>(base + k + 1)];
+            if (k == 0) {
+                break;
+            }
+        }
+    }
+}
+
+static py::array_t<double> adi_heat_2d_step_native(Array2D u, double dt, double dx, double dy, double alpha) {
+    if (u.ndim() != 2) {
+        throw std::invalid_argument("u must be a 2D array");
+    }
+    if (dx == 0.0 || dy == 0.0) {
+        throw std::invalid_argument("dx and dy must be non-zero");
+    }
+    const py::ssize_t nx = u.shape(0);
+    const py::ssize_t ny = u.shape(1);
+    if (nx < 3 || ny < 3) {
+        throw std::invalid_argument("u must have at least three points on each axis");
+    }
+
+    const double rx = alpha * dt / (2.0 * dx * dx);
+    const double ry = alpha * dt / (2.0 * dy * dy);
+    const py::ssize_t mx = nx - 2;
+    const py::ssize_t my = ny - 2;
+    const double* up = u.data();
+
+    std::vector<double> rhs_x(static_cast<std::size_t>(my * mx), 0.0);
+    for (py::ssize_t j = 0; j < my; ++j) {
+        const py::ssize_t col = j + 1;
+        for (py::ssize_t i = 0; i < mx; ++i) {
+            const py::ssize_t row = i + 1;
+            const double center = up[row * ny + col];
+            rhs_x[static_cast<std::size_t>(j * mx + i)] =
+                center + ry * (up[row * ny + col + 1] - 2.0 * center + up[row * ny + col - 1]);
+        }
+    }
+
+    std::vector<double> half_x(static_cast<std::size_t>(my * mx), 0.0);
+    thomas_constant_tridiag(rhs_x, my, mx, -rx, 1.0 + 2.0 * rx, -rx, half_x);
+
+    std::vector<double> rhs_y(static_cast<std::size_t>(mx * my), 0.0);
+    for (py::ssize_t i = 0; i < mx; ++i) {
+        for (py::ssize_t j = 0; j < my; ++j) {
+            const double center = half_x[static_cast<std::size_t>(j * mx + i)];
+            const double lower_i = i == 0 ? 0.0 : half_x[static_cast<std::size_t>(j * mx + i - 1)];
+            const double upper_i = i == mx - 1 ? 0.0 : half_x[static_cast<std::size_t>(j * mx + i + 1)];
+            rhs_y[static_cast<std::size_t>(i * my + j)] = center + rx * (upper_i - 2.0 * center + lower_i);
+        }
+    }
+
+    std::vector<double> inner(static_cast<std::size_t>(mx * my), 0.0);
+    thomas_constant_tridiag(rhs_y, mx, my, -ry, 1.0 + 2.0 * ry, -ry, inner);
+
+    auto out = py::array_t<double>({nx, ny});
+    double* op = out.mutable_data();
+    std::fill(op, op + nx * ny, 0.0);
+    for (py::ssize_t i = 0; i < mx; ++i) {
+        for (py::ssize_t j = 0; j < my; ++j) {
+            op[(i + 1) * ny + (j + 1)] = inner[static_cast<std::size_t>(i * my + j)];
+        }
+    }
+    return out;
+}
+
 static py::array_t<double> kep_flux_native(ArrayD UL, ArrayD UR, double gamma) {
     if (UL.ndim() != 1 || UR.ndim() != 1 || UL.shape(0) < 3 || UR.shape(0) < 3) {
         throw std::invalid_argument("UL and UR must be 1D conservative states with at least three entries");
@@ -5122,6 +5213,7 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("mean_std_axis0", &mean_std_axis0_native, py::arg("values"));
     m.def("winslow_smooth", &winslow_smooth_native, py::arg("X"), py::arg("Y"), py::arg("n_iter") = 30);
     m.def("fd_heat_2d_evolve", &fd_heat_2d_evolve, py::arg("u0"), py::arg("n_steps"), py::arg("cx"), py::arg("cy"), py::arg("dt"));
+    m.def("adi_heat_2d_step", &adi_heat_2d_step_native, py::arg("u"), py::arg("dt"), py::arg("dx"), py::arg("dy"), py::arg("alpha") = 1.0);
     m.def("kep_flux", &kep_flux_native, py::arg("UL"), py::arg("UR"), py::arg("gamma") = 1.4);
     m.def("ppm_face_values", &ppm_face_values_native, py::arg("u"));
     m.def(
