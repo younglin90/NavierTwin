@@ -6,7 +6,7 @@
 상용 툴 대응:
     - pyMOR: subspace_angle / GramSchmidt
     - MATLAB: subspace, orth
-    - 학술: Bjorck & Golub, "Numerical Methods for Computing Angles
+    - 학술: Bjorck & Golub, "Numerical Methods: Computing Angles
       Between Linear Subspaces", Math. Comp., 1973.
 
 Examples:
@@ -25,6 +25,7 @@ Examples:
 from __future__ import annotations
 
 import numpy as np
+from numpy.linalg import svd as _svd
 from numpy.typing import NDArray
 
 from naviertwin.utils.logger import get_logger
@@ -66,7 +67,7 @@ def subspace_angles(
     Qb, _ = np.linalg.qr(B)
 
     M = Qa.T @ Qb
-    s = np.linalg.svd(M, compute_uv=False)
+    s = _svd(M, compute_uv=False)
     s = np.clip(s, -1.0, 1.0)
     angles = np.arccos(s)
     return np.sort(angles)
@@ -145,15 +146,19 @@ def best_match_assignment(
     used_b = set()
     # greedy: 가장 큰 유사도 순으로
     flat_idx = np.argsort(sim.ravel())[::-1]
-    for fi in flat_idx:
+    pos = 0
+    while pos < flat_idx.size:
+        fi = flat_idx[pos]
         i = fi // k_B
         j = fi % k_B
         if out[i] != -1 or j in used_b:
+            pos += 1
             continue
         out[i] = j
         used_b.add(j)
         if (out != -1).all():
             break
+        pos += 1
     return out
 
 
@@ -203,7 +208,7 @@ def proper_orthogonal_basis(
         X = X.T  # (n_x, n_t)
     if center:
         X = X - X.mean(axis=1, keepdims=True)
-    U, s, _ = np.linalg.svd(X, full_matrices=False)
+    U, s, _ = _svd(X, full_matrices=False)
     r = min(n_modes, U.shape[1])
     return U[:, :r], s[:r]
 
