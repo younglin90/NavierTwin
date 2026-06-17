@@ -29,9 +29,11 @@ def projective_step(
     """k inner steps, fit slope, then forward Euler with dt_big."""
     u = np.asarray(u0, dtype=np.float64).copy()
     history = [u.copy()]
-    for _ in range(n_micro):
+    step = 0
+    while step < n_micro:
         u = micro_step(u, dt_micro)
         history.append(u.copy())
+        step += 1
     H = np.asarray(history)  # (n_micro+1, dim)
     slope = (H[-1] - H[-2]) / dt_micro
     return u + dt_big * slope
