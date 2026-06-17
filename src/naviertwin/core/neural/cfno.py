@@ -61,14 +61,16 @@ class CFNO1D(nn.Module):
         super().__init__()
         self.lift = nn.Conv1d(in_ch, width, 1)
         self.blocks = nn.ModuleList(
-            [CFNOBlock(width, modes, p_dim) for _ in range(n_layers)],
+            map(lambda _: CFNOBlock(width, modes, p_dim), range(n_layers)),
         )
         self.proj = nn.Conv1d(width, out_ch, 1)
 
     def forward(self, x: torch.Tensor, p: torch.Tensor) -> torch.Tensor:
         x = self.lift(x)
-        for blk in self.blocks:
-            x = blk(x, p)
+        block_idx = 0
+        while block_idx < len(self.blocks):
+            x = self.blocks[block_idx](x, p)
+            block_idx += 1
         return self.proj(x)
 
 
