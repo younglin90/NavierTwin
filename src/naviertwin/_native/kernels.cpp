@@ -2945,6 +2945,30 @@ static py::array_t<double> kep_flux_native(ArrayD UL, ArrayD UR, double gamma) {
     return out;
 }
 
+static py::tuple ppm_face_values_native(ArrayD u) {
+    if (u.ndim() != 1 || u.shape(0) < 5) {
+        throw std::invalid_argument("u must be a 1D array with at least five values");
+    }
+    const double* up = u.data();
+    const double u_face_left = (7.0 / 12.0) * (up[1] + up[2]) - (1.0 / 12.0) * (up[0] + up[3]);
+    const double u_face_right = (7.0 / 12.0) * (up[2] + up[3]) - (1.0 / 12.0) * (up[1] + up[4]);
+    return py::make_tuple(u_face_left, u_face_right);
+}
+
+static py::tuple ppm_monotonize_native(double u_im, double u_i, double u_ip, double uL, double uR) {
+    (void)u_im;
+    (void)u_ip;
+    if ((uR - u_i) * (u_i - uL) <= 0.0) {
+        uL = u_i;
+        uR = u_i;
+    } else if (6.0 * (uR - uL) * (u_i - 0.5 * (uL + uR)) > (uR - uL) * (uR - uL)) {
+        uL = 3.0 * u_i - 2.0 * uR;
+    } else if (6.0 * (uR - uL) * (u_i - 0.5 * (uL + uR)) < -(uR - uL) * (uR - uL)) {
+        uR = 3.0 * u_i - 2.0 * uL;
+    }
+    return py::make_tuple(uL, uR);
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -3068,5 +3092,10 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("winslow_smooth", &winslow_smooth_native, py::arg("X"), py::arg("Y"), py::arg("n_iter") = 30);
     m.def("fd_heat_2d_evolve", &fd_heat_2d_evolve, py::arg("u0"), py::arg("n_steps"), py::arg("cx"), py::arg("cy"), py::arg("dt"));
     m.def("kep_flux", &kep_flux_native, py::arg("UL"), py::arg("UR"), py::arg("gamma") = 1.4);
+    m.def("ppm_face_values", &ppm_face_values_native, py::arg("u"));
+    m.def(
+        "ppm_monotonize", &ppm_monotonize_native, py::arg("u_im"), py::arg("u_i"), py::arg("u_ip"),
+        py::arg("uL"), py::arg("uR")
+    );
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

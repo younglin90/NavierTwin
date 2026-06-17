@@ -12,27 +12,29 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required by PPM reconstruction")
+
 
 def ppm_face_values(u: NDArray[np.float64]) -> tuple[float, float]:
-    """5-point stencil → u_{i-1/2}, u_{i+1/2} for cell i=2."""
-    u = np.asarray(u, dtype=np.float64)
-    # 4th-order interp at faces (centered)
-    u_face_left = (7 / 12) * (u[1] + u[2]) - (1 / 12) * (u[0] + u[3])
-    u_face_right = (7 / 12) * (u[2] + u[3]) - (1 / 12) * (u[1] + u[4])
+    """5-point stencil face reconstruction at cell i=2."""
+    u_face_left, u_face_right = _kernels.ppm_face_values(np.asarray(u, dtype=np.float64))
     return float(u_face_left), float(u_face_right)
 
 
 def ppm_monotonize(u_im: float, u_i: float, u_ip: float,
                     uL: float, uR: float) -> tuple[float, float]:
     """Colella-Woodward monotonization."""
-    if (uR - u_i) * (u_i - uL) <= 0:
-        uL = u_i
-        uR = u_i
-    elif 6 * (uR - uL) * (u_i - 0.5 * (uL + uR)) > (uR - uL) ** 2:
-        uL = 3 * u_i - 2 * uR
-    elif 6 * (uR - uL) * (u_i - 0.5 * (uL + uR)) < -(uR - uL) ** 2:
-        uR = 3 * u_i - 2 * uL
-    return uL, uR
+    left, right = _kernels.ppm_monotonize(
+        float(u_im),
+        float(u_i),
+        float(u_ip),
+        float(uL),
+        float(uR),
+    )
+    return float(left), float(right)
 
 
 __all__ = ["ppm_face_values", "ppm_monotonize"]
