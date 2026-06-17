@@ -42,10 +42,11 @@ class MarkdownReport:
     def table(
         self, headers: list[str], rows: list[list[Any]],
     ) -> "MarkdownReport":
-        self.lines.append("| " + " | ".join(str(h) for h in headers) + " |")
-        self.lines.append("| " + " | ".join("---" for _ in headers) + " |")
-        for row in rows:
-            self.lines.append("| " + " | ".join(str(v) for v in row) + " |")
+        self.lines.append("| " + " | ".join(map(str, headers)) + " |")
+        self.lines.append("| " + " | ".join(map(lambda _: "---", headers)) + " |")
+        self.lines.extend(
+            map(lambda row: "| " + " | ".join(map(str, row)) + " |", rows)
+        )
         self.lines.append("")
         return self
 
@@ -54,8 +55,7 @@ class MarkdownReport:
         return self
 
     def bullet(self, items: list[str]) -> "MarkdownReport":
-        for it in items:
-            self.lines.append(f"- {it}")
+        self.lines.extend(map(lambda it: f"- {it}", items))
         self.lines.append("")
         return self
 
