@@ -29,10 +29,12 @@ def var4d_cost(
     diff = x0 - xb
     J = 0.5 * float(diff @ B_inv @ diff)
     x = x0.copy()
-    for t, y in enumerate(observations):
+    t = 0
+    while t < len(observations):
         x = M(x, t)
-        innov = H(x) - y
+        innov = H(x) - observations[t]
         J += 0.5 * float(innov @ R_inv @ innov)
+        t += 1
     return J
 
 
@@ -45,10 +47,12 @@ def fd_gradient(
     x0 = np.asarray(x0, dtype=np.float64).ravel().copy()
     g = np.zeros_like(x0)
     J0 = cost_fn(x0)
-    for i in range(x0.size):
+    i = 0
+    while i < x0.size:
         xp = x0.copy()
         xp[i] += eps
         g[i] = (cost_fn(xp) - J0) / eps
+        i += 1
     return g
 
 
