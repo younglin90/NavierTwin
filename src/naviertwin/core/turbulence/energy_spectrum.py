@@ -16,9 +16,13 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
 from naviertwin.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+if _kernels is None:  # pragma: no cover
+    raise ImportError("NavierTwin native kernels are required by turbulence energy spectra")
 
 
 def energy_spectrum_1d(
@@ -58,11 +62,10 @@ def energy_spectrum_2d(
 
     # radial binning
     k_bins = np.arange(1, min(nx, ny) // 2 + 1)
-    E = np.zeros_like(k_bins, dtype=np.float64)
-    for i, kb in enumerate(k_bins):
-        mask = (K >= kb - 0.5) & (K < kb + 0.5)
-        if mask.any():
-            E[i] = E_k[mask].sum()
+    if k_bins.size == 0:
+        return k_bins.astype(np.float64), np.zeros(0, dtype=np.float64)
+    edges = np.concatenate([k_bins.astype(np.float64) - 0.5, [k_bins[-1] + 0.5]])
+    E = np.asarray(_kernels.radial_energy_sum(K, E_k, edges), dtype=np.float64)
     return k_bins.astype(np.float64), E
 
 
