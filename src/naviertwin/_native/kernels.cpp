@@ -3506,6 +3506,27 @@ static py::array_t<bool> pareto_front_native(ArrayD objectives) {
     return out;
 }
 
+static py::array_t<double> arrow_segments_native(ArrayD points, ArrayD vectors, double scale) {
+    if (points.ndim() != 2 || vectors.ndim() != 2 || points.shape(0) != vectors.shape(0) || points.shape(1) != vectors.shape(1)) {
+        throw std::invalid_argument("points and vectors must be matching 2D arrays");
+    }
+    const py::ssize_t n = points.shape(0);
+    const py::ssize_t d = points.shape(1);
+    auto out = py::array_t<double>({n, static_cast<py::ssize_t>(2), d});
+    const double* pp = points.data();
+    const double* vp = vectors.data();
+    double* op = out.mutable_data();
+    for (py::ssize_t i = 0; i < n; ++i) {
+        for (py::ssize_t j = 0; j < d; ++j) {
+            const py::ssize_t base = (i * 2 * d) + j;
+            const double start = pp[i * d + j];
+            op[base] = start;
+            op[base + d] = start + scale * vp[i * d + j];
+        }
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -3657,5 +3678,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("cusum_alarms", &cusum_alarms_native, py::arg("residuals"), py::arg("k") = 0.5, py::arg("h") = 5.0);
     m.def("ewma_alarms", &ewma_alarms_native, py::arg("residuals"), py::arg("lam") = 0.2, py::arg("k") = 3.0);
     m.def("pareto_front", &pareto_front_native, py::arg("objectives"));
+    m.def("arrow_segments", &arrow_segments_native, py::arg("points"), py::arg("vectors"), py::arg("scale") = 1.0);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
