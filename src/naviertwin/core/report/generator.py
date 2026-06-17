@@ -55,29 +55,20 @@ _DEFAULT_TEMPLATE = """<!DOCTYPE html>
 <h2>Validation Metrics</h2>
 <table>
   <tr><th>Metric</th><th>Value</th></tr>
-  {% for k, v in metrics.items() %}
-  <tr><td>{{ k }}</td><td>{{ "%.6g"|format(v) }}</td></tr>
-  {% endfor %}
+  {{ metrics_rows|safe }}
 </table>
 {% endif %}
 
 {% if model_info %}
 <h2>Model Information</h2>
 <table>
-  {% for k, v in model_info.items() %}
-  <tr><td>{{ k }}</td><td>{{ v }}</td></tr>
-  {% endfor %}
+  {{ model_rows|safe }}
 </table>
 {% endif %}
 
 {% if figures %}
 <h2>Figures</h2>
-{% for fig in figures %}
-<div class="figure">
-  <img src="{{ fig.path }}" alt="{{ fig.caption }}" style="max-width:100%;">
-  <p><em>{{ fig.caption }}</em></p>
-</div>
-{% endfor %}
+{{ figure_blocks|safe }}
 {% endif %}
 
 {% if notes %}
@@ -96,6 +87,8 @@ class ReportGenerator:
         self.template_str = template or _DEFAULT_TEMPLATE
 
     def _render(self, data: dict[str, Any]) -> str:
+        from datetime import datetime
+
         try:
             from jinja2 import Environment
         except ImportError as exc:
@@ -103,16 +96,65 @@ class ReportGenerator:
                 "jinja2 설치 필요: pip install jinja2"
             ) from exc
 
-        from datetime import datetime
+        from markupsafe import escape
+
+        metrics = data.get("metrics", {})
+        metric_items = list(metrics.items())
+        metric_rows = []
+        metric_idx = 0
+        while metric_idx < len(metric_items):
+            key, value = metric_items[metric_idx]
+            try:
+                value_text = "%.6g" % value
+            except (TypeError, ValueError):
+                value_text = str(value)
+            metric_rows.append(
+                f"<tr><td>{escape(key)}</td><td>{escape(value_text)}</td></tr>"
+            )
+            metric_idx += 1
+
+        model_info = data.get("model_info", {})
+        model_items = list(model_info.items())
+        model_rows = []
+        model_idx = 0
+        while model_idx < len(model_items):
+            key, value = model_items[model_idx]
+            model_rows.append(
+                f"<tr><td>{escape(key)}</td><td>{escape(value)}</td></tr>"
+            )
+            model_idx += 1
+
+        figures = data.get("figures", [])
+        figure_blocks = []
+        figure_idx = 0
+        while figure_idx < len(figures):
+            fig = figures[figure_idx]
+            path = fig.get("path", "") if isinstance(fig, dict) else getattr(fig, "path", "")
+            caption = (
+                fig.get("caption", "")
+                if isinstance(fig, dict)
+                else getattr(fig, "caption", "")
+            )
+            figure_blocks.append(
+                '<div class="figure">\n'
+                f'  <img src="{escape(path)}" alt="{escape(caption)}" '
+                'style="max-width:100%;">\n'
+                f"  <p><em>{escape(caption)}</em></p>\n"
+                "</div>"
+            )
+            figure_idx += 1
 
         env = Environment(autoescape=True)
         tmpl = env.from_string(self.template_str)
         ctx = {
             "project": data.get("project", "Untitled"),
             "summary": data.get("summary", ""),
-            "metrics": data.get("metrics", {}),
-            "model_info": data.get("model_info", {}),
-            "figures": data.get("figures", []),
+            "metrics": metrics,
+            "metrics_rows": "\n  ".join(metric_rows),
+            "model_info": model_info,
+            "model_rows": "\n  ".join(model_rows),
+            "figures": figures,
+            "figure_blocks": "\n".join(figure_blocks),
             "notes": data.get("notes", ""),
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
         }
