@@ -135,7 +135,7 @@ def watertight_stats(mesh: Any) -> dict[str, Any]:
     except Exception as e:
         logger.warning("Topological measures 실패: %s", e)
         return {}
-    return {k: out[k] for k in out} if isinstance(out, dict) else {}
+    return dict(out.items()) if isinstance(out, dict) else {}
 
 
 __all__ = [
