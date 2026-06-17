@@ -51,12 +51,15 @@ class EventBus:
         with self._lock:
             handlers = list(self._subs.get(topic, {}).values())
         count = 0
-        for h in handlers:
+        idx = 0
+        while idx < len(handlers):
+            h = handlers[idx]
             try:
                 h(payload)
                 count += 1
             except Exception as e:  # noqa: BLE001
                 logger.warning("handler 실패 (topic=%s): %s", topic, e)
+            idx += 1
         return count
 
     def clear(self, topic: str | None = None) -> None:
