@@ -4705,6 +4705,60 @@ static py::array_t<double> halton_sequence_native(int n, int d) {
     return out;
 }
 
+static py::array_t<double> delay_embed_1d_native(ArrayD x, int dim, int delay) {
+    if (x.ndim() != 1) {
+        throw std::invalid_argument("x must be 1D");
+    }
+    if (dim <= 0 || delay <= 0) {
+        throw std::invalid_argument("dim and delay must be positive");
+    }
+    const py::ssize_t n = x.shape(0);
+    const py::ssize_t m = n - static_cast<py::ssize_t>(dim - 1) * delay;
+    if (m <= 0) {
+        throw std::invalid_argument("time series is too short");
+    }
+    auto out = py::array_t<double>({m, static_cast<py::ssize_t>(dim)});
+    const double* xp = x.data();
+    double* op = out.mutable_data();
+    for (py::ssize_t row = 0; row < m; ++row) {
+        for (int col = 0; col < dim; ++col) {
+            op[row * dim + col] = xp[row + static_cast<py::ssize_t>(col) * delay];
+        }
+    }
+    return out;
+}
+
+static py::array_t<double> autocorrelation_1d_native(ArrayD x, int max_lag) {
+    if (x.ndim() != 1) {
+        throw std::invalid_argument("x must be 1D");
+    }
+    if (max_lag < 0) {
+        throw std::invalid_argument("max_lag must be non-negative");
+    }
+    const py::ssize_t n = x.shape(0);
+    const double* xp = x.data();
+    double mean = 0.0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        mean += xp[i];
+    }
+    mean /= static_cast<double>(std::max<py::ssize_t>(n, 1));
+    double denom = 1e-30;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const double centered = xp[i] - mean;
+        denom += centered * centered;
+    }
+    auto out = py::array_t<double>({static_cast<py::ssize_t>(max_lag + 1)});
+    double* op = out.mutable_data();
+    for (int lag = 0; lag <= max_lag; ++lag) {
+        double acc = 0.0;
+        for (py::ssize_t i = 0; i < n - lag; ++i) {
+            acc += (xp[i] - mean) * (xp[i + lag] - mean);
+        }
+        op[lag] = acc / denom;
+    }
+    return out;
+}
+
 static void schedule_berger_oliger_fill(int level, int max_level, int refine_ratio, std::vector<int>& out) {
     if (level >= max_level) {
         out.push_back(level);
@@ -4938,6 +4992,8 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("solve_dense", &solve_dense_native, py::arg("A"), py::arg("b"));
     m.def("eigvalsh_symmetric", &eigvalsh_symmetric_native, py::arg("A"));
     m.def("halton_sequence", &halton_sequence_native, py::arg("n"), py::arg("d"));
+    m.def("delay_embed_1d", &delay_embed_1d_native, py::arg("x"), py::arg("dim"), py::arg("delay"));
+    m.def("autocorrelation_1d", &autocorrelation_1d_native, py::arg("x"), py::arg("max_lag"));
     m.def(
         "schedule_berger_oliger", &schedule_berger_oliger_native, py::arg("level") = 0,
         py::arg("max_level") = 2, py::arg("refine_ratio") = 2

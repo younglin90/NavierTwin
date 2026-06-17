@@ -14,37 +14,36 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
 
 def delay_embed(
     x: NDArray[np.float64], dim: int = 3, delay: int = 1,
 ) -> NDArray[np.float64]:
     """x (T,) → (T - (dim-1)*delay, dim)."""
+    if _kernels is None:
+        raise ImportError("naviertwin._native._kernels is required by delay_embed")
     x = np.asarray(x, dtype=np.float64).ravel()
     m = x.size - (dim - 1) * delay
     if m <= 0:
         raise ValueError("너무 짧은 시계열")
-    out = np.zeros((m, dim))
-    for i in range(dim):
-        out[:, i] = x[i * delay: i * delay + m]
-    return out
+    return _kernels.delay_embed_1d(x, dim, delay)
 
 
 def autocorrelation(x: NDArray[np.float64], max_lag: int = 50) -> NDArray[np.float64]:
+    if _kernels is None:
+        raise ImportError("naviertwin._native._kernels is required by autocorrelation")
     x = np.asarray(x, dtype=np.float64).ravel()
-    x = x - x.mean()
-    n = x.size
-    out = np.zeros(max_lag + 1)
-    denom = float(x @ x) + 1e-30
-    for lag in range(max_lag + 1):
-        out[lag] = float(x[: n - lag] @ x[lag:]) / denom
-    return out
+    return _kernels.autocorrelation_1d(x, max_lag)
 
 
 def first_zero_crossing(corr: NDArray[np.float64]) -> int:
     """autocorr 첫 zero-crossing → 추천 delay."""
-    for i in range(1, corr.size):
+    i = 1
+    while i < corr.size:
         if corr[i] <= 0:
             return i
+        i += 1
     return corr.size - 1
 
 
