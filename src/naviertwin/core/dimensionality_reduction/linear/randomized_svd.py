@@ -8,6 +8,7 @@ sklearn 미설치 시 numpy.linalg.svd 로 폴백한다.
 from __future__ import annotations
 
 import numpy as np
+from numpy.linalg import svd as _svd
 from numpy.typing import NDArray
 
 from naviertwin.core.dimensionality_reduction.base import BaseReducer
@@ -160,7 +161,7 @@ class RandomizedPOD(BaseReducer):
             return U, s
         except ImportError:
             logger.warning("sklearn 미설치 — numpy.linalg.svd 로 폴백합니다.")
-            U_full, s_full, _ = np.linalg.svd(X, full_matrices=False)
+            U_full, s_full, _ = _svd(X, full_matrices=False)
             self._used_randomized = False
             return U_full, s_full
 
