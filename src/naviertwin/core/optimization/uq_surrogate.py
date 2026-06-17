@@ -29,12 +29,16 @@ from naviertwin.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-def _legendre(x: NDArray[np.float64], n: int) -> list[NDArray[np.float64]]:
-    """0..n 차 Legendre 다항식 값 리스트."""
-    P = [np.ones_like(x), x.copy()]
-    for k in range(1, n):
-        P.append(((2 * k + 1) * x * P[k] - k * P[k - 1]) / (k + 1))
-    return P[: n + 1]
+def _legendre(x: NDArray[np.float64], n: int) -> NDArray[np.float64]:
+    """0..n 차 Legendre 다항식 값 배열."""
+    P = np.ones((n + 1, x.size), dtype=np.float64)
+    if n >= 1:
+        P[1] = x
+    k = 1
+    while k < n:
+        P[k + 1] = ((2 * k + 1) * x * P[k] - k * P[k - 1]) / (k + 1)
+        k += 1
+    return P
 
 
 class PolynomialChaos:
@@ -51,22 +55,23 @@ class PolynomialChaos:
 
     def _make_indices(self, d: int) -> list[tuple[int, ...]]:
         """total-degree ≤ self.degree 인 multi-indices."""
-        idx = []
-        for combo in product(range(self.degree + 1), repeat=d):
-            if sum(combo) <= self.degree:
-                idx.append(combo)
-        return idx
+        combos = product(range(self.degree + 1), repeat=d)
+        return list(filter(lambda combo: sum(combo) <= self.degree, combos))
 
     def _design_matrix(self, X: NDArray[np.float64]) -> NDArray[np.float64]:
         d = X.shape[1]
-        bases = [_legendre(X[:, j], self.degree) for j in range(d)]
-        cols = []
-        for alpha in self.multi_indices_:
-            col = np.ones(X.shape[0])
-            for j, a in enumerate(alpha):
-                col *= bases[j][a]
-            cols.append(col)
-        return np.column_stack(cols)
+        j_idx = np.arange(d)
+        bases = np.stack(
+            tuple(map(lambda j: _legendre(X[:, int(j)], self.degree), j_idx)),
+            axis=0,
+        )
+        alphas = np.asarray(self.multi_indices_, dtype=int)
+        term_values = np.empty((alphas.shape[0], d, X.shape[0]), dtype=np.float64)
+        j = 0
+        while j < d:
+            term_values[:, j, :] = bases[j, alphas[:, j], :]
+            j += 1
+        return np.prod(term_values, axis=1).T
 
     def fit(self, X: NDArray[np.float64], y: NDArray[np.float64]) -> None:
         X = np.asarray(X, dtype=np.float64)
@@ -84,15 +89,10 @@ class PolynomialChaos:
         self.mean_ = float(coef[zero_idx])
         # 분산 = Σ_{α≠0} c_α² · <Ψ_α²>_ξ
         # Legendre 정규화: <P_n²> = 1/(2n+1) on [-1,1] (weight 1/2)
-        var = 0.0
-        for i, alpha in enumerate(self.multi_indices_):
-            if sum(alpha) == 0:
-                continue
-            norm = 1.0
-            for a in alpha:
-                norm *= 1.0 / (2 * a + 1)
-            var += coef[i] ** 2 * norm
-        self.variance_ = float(var)
+        alphas = np.asarray(self.multi_indices_, dtype=int)
+        norms = np.prod(1.0 / (2 * alphas + 1), axis=1)
+        active = np.sum(alphas, axis=1) > 0
+        self.variance_ = float(np.sum(coef[active] ** 2 * norms[active]))
 
         self.is_fitted = True
         logger.info(
@@ -115,18 +115,17 @@ class PolynomialChaos:
         # 각 축 j 에 대해 alpha_j > 0 이고 다른 축은 0 인 항이 first-order
         S1 = np.zeros(d)
         ST = np.zeros(d)
-        for i, alpha in enumerate(self.multi_indices_):
-            if sum(alpha) == 0:
-                continue
-            norm = 1.0
-            for a in alpha:
-                norm *= 1.0 / (2 * a + 1)
-            contrib = self.coef_[i] ** 2 * norm / total_var
-            nonzero_axes = [j for j, a in enumerate(alpha) if a > 0]
-            if len(nonzero_axes) == 1:
-                S1[nonzero_axes[0]] += contrib
-            for j in nonzero_axes:
-                ST[j] += contrib
+        alphas = np.asarray(self.multi_indices_, dtype=int)
+        nonzero = alphas > 0
+        active = np.sum(alphas, axis=1) > 0
+        norms = np.prod(1.0 / (2 * alphas + 1), axis=1)
+        contrib = self.coef_**2 * norms / total_var
+        single_axis = np.sum(nonzero, axis=1) == 1
+        np.add.at(S1, np.argmax(nonzero[single_axis], axis=1), contrib[single_axis])
+        j = 0
+        while j < d:
+            ST[j] = float(np.sum(contrib[active & nonzero[:, j]]))
+            j += 1
         return {"S1": S1, "ST": ST}
 
 
