@@ -28,14 +28,12 @@ def sobol_indices(
     fA = model(A)
     fB = model(B)
     var_y = float(np.var(np.concatenate([fA, fB])) + 1e-30)
-    S = np.zeros(n_dim)
-    ST = np.zeros(n_dim)
-    for i in range(n_dim):
-        AB = A.copy()
-        AB[:, i] = B[:, i]
-        fAB = model(AB)
-        S[i] = float(np.mean(fB * (fAB - fA))) / var_y
-        ST[i] = float(0.5 * np.mean((fA - fAB) ** 2)) / var_y
+    AB = np.repeat(A[np.newaxis, :, :], n_dim, axis=0)
+    idx = np.arange(n_dim)
+    AB[idx, :, idx] = B.T
+    fAB = model(AB.reshape(n_dim * n_samples, n_dim)).reshape(n_dim, n_samples)
+    S = np.mean(fB[np.newaxis, :] * (fAB - fA[np.newaxis, :]), axis=1) / var_y
+    ST = 0.5 * np.mean((fA[np.newaxis, :] - fAB) ** 2, axis=1) / var_y
     return S, ST
 
 
