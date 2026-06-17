@@ -26,11 +26,14 @@ class HashChain:
 
     def verify(self) -> bool:
         prev = ""
-        for msg, h in self.entries:
+        idx = 0
+        while idx < len(self.entries):
+            msg, h = self.entries[idx]
             expected = hashlib.sha256((prev + msg).encode()).hexdigest()
             if expected != h:
                 return False
             prev = h
+            idx += 1
         return True
 
 
