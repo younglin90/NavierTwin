@@ -38,9 +38,12 @@ class _VAEEncoder:
         self.body = body
         # body 의 마지막 Linear out_features 에서 latent 두 헤드로 분기
         last_dim = None
-        for m in body:
+        def capture_linear(m: Any) -> None:
+            nonlocal last_dim
             if isinstance(m, nn.Linear):
                 last_dim = m.out_features
+
+        tuple(map(capture_linear, body))
         if last_dim is None:
             raise ValueError("Encoder body 에 Linear 가 없습니다.")
         self.fc_mu = nn.Linear(last_dim, latent_dim)
@@ -162,9 +165,15 @@ class VAE(BaseReducer):
         )
 
         self.train_losses_ = []
-        for epoch in range(self.max_epochs):
+        epoch = 0
+        while epoch < self.max_epochs:
             epoch_loss = 0.0
-            for (xb,) in loader:
+            batches = iter(loader)
+            while True:
+                try:
+                    (xb,) = next(batches)
+                except StopIteration:
+                    break
                 xb = xb.to(device)
                 optim.zero_grad()
                 mu, logvar = self._encoder(xb)
@@ -180,6 +189,7 @@ class VAE(BaseReducer):
                 epoch_loss += float(loss.item()) * xb.shape[0]
             epoch_loss /= max(n_snapshots, 1)
             self.train_losses_.append(epoch_loss)
+            epoch += 1
 
         self.n_components = self.latent_dim
         self.is_fitted = True
