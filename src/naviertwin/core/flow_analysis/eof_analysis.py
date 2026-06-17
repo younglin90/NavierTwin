@@ -27,6 +27,7 @@ Examples:
 from __future__ import annotations
 
 import numpy as np
+from numpy.linalg import svd as _svd
 from numpy.typing import NDArray
 
 from naviertwin.utils.logger import get_logger
@@ -91,7 +92,7 @@ def eof_decomposition(
         A_w = A
 
     # SVD: A_w = U S V^T → EOFs는 V의 열 (가중치 제거 후)
-    U, s, Vt = np.linalg.svd(A_w, full_matrices=False)
+    U, s, Vt = _svd(A_w, full_matrices=False)
     eofs_w = Vt[:n_modes].T  # (n_space, n_modes)
 
     if sw is not None:
@@ -111,11 +112,11 @@ def eof_decomposition(
 
     # 부호 컨벤션: EOF1 최대 절댓값 위치가 양수
     if sign_convention:
-        for k in range(n_modes):
-            idx_max = int(np.argmax(np.abs(eofs[:, k])))
-            if eofs[idx_max, k] < 0:
-                eofs[:, k] = -eofs[:, k]
-                pcs[:, k] = -pcs[:, k]
+        mode_idx = np.arange(n_modes)
+        idx_max = np.argmax(np.abs(eofs[:, :n_modes]), axis=0)
+        signs = np.where(eofs[idx_max, mode_idx] < 0.0, -1.0, 1.0)
+        eofs[:, :n_modes] *= signs
+        pcs[:, :n_modes] *= signs
 
     logger.info("EOF 분해 완료: %d 모드, 누적 분산=%.1f%%",
                 n_modes, var_explained.sum() * 100)
@@ -211,16 +212,18 @@ def varimax_rotation(
 
     R = np.eye(k)
     d = 0.0
-    for _ in range(n_iter):
+    iteration = 0
+    while iteration < n_iter:
         d_old = d
         Lambda = A @ R
         # SVD 기반 업데이트 (Kaiser)
-        u, s, vh = np.linalg.svd(
+        u, s, vh = _svd(
             A.T @ (Lambda ** 3 - (Lambda @ np.diag(np.diag(Lambda.T @ Lambda))) / n),
             full_matrices=False,
         )
         R = u @ vh
         d = float(np.sum(s))
+        iteration += 1
         if abs(d - d_old) < tol:
             break
 
