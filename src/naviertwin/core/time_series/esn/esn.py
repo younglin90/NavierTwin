@@ -21,9 +21,24 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
 from naviertwin.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _solve_dense_rhs(A: NDArray[np.float64], B: NDArray[np.float64]) -> NDArray[np.float64]:
+    if _kernels is None:
+        raise ImportError("naviertwin._native._kernels is required by EchoStateNetwork")
+    rhs = np.asarray(B, dtype=np.float64)
+    if rhs.ndim == 1:
+        return _kernels.solve_dense(A, rhs)
+    out = np.empty_like(rhs)
+    j = 0
+    while j < rhs.shape[1]:
+        out[:, j] = _kernels.solve_dense(A, rhs[:, j])
+        j += 1
+    return out
 
 
 class EchoStateNetwork:
@@ -89,15 +104,17 @@ class EchoStateNetwork:
 
         self._init_reservoir()
         states = np.zeros((X.shape[0] - warmup, self.res_size))
-        for t in range(X.shape[0]):
+        t = 0
+        while t < X.shape[0]:
             self._update(X[t])
             if t >= warmup:
                 states[t - warmup] = self._state
+            t += 1
 
         Yt = Y[warmup:]
         A = states.T @ states + self.ridge * np.eye(self.res_size)
         B = states.T @ Yt
-        self._W_out = np.linalg.solve(A, B)  # (res, n_features)
+        self._W_out = _solve_dense_rhs(A, B)  # (res, n_features)
         self.is_fitted = True
         logger.info(
             "ESN fit: reservoir=%d, warmup=%d, T=%d",
@@ -109,9 +126,11 @@ class EchoStateNetwork:
             raise RuntimeError("fit() 먼저 호출")
         X = np.asarray(X, dtype=np.float64)
         out = np.zeros((X.shape[0], self.n_features))
-        for t in range(X.shape[0]):
+        t = 0
+        while t < X.shape[0]:
             s = self._update(X[t])
             out[t] = s @ self._W_out
+            t += 1
         return out
 
 
