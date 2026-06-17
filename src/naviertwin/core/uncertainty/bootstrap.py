@@ -31,9 +31,11 @@ def bootstrap_ci(
     data = np.asarray(data)
     n = len(data)
     boot = np.empty(n_boot)
-    for k in range(n_boot):
+    k = 0
+    while k < n_boot:
         sample = data[rng.integers(0, n, n)]
         boot[k] = float(statistic(sample))
+        k += 1
     lo, hi = np.quantile(boot, [alpha / 2, 1 - alpha / 2])
     return float(lo), float(hi)
 
