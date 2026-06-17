@@ -98,8 +98,10 @@ class PINNSolver:
         act_cls = acts.get(self.activation.lower(), nn.Tanh)
 
         layers: list[nn.Module] = [nn.Linear(self.in_dim, self.hidden), act_cls()]
-        for _ in range(self.n_layers - 1):
+        layer_idx = 0
+        while layer_idx < self.n_layers - 1:
             layers.extend([nn.Linear(self.hidden, self.hidden), act_cls()])
+            layer_idx += 1
         layers.append(nn.Linear(self.hidden, self.out_dim))
         return nn.Sequential(*layers)
 
@@ -142,7 +144,8 @@ class PINNSolver:
         self.phys_losses_ = []
         self.bc_losses_ = []
 
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             optim.zero_grad()
             res = residual_fn(self._model, X)
             phys = (res ** 2).mean()
@@ -157,6 +160,7 @@ class PINNSolver:
             self.phys_losses_.append(float(phys.item()))
             self.bc_losses_.append(float(bc.item()))
             self.train_losses_.append(float(loss.item()))
+            epoch_idx += 1
 
         self.is_fitted = True
         logger.info(
