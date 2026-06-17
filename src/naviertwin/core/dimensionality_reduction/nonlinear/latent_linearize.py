@@ -28,11 +28,14 @@ def fit_latent_A(Z: NDArray[np.float64]) -> NDArray[np.float64]:
 
 def predict_latent(A: NDArray, z0: NDArray, n_steps: int) -> NDArray:
     z = z0.copy()
-    out = [z]
-    for _ in range(n_steps):
+    out = np.empty((n_steps + 1, z.size), dtype=np.asarray(z).dtype)
+    out[0] = z
+    step = 0
+    while step < n_steps:
         z = A @ z
-        out.append(z)
-    return np.asarray(out)
+        out[step + 1] = z
+        step += 1
+    return out
 
 
 __all__ = ["fit_latent_A", "predict_latent"]
