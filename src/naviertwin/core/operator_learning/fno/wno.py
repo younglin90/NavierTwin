@@ -4,7 +4,7 @@ DWT 웨이블릿 도메인에서 학습 가능한 포인트-와이즈 가중치�
 공간 국소 신호(shock, edge) 처리에 강점. pywt 필요 (optional).
 
 References:
-    Tripura & Chakraborty, "Wavelet Neural Operator for solving PDEs",
+    Tripura & Chakraborty, "Wavelet Neural Operator on solving PDEs",
     CMAME 2023.
 
 Examples:
@@ -47,9 +47,12 @@ def _build_wavelet_conv_1d(channels: int, wavelet: str, level: int) -> Any:
             self.level = level
             # 각 레벨 + approx 에 대한 채널당 학습 가중치 (pointwise)
             # 실제 길이는 입력에 따라 달라지므로, conv1d 1×1 로 채널 믹싱만 학습
-            self.mixers = nn.ModuleList(
-                [nn.Conv1d(channels, channels, 1) for _ in range(level + 1)]
-            )
+            mixers = nn.ModuleList()
+            layer_idx = 0
+            while layer_idx < level + 1:
+                mixers.append(nn.Conv1d(channels, channels, 1))
+                layer_idx += 1
+            self.mixers = mixers
 
         def _require_pywt(self) -> Any:
             try:
@@ -64,22 +67,27 @@ def _build_wavelet_conv_1d(channels: int, wavelet: str, level: int) -> Any:
             B, C, N = x.shape
             x_np = x.detach().cpu().numpy()
             out_np = np.zeros_like(x_np)
-            for b in range(B):
+            b = 0
+            while b < B:
                 # dwt 결과: [cA_level, cD_level, ..., cD_1]
                 coeffs = pywt.wavedec(
                     x_np[b], self.wavelet, level=self.level, axis=-1
                 )
                 # 각 레벨별 포인트와이즈 채널 믹싱 적용 (torch 로 학습 가능하도록)
                 mixed = []
-                for i, c in enumerate(coeffs):
+                i = 0
+                while i < len(coeffs):
+                    c = coeffs[i]
                     ct = torch.tensor(c, dtype=x.dtype, device=x.device)
                     mt = self.mixers[i](ct.unsqueeze(0)).squeeze(0)
                     mixed.append(mt.detach().cpu().numpy())
+                    i += 1
                 rec = pywt.waverec(mixed, self.wavelet, axis=-1)
                 # 길이 맞춤
                 out_np[b] = rec[..., :N] if rec.shape[-1] >= N else np.pad(
                     rec, ((0, 0), (0, N - rec.shape[-1])), mode="edge"
                 )
+                b += 1
             # 채널 믹싱 gradient 유지를 위해 우회: 원 x 에 학습 가능 스케일 한 번 더 적용
             out = torch.tensor(out_np, dtype=x.dtype, device=x.device)
             # residual conv1d 로 gradient 흐름 보장
@@ -147,18 +155,27 @@ class WNO1D(BaseOperator):
             def __init__(self) -> None:
                 super().__init__()
                 self.lift = nn.Linear(in_c, W)
-                self.blocks = nn.ModuleList(
-                    [_build_wavelet_conv_1d(W, wv, lv) for _ in range(n_layers)]
-                )
-                self.ws = nn.ModuleList([nn.Conv1d(W, W, 1) for _ in range(n_layers)])
+                blocks = nn.ModuleList()
+                ws = nn.ModuleList()
+                layer_idx = 0
+                while layer_idx < n_layers:
+                    blocks.append(_build_wavelet_conv_1d(W, wv, lv))
+                    ws.append(nn.Conv1d(W, W, 1))
+                    layer_idx += 1
+                self.blocks = blocks
+                self.ws = ws
                 self.proj = nn.Sequential(
                     nn.Linear(W, 2 * W), nn.GELU(), nn.Linear(2 * W, out_c)
                 )
 
             def forward(self, x: Any) -> Any:  # (B, N, C_in)
                 x = self.lift(x).permute(0, 2, 1)  # (B, W, N)
-                for wb, wc in zip(self.blocks, self.ws):
-                    x = torch.nn.functional.gelu(wb(x) + wc(x))
+                layer_idx = 0
+                while layer_idx < len(self.blocks):
+                    x = torch.nn.functional.gelu(
+                        self.blocks[layer_idx](x) + self.ws[layer_idx](x)
+                    )
+                    layer_idx += 1
                 x = x.permute(0, 2, 1)
                 return self.proj(x)
 
@@ -191,9 +208,15 @@ class WNO1D(BaseOperator):
         )
 
         self.train_losses_ = []
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             epoch_loss = 0.0
-            for xb, yb in loader:
+            batches = iter(loader)
+            while True:
+                try:
+                    xb, yb = next(batches)
+                except StopIteration:
+                    break
                 xb = xb.to(self._device)
                 yb = yb.to(self._device)
                 optim.zero_grad()
@@ -204,6 +227,7 @@ class WNO1D(BaseOperator):
                 epoch_loss += float(loss.item()) * xb.shape[0]
             epoch_loss /= max(len(X), 1)
             self.train_losses_.append(epoch_loss)
+            epoch_idx += 1
 
         self.n_epochs = self.max_epochs
         self.is_fitted = True
