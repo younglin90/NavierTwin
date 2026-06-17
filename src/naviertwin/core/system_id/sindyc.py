@@ -34,10 +34,13 @@ def sindyc_fit(
     U = np.atleast_2d(np.asarray(U)).reshape(len(U), -1)
     Theta = _library(X, U)
     Xi, *_ = np.linalg.lstsq(Theta, Xdot, rcond=None)
-    for _ in range(n_iter):
+    it = 0
+    while it < n_iter:
         small = np.abs(Xi) < threshold
         Xi[small] = 0
-        for j in range(Xi.shape[1] if Xi.ndim > 1 else 1):
+        j = 0
+        width = Xi.shape[1] if Xi.ndim > 1 else 1
+        while j < width:
             big = ~small[:, j] if Xi.ndim > 1 else ~small
             if big.any():
                 xi_j, *_ = np.linalg.lstsq(
@@ -47,6 +50,8 @@ def sindyc_fit(
                     Xi[big, j] = xi_j
                 else:
                     Xi[big] = xi_j
+            j += 1
+        it += 1
     return Xi
 
 
