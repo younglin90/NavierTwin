@@ -17,13 +17,17 @@ def balanced_weights(y: NDArray) -> dict[int, float]:
     classes, counts = np.unique(y, return_counts=True)
     n = len(y)
     n_classes = len(classes)
-    return {int(c): float(n / (n_classes * cnt)) for c, cnt in zip(classes, counts, strict=True)}
+    weights = n / (n_classes * counts)
+    return dict(zip(map(int, classes), map(float, weights), strict=True))
 
 
 def per_sample_weights(y: NDArray) -> NDArray[np.float64]:
-    w = balanced_weights(y)
     y = np.asarray(y)
-    return np.array([w[int(yi)] for yi in y])
+    if y.size == 0:
+        return np.array([], dtype=np.float64)
+    classes, inverse, counts = np.unique(y, return_counts=True, return_inverse=True)
+    weights = len(y) / (len(classes) * counts)
+    return np.asarray(weights[inverse], dtype=np.float64)
 
 
 __all__ = ["balanced_weights", "per_sample_weights"]
