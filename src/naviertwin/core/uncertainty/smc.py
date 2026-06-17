@@ -32,7 +32,8 @@ def smc_sample(
     rng = rng if rng is not None else np.random.default_rng(0)
     x = rng.normal(0, prior_std, n_particles)
     betas = np.linspace(0.0, 1.0, n_steps + 1)
-    for k in range(n_steps):
+    k = 0
+    while k < n_steps:
         dbeta = betas[k + 1] - betas[k]
         log_w = dbeta * loglike(x)
         log_w -= log_w.max()
@@ -46,6 +47,7 @@ def smc_sample(
         log_acc = betas[k + 1] * (loglike(prop) - loglike(x))
         accept = np.log(rng.uniform(size=n_particles)) < log_acc
         x = np.where(accept, prop, x)
+        k += 1
     return x
 
 
