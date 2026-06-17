@@ -28,8 +28,10 @@ def block_spin(spins: NDArray[np.int_], block: int = 2) -> NDArray[np.int_]:
 
 def rg_iterate(spins: NDArray[np.int_], *, block: int = 2, n_iter: int = 1) -> NDArray[np.int_]:
     s = spins
-    for _ in range(n_iter):
+    step = 0
+    while step < n_iter:
         s = block_spin(s, block)
+        step += 1
     return s
 
 
