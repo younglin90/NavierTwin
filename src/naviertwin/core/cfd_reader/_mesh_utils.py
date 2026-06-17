@@ -88,7 +88,7 @@ def _collect_field_names(mesh: Any) -> list[str]:
     """point_data 와 cell_data 에서 필드 이름을 수집한다."""
     names: set[str] = set()
     if hasattr(mesh, "point_data"):
-        names.update(str(k) for k in mesh.point_data.keys())
+        names.update(map(str, mesh.point_data.keys()))
     if hasattr(mesh, "cell_data"):
-        names.update(str(k) for k in mesh.cell_data.keys())
+        names.update(map(str, mesh.cell_data.keys()))
     return sorted(names)
