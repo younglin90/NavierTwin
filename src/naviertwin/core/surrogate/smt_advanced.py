@@ -37,7 +37,10 @@ def _require_smt() -> None:
 
 
 def lhs_design(
-    n: int, d: int, xlimits: NDArray[np.float64], criterion: str = "ese",
+    n: int,
+    d: int,
+    xlimits: NDArray[np.float64],
+    criterion: str = "ese",
     seed: int | None = None,
 ) -> NDArray[np.float64]:
     """Latin Hypercube Sampling (SMT 기반)."""
@@ -102,8 +105,10 @@ def gekpls_fit(
     if y.ndim == 1:
         y = y[:, None]
     model.set_training_values(X, y)
-    for j in range(X.shape[1]):
+    j = 0
+    while j < X.shape[1]:
         model.set_training_derivatives(X, grads[:, j : j + 1], j)
+        j += 1
     model.train()
     logger.info("GEKPLS fit: n=%d, d=%d", X.shape[0], X.shape[1])
     return model
