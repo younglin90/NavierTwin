@@ -41,10 +41,15 @@ def cma_es_simple(
     w = np.log(mu + 0.5) - np.log(np.arange(1, mu + 1))
     w = w / w.sum()
 
-    for _ in range(n_gen):
+    gen = 0
+    while gen < n_gen:
         # sample λ offspring
         samples = mean + sigma * np.sqrt(C_diag) * rng.standard_normal((lam, n))
-        fvals = np.array([float(objective(s)) for s in samples])
+        fvals = np.fromiter(
+            map(lambda s: float(objective(s)), samples),
+            dtype=np.float64,
+            count=lam,
+        )
         order = np.argsort(fvals)
         best_slice = samples[order[:mu]]
         new_mean = w @ best_slice
@@ -60,6 +65,7 @@ def cma_es_simple(
         if fvals[order[0]] < best_f:
             best_f = float(fvals[order[0]])
             best_x = samples[order[0]].copy()
+        gen += 1
     return best_x, best_f
 
 
