@@ -4524,6 +4524,70 @@ static py::array_t<double> derivative_2d_native(Array2D U, double spacing, int a
     return out;
 }
 
+static py::array_t<double> solve_dense_native(Array2D A, ArrayD b) {
+    if (b.ndim() != 1) {
+        throw std::invalid_argument("b must be 1D");
+    }
+    const py::ssize_t n = A.shape(0);
+    if (A.shape(1) != n || b.shape(0) != n) {
+        throw std::invalid_argument("A must be square and match b");
+    }
+    const py::ssize_t width = n + 1;
+    std::vector<double> aug(static_cast<size_t>(n * width), 0.0);
+    const double* ap = A.data();
+    const double* bp = b.data();
+    for (py::ssize_t i = 0; i < n; ++i) {
+        for (py::ssize_t j = 0; j < n; ++j) {
+            aug[static_cast<size_t>(i * width + j)] = ap[i * n + j];
+        }
+        aug[static_cast<size_t>(i * width + n)] = bp[i];
+    }
+
+    for (py::ssize_t col = 0; col < n; ++col) {
+        py::ssize_t pivot = col;
+        double best = std::abs(aug[static_cast<size_t>(col * width + col)]);
+        for (py::ssize_t row = col + 1; row < n; ++row) {
+            const double value = std::abs(aug[static_cast<size_t>(row * width + col)]);
+            if (value > best) {
+                best = value;
+                pivot = row;
+            }
+        }
+        if (best < 1e-15) {
+            throw std::runtime_error("singular matrix");
+        }
+        if (pivot != col) {
+            for (py::ssize_t j = col; j < width; ++j) {
+                std::swap(aug[static_cast<size_t>(col * width + j)], aug[static_cast<size_t>(pivot * width + j)]);
+            }
+        }
+        const double pivot_value = aug[static_cast<size_t>(col * width + col)];
+        for (py::ssize_t row = col + 1; row < n; ++row) {
+            const double factor = aug[static_cast<size_t>(row * width + col)] / pivot_value;
+            if (factor == 0.0) {
+                continue;
+            }
+            for (py::ssize_t j = col; j < width; ++j) {
+                aug[static_cast<size_t>(row * width + j)] -= factor * aug[static_cast<size_t>(col * width + j)];
+            }
+        }
+    }
+
+    auto out = py::array_t<double>({n});
+    double* op = out.mutable_data();
+    for (py::ssize_t i = n - 1; i >= 0; --i) {
+        double rhs = aug[static_cast<size_t>(i * width + n)];
+        for (py::ssize_t j = i + 1; j < n; ++j) {
+            rhs -= aug[static_cast<size_t>(i * width + j)] * op[j];
+        }
+        op[i] = rhs / aug[static_cast<size_t>(i * width + i)];
+        if (i == 0) {
+            break;
+        }
+    }
+    return out;
+}
+
 static void schedule_berger_oliger_fill(int level, int max_level, int refine_ratio, std::vector<int>& out) {
     if (level >= max_level) {
         out.push_back(level);
@@ -4753,6 +4817,7 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("ftle_from_advected_stencils", &ftle_from_advected_stencils_native, py::arg("adv"), py::arg("T"), py::arg("eps"));
     m.def("lcs_ftle_from_flow_map", &lcs_ftle_from_flow_map_native, py::arg("X"), py::arg("Y"), py::arg("dx"), py::arg("dy"), py::arg("T"));
     m.def("derivative_2d", &derivative_2d_native, py::arg("U"), py::arg("spacing"), py::arg("axis"), py::arg("order") = 1);
+    m.def("solve_dense", &solve_dense_native, py::arg("A"), py::arg("b"));
     m.def(
         "schedule_berger_oliger", &schedule_berger_oliger_native, py::arg("level") = 0,
         py::arg("max_level") = 2, py::arg("refine_ratio") = 2

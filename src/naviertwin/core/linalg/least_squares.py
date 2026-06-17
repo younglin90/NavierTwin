@@ -18,6 +18,8 @@ from typing import Callable
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
 R_T = Callable[[NDArray[np.float64]], NDArray[np.float64]]
 
 
@@ -26,10 +28,12 @@ def _fd_jacobian(r: R_T, p: NDArray[np.float64], eps: float = 1e-6) -> NDArray[n
     m = r0.size
     n = p.size
     J = np.zeros((m, n))
-    for j in range(n):
+    j = 0
+    while j < n:
         pp = p.copy()
         pp[j] += eps
         J[:, j] = (r(pp) - r0) / eps
+        j += 1
     return J
 
 
@@ -42,7 +46,8 @@ def levenberg_marquardt(
 ) -> tuple[NDArray[np.float64], dict]:
     p = np.asarray(p0, dtype=np.float64).ravel().copy()
     lam = float(lam0)
-    for i in range(max_iter):
+    i = 0
+    while i < max_iter:
         r = residual(p)
         cost = 0.5 * r @ r
         if cost < tol:
@@ -51,11 +56,14 @@ def levenberg_marquardt(
         JTJ = J.T @ J
         g = J.T @ r
         step_ok = False
-        for _ in range(20):
+        trial = 0
+        while trial < 20:
             A = JTJ + lam * np.eye(JTJ.shape[0])
             try:
-                dp = np.linalg.solve(A, -g)
-            except np.linalg.LinAlgError:
+                if _kernels is None:
+                    raise RuntimeError("naviertwin._native._kernels is required")
+                dp = _kernels.solve_dense(A, -g)
+            except Exception:
                 dp = np.linalg.lstsq(A, -g, rcond=None)[0]
             p_trial = p + dp
             r_trial = residual(p_trial)
@@ -66,10 +74,12 @@ def levenberg_marquardt(
                 step_ok = True
                 break
             lam = min(lam * lam_up, 1e12)
+            trial += 1
         if not step_ok:
             return p, {
                 "iters": i, "cost": float(cost), "converged": False, "lambda": lam,
             }
+        i += 1
     return p, {
         "iters": max_iter, "cost": 0.5 * float(np.linalg.norm(residual(p)) ** 2),
         "converged": False, "lambda": lam,
@@ -82,7 +92,8 @@ def gauss_newton(
     max_iter: int = 50, tol: float = 1e-10,
 ) -> tuple[NDArray[np.float64], dict]:
     p = np.asarray(p0, dtype=np.float64).ravel().copy()
-    for i in range(max_iter):
+    i = 0
+    while i < max_iter:
         r = residual(p)
         cost = 0.5 * r @ r
         if cost < tol:
@@ -90,6 +101,7 @@ def gauss_newton(
         J = jac(p) if jac else _fd_jacobian(residual, p)
         dp, *_ = np.linalg.lstsq(J, -r, rcond=None)
         p = p + dp
+        i += 1
     return p, {
         "iters": max_iter,
         "cost": 0.5 * float(np.linalg.norm(residual(p)) ** 2),
