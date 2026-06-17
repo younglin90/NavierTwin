@@ -68,7 +68,7 @@ def savgol_filter(
     half = window_length // 2
     # 디자인 행렬 A_ij = j^i
     j = np.arange(-half, half + 1, dtype=np.float64)
-    A = np.column_stack([j ** k for k in range(polyorder + 1)])
+    A = j[:, np.newaxis] ** np.arange(polyorder + 1, dtype=np.float64)
     # 의사역 → 가운데 행이 평활 계수
     pinv = np.linalg.pinv(A)
     # deriv차 도함수 계수: pinv[deriv] * deriv!
@@ -133,10 +133,8 @@ def moving_median(
     n = len(x)
     half = window_length // 2
     padded = np.pad(x, half, mode="reflect")
-    out = np.zeros(n)
-    for i in range(n):
-        out[i] = np.median(padded[i : i + window_length])
-    return out
+    wins = np.lib.stride_tricks.sliding_window_view(padded, window_length)[:n]
+    return np.median(wins, axis=1)
 
 
 def hampel_filter(
@@ -171,16 +169,11 @@ def hampel_filter(
     half = window_length // 2
     padded = np.pad(x, half, mode="reflect")
     cleaned = x.copy()
-    mask = np.zeros(n, dtype=bool)
-    for i in range(n):
-        win = padded[i : i + window_length]
-        med = float(np.median(win))
-        mad = float(np.median(np.abs(win - med))) * 1.4826  # σ-equivalent
-        if mad < 1e-30:
-            continue
-        if abs(x[i] - med) > n_sigmas * mad:
-            cleaned[i] = med
-            mask[i] = True
+    wins = np.lib.stride_tricks.sliding_window_view(padded, window_length)[:n]
+    med = np.median(wins, axis=1)
+    mad = np.median(np.abs(wins - med[:, np.newaxis]), axis=1) * 1.4826
+    mask = (mad >= 1e-30) & (np.abs(x - med) > n_sigmas * mad)
+    cleaned[mask] = med[mask]
     return cleaned, mask
 
 
