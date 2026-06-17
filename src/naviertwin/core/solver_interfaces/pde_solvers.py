@@ -56,14 +56,16 @@ def solve_burgers_1d(
     times = np.linspace(dt, T, n_steps)
     U = np.zeros((n_steps, N), dtype=np.float64)
     u = u0.copy()
-    for k in range(n_steps):
+    k = 0
+    while k < n_steps:
         # 주기경계: np.roll
-        du_plus = u - np.roll(u, 1)     # upwind backward for positive u
-        du_minus = np.roll(u, -1) - u   # forward for negative u
+        du_plus = u - np.roll(u, 1)     # positive-velocity upwind backward
+        du_minus = np.roll(u, -1) - u   # negative-velocity forward
         adv = np.where(u > 0, u * du_plus / dx, u * du_minus / dx)
         diff = nu * (np.roll(u, -1) - 2 * u + np.roll(u, 1)) / dx ** 2
         u = u + dt * (-adv + diff)
         U[k] = u
+        k += 1
     return times, U
 
 
@@ -85,7 +87,7 @@ def solve_heat_1d(
     dt = T / n_steps
     r = alpha * dt / (2 * dx ** 2)
 
-    # Tridiagonal matrices for Crank-Nicolson
+    # Tridiagonal matrices used by Crank-Nicolson
     # Boundary 노드 (0, N) 고정 0 → interior 만 풀이
     interior = N - 1
     main_A = (1 + 2 * r) * np.ones(interior)
@@ -100,14 +102,18 @@ def solve_heat_1d(
         n = main.size
         m = main.copy()
         r_ = rhs.copy()
-        for i in range(1, n):
+        i = 1
+        while i < n:
             w = off[i - 1] / m[i - 1]
             m[i] -= w * off[i - 1]
             r_[i] -= w * r_[i - 1]
+            i += 1
         x = np.zeros(n)
         x[-1] = r_[-1] / m[-1]
-        for i in range(n - 2, -1, -1):
+        i = n - 2
+        while i >= 0:
             x[i] = (r_[i] - off[i] * x[i + 1]) / m[i]
+            i -= 1
         return x
 
     times = np.linspace(dt, T, n_steps)
@@ -115,7 +121,8 @@ def solve_heat_1d(
     u = u0.copy()
     u[0] = 0.0
     u[-1] = 0.0
-    for k in range(n_steps):
+    k = 0
+    while k < n_steps:
         # RHS = B u_interior
         interior_u = u[1:-1]
         rhs = main_B * interior_u
@@ -125,6 +132,7 @@ def solve_heat_1d(
         u_new_interior = _tridiag_solve(main_A, off_A, rhs)
         u = np.concatenate([[0.0], u_new_interior, [0.0]])
         U[k] = u
+        k += 1
     return times, U
 
 
