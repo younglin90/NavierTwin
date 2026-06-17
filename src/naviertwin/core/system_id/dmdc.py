@@ -15,7 +15,8 @@ from numpy.typing import NDArray
 
 
 def fit_dmdc(
-    X: NDArray[np.float64], U: NDArray[np.float64],
+    X: NDArray[np.float64],
+    U: NDArray[np.float64],
     *, rcond: float | None = None,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     """X (n_state, T), U (n_ctrl, T-1) → (A, B).
@@ -39,15 +40,19 @@ def fit_dmdc(
 
 
 def rollout_dmdc(
-    A: NDArray[np.float64], B: NDArray[np.float64],
-    x0: NDArray[np.float64], U: NDArray[np.float64],
+    A: NDArray[np.float64],
+    B: NDArray[np.float64],
+    x0: NDArray[np.float64],
+    U: NDArray[np.float64],
 ) -> NDArray[np.float64]:
     """x0, U sequence → 예측 궤적."""
     T = U.shape[1]
     out = np.zeros((x0.size, T + 1))
     out[:, 0] = x0
-    for k in range(T):
+    k = 0
+    while k < T:
         out[:, k + 1] = A @ out[:, k] + B @ U[:, k]
+        k += 1
     return out
 
 
