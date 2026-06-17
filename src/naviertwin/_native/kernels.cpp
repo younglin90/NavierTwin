@@ -3958,6 +3958,105 @@ static py::dict haar_threshold_native(py::dict coeffs, double tau) {
     return out;
 }
 
+static double mean_1d(const double* x, py::ssize_t n) {
+    double total = 0.0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        total += x[i];
+    }
+    return total / static_cast<double>(n);
+}
+
+static double effective_sample_size_native(ArrayD x, int max_lag) {
+    if (x.ndim() != 1) {
+        throw std::invalid_argument("x must be a 1D array");
+    }
+    const py::ssize_t n = x.shape(0);
+    if (n < 2) {
+        return static_cast<double>(n);
+    }
+    py::ssize_t lag_max = max_lag < 0 ? n / 4 : static_cast<py::ssize_t>(max_lag);
+    const double* xp = x.data();
+    const double mu = mean_1d(xp, n);
+    double var = 0.0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const double centered = xp[i] - mu;
+        var += centered * centered;
+    }
+    var = var / static_cast<double>(n) + 1e-30;
+    double rho_sum = 0.0;
+    for (py::ssize_t lag = 1; lag <= lag_max; ++lag) {
+        double corr = 0.0;
+        for (py::ssize_t i = 0; i < n - lag; ++i) {
+            corr += (xp[i] - mu) * (xp[i + lag] - mu);
+        }
+        const double rho = (corr / static_cast<double>(n - lag)) / var;
+        if (rho < 0.0) {
+            break;
+        }
+        rho_sum += rho;
+    }
+    return static_cast<double>(n) / std::max(1.0 + 2.0 * rho_sum, 1.0);
+}
+
+static py::object plateau_detector_native(ArrayD x, int window, double tol_rel) {
+    if (x.ndim() != 1) {
+        throw std::invalid_argument("x must be a 1D array");
+    }
+    if (window <= 0) {
+        throw std::invalid_argument("window must be > 0");
+    }
+    const py::ssize_t n = x.shape(0);
+    if (n < 2 * static_cast<py::ssize_t>(window)) {
+        return py::none();
+    }
+    const double* xp = x.data();
+    std::vector<double> cum(static_cast<std::size_t>(n));
+    double total = 0.0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        total += xp[i];
+        cum[static_cast<std::size_t>(i)] = total / static_cast<double>(i + 1);
+    }
+    for (py::ssize_t i = 0; i < n - window; ++i) {
+        const double ref = std::abs(cum[static_cast<std::size_t>(i + window)]) + 1e-30;
+        if (std::abs(cum[static_cast<std::size_t>(i + window)] - cum[static_cast<std::size_t>(i)]) / ref < tol_rel) {
+            return py::int_(i);
+        }
+    }
+    return py::none();
+}
+
+static double autocorrelation_time_native(ArrayD x, int max_lag) {
+    if (x.ndim() != 1) {
+        throw std::invalid_argument("x must be a 1D array");
+    }
+    const py::ssize_t n = x.shape(0);
+    if (n < 2) {
+        return 1.0;
+    }
+    py::ssize_t lag_max = max_lag < 0 ? n / 4 : static_cast<py::ssize_t>(max_lag);
+    const double* xp = x.data();
+    const double mu = mean_1d(xp, n);
+    double var = 0.0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const double centered = xp[i] - mu;
+        var += centered * centered;
+    }
+    var = var / static_cast<double>(n) + 1e-30;
+    double tau = 1.0;
+    for (py::ssize_t lag = 1; lag <= lag_max; ++lag) {
+        double corr = 0.0;
+        for (py::ssize_t i = 0; i < n - lag; ++i) {
+            corr += (xp[i] - mu) * (xp[i + lag] - mu);
+        }
+        const double rho = (corr / static_cast<double>(n - lag)) / var;
+        if (rho < 0.0) {
+            break;
+        }
+        tau += 2.0 * rho;
+    }
+    return tau;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -4121,5 +4220,8 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("haar_forward", &haar_forward_native, py::arg("x"), py::arg("level") = 1);
     m.def("haar_inverse", &haar_inverse_native, py::arg("coeffs"));
     m.def("haar_threshold", &haar_threshold_native, py::arg("coeffs"), py::arg("tau"));
+    m.def("effective_sample_size", &effective_sample_size_native, py::arg("x"), py::arg("max_lag") = -1);
+    m.def("plateau_detector", &plateau_detector_native, py::arg("x"), py::arg("window") = 100, py::arg("tol_rel") = 0.01);
+    m.def("autocorrelation_time", &autocorrelation_time_native, py::arg("x"), py::arg("max_lag") = -1);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }

@@ -25,6 +25,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
 from naviertwin.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -54,7 +55,7 @@ def batch_means_se(
         raise ValueError(f"n_batches must be > 1, got {n_batches}")
     if len(x) < 2 * n_batches:
         raise ValueError(
-            f"x length {len(x)} too short for {n_batches} batches"
+            f"x length {len(x)} too short with {n_batches} batches"
         )
 
     batch_size = len(x) // n_batches
@@ -121,23 +122,9 @@ def effective_sample_size(
         N_eff.
     """
     x = np.asarray(x, dtype=np.float64).ravel()
-    N = len(x)
-    if N < 2:
-        return float(N)
-    if max_lag is None:
-        max_lag = N // 4
-
-    xp = x - x.mean()
-    var = float(np.mean(xp * xp)) + 1e-30
-    rho_sum = 0.0
-    for k in range(1, max_lag + 1):
-        rho = float(np.mean(xp[: N - k] * xp[k:])) / var
-        if rho < 0:
-            # Geyer 1992: 자기상관이 음수 되면 합산 중단
-            break
-        rho_sum += rho
-
-    return N / max(1.0 + 2.0 * rho_sum, 1.0)
+    if _kernels is None:
+        raise ImportError("NavierTwin native kernels are required by effective_sample_size")
+    return float(_kernels.effective_sample_size(x, -1 if max_lag is None else max_lag))
 
 
 def plateau_detector(
@@ -167,12 +154,9 @@ def plateau_detector(
     if len(x) < 2 * window:
         return None
 
-    cum = np.cumsum(x) / np.arange(1, len(x) + 1)
-    for i in range(len(x) - window):
-        ref = abs(cum[i + window]) + 1e-30
-        if abs(cum[i + window] - cum[i]) / ref < tol_rel:
-            return int(i)
-    return None
+    if _kernels is None:
+        raise ImportError("NavierTwin native kernels are required by plateau_detector")
+    return _kernels.plateau_detector(x, window, tol_rel)
 
 
 def autocorrelation_time(
@@ -189,21 +173,9 @@ def autocorrelation_time(
         τ_int (단위: 샘플 간격).
     """
     x = np.asarray(x, dtype=np.float64).ravel()
-    N = len(x)
-    if N < 2:
-        return 1.0
-    if max_lag is None:
-        max_lag = N // 4
-
-    xp = x - x.mean()
-    var = float(np.mean(xp * xp)) + 1e-30
-    tau = 1.0
-    for k in range(1, max_lag + 1):
-        rho = float(np.mean(xp[: N - k] * xp[k:])) / var
-        if rho < 0:
-            break
-        tau += 2.0 * rho
-    return tau
+    if _kernels is None:
+        raise ImportError("NavierTwin native kernels are required by autocorrelation_time")
+    return float(_kernels.autocorrelation_time(x, -1 if max_lag is None else max_lag))
 
 
 __all__ = [
