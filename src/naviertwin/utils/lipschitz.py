@@ -23,15 +23,19 @@ def lipschitz_sampled(
     xs = np.asarray(x_samples, dtype=np.float64)
     n = len(xs)
     L = 0.0
-    for _ in range(n_pairs):
-        i, j = rng.integers(0, n, 2)
+    pairs = rng.integers(0, n, (int(n_pairs), 2))
+    pair_idx = 0
+    while pair_idx < len(pairs):
+        i, j = pairs[pair_idx]
         if i == j:
+            pair_idx += 1
             continue
         a = xs[i]
         b = xs[j]
         denom = np.linalg.norm(np.atleast_1d(b) - np.atleast_1d(a)) + 1e-30
         num = np.linalg.norm(np.atleast_1d(f(b)) - np.atleast_1d(f(a)))
         L = max(L, num / denom)
+        pair_idx += 1
     return float(L)
 
 
