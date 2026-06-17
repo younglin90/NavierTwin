@@ -64,13 +64,18 @@ def k_fold_indices(
         raise ValueError("2 <= k <= n")
     idx = np.arange(n, dtype=np.int64)
     np.random.default_rng(seed).shuffle(idx)
-    folds = np.array_split(idx, k)
-    out: list[tuple[NDArray[np.int64], NDArray[np.int64]]] = []
-    for i in range(k):
-        val = folds[i]
-        train = np.concatenate([folds[j] for j in range(k) if j != i])
-        out.append((train, val))
-    return out
+    sizes = np.full(k, n // k, dtype=np.int64)
+    sizes[: n % k] += 1
+    starts = np.concatenate(([0], np.cumsum(sizes[:-1])))
+    stops = starts + sizes
+
+    def _fold(bounds: tuple[np.int64, np.int64]) -> tuple[NDArray[np.int64], NDArray[np.int64]]:
+        start, stop = map(int, bounds)
+        val = idx[start:stop]
+        train = np.concatenate((idx[:start], idx[stop:]))
+        return train, val
+
+    return list(map(_fold, zip(starts, stops, strict=True)))
 
 
 __all__ = ["split_indices", "split_snapshots", "k_fold_indices"]
