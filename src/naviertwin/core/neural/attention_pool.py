@@ -1,4 +1,4 @@
-"""Attention-based pooling for set/graph aggregation.
+"""Attention-based pooling over set/graph aggregation inputs.
 
 Examples:
     >>> import torch  # doctest: +SKIP
