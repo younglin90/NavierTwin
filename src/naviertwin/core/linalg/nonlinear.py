@@ -17,6 +17,8 @@ from typing import Callable
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
 F_T = Callable[[NDArray[np.float64]], NDArray[np.float64]]
 J_T = Callable[[NDArray[np.float64]], NDArray[np.float64]]
 
@@ -27,16 +29,20 @@ def newton_solve(
     damping: float = 1.0,
 ) -> tuple[NDArray[np.float64], dict]:
     x = np.asarray(x0, dtype=np.float64).ravel().copy()
-    for i in range(max_iter):
+    i = 0
+    while i < max_iter:
         fx = F(x)
         if np.linalg.norm(fx) < tol:
             return x, {"iters": i, "residual": float(np.linalg.norm(fx)), "converged": True}
         Jx = J(x)
         try:
-            dx = np.linalg.solve(Jx, -fx)
-        except np.linalg.LinAlgError:
+            if _kernels is None:
+                raise RuntimeError("naviertwin._native._kernels is required")
+            dx = _kernels.solve_dense(Jx, -fx)
+        except Exception:
             dx = np.linalg.lstsq(Jx, -fx, rcond=None)[0]
         x = x + damping * dx
+        i += 1
     return x, {
         "iters": max_iter,
         "residual": float(np.linalg.norm(F(x))),
@@ -53,7 +59,8 @@ def broyden_solve(
     fx = F(x)
     n = x.size
     B_inv = np.eye(n)
-    for i in range(max_iter):
+    i = 0
+    while i < max_iter:
         if np.linalg.norm(fx) < tol:
             return x, {"iters": i, "residual": float(np.linalg.norm(fx)), "converged": True}
         dx = -B_inv @ fx
@@ -65,6 +72,7 @@ def broyden_solve(
             B_inv = B_inv + np.outer(dx - B_inv @ df, dx @ B_inv) / denom
         x = x_new
         fx = fx_new
+        i += 1
     return x, {
         "iters": max_iter,
         "residual": float(np.linalg.norm(fx)),
@@ -79,10 +87,12 @@ def fd_jacobian(F: F_T, x: NDArray[np.float64], eps: float = 1e-6) -> NDArray[np
     m = f0.size
     n = x.size
     J = np.zeros((m, n))
-    for j in range(n):
+    j = 0
+    while j < n:
         xp = x.copy()
         xp[j] += eps
         J[:, j] = (F(xp) - f0) / eps
+        j += 1
     return J
 
 
