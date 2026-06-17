@@ -1,4 +1,4 @@
-"""Particle smoother — backward weight reweighting (Doucet et al.).
+"""Particle smoother - backward weight reweighting (Doucet et al.).
 
 Examples:
     >>> import numpy as np
@@ -28,24 +28,17 @@ def smooth_particles(
     N, M = p.shape
     w_s = w.copy()
     w_s[-1] = w[-1]
-    for k in range(N - 2, -1, -1):
-        # for each particle i at time k
-        for i in range(M):
-            num = 0.0
-            for j in range(M):
-                tij = transition_density(float(p[k + 1, j]), float(p[k, i]))
-                # marginal denom (sum_m w[k, m] p(j|m))
-                d = sum(
-                    w[k, m] * transition_density(float(p[k + 1, j]), float(p[k, m]))
-                    for m in range(M)
-                )
-                if d > 0:
-                    num += w_s[k + 1, j] * tij / d
-            w_s[k, i] = w[k, i] * num
-        # normalize
+    transition_grid = np.frompyfunc(transition_density, 2, 1)
+    k = N - 2
+    while k >= 0:
+        kernel = transition_grid(p[k + 1, :, None], p[k, None, :]).astype(np.float64)
+        denom = kernel @ w[k]
+        ratio = np.divide(w_s[k + 1], denom, out=np.zeros(M), where=denom > 0)
+        w_s[k] = w[k] * (kernel.T @ ratio)
         s = w_s[k].sum()
         if s > 0:
             w_s[k] /= s
+        k -= 1
     return w_s
 
 
