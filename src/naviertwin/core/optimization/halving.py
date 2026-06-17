@@ -3,7 +3,7 @@
 Examples:
     >>> import numpy as np
     >>> from naviertwin.core.optimization.halving import successive_halving
-    >>> configs = [{"x": v} for v in np.linspace(-2, 2, 16)]
+    >>> configs = list(map(lambda v: {"x": v}, np.linspace(-2, 2, 16)))
     >>> # budget = max iter (eval 은 budget 에 의존)
     >>> def evaluator(cfg, budget): return -(cfg["x"] - 1) ** 2 * budget
     >>> best, hist = successive_halving(configs, evaluator, max_budget=100, eta=4)
@@ -28,22 +28,32 @@ def successive_halving(
     history: list[dict[str, Any]] = []
     while True:
         scored = []
-        for cfg in survivors:
+        idx = 0
+        while idx < len(survivors):
+            cfg = survivors[idx]
             s = float(evaluator(cfg, budget))
             scored.append((s, cfg))
             history.append({"config": cfg, "budget": budget, "score": s})
+            idx += 1
         scored.sort(key=lambda t: -t[0] if higher_better else t[0])
         keep = max(1, len(scored) // eta)
-        survivors = [c for _, c in scored[:keep]]
+        survivors = []
+        idx = 0
+        while idx < keep:
+            survivors.append(scored[idx][1])
+            idx += 1
         budget = min(max_budget, budget * eta)
         if len(survivors) == 1 or budget >= max_budget:
             # final evaluation
             if len(survivors) > 1:
-                scored = sorted(
-                    [(float(evaluator(c, max_budget)), c) for c in survivors],
-                    key=lambda t: -t[0] if higher_better else t[0],
-                )
-                survivors = [c for _, c in scored[:1]]
+                scored = []
+                idx = 0
+                while idx < len(survivors):
+                    cfg = survivors[idx]
+                    scored.append((float(evaluator(cfg, max_budget)), cfg))
+                    idx += 1
+                scored = sorted(scored, key=lambda t: -t[0] if higher_better else t[0])
+                survivors = [scored[0][1]]
             break
     return survivors[0], history
 
