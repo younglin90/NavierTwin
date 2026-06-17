@@ -134,9 +134,15 @@ class UNet2D(BaseOperator):
             shuffle=True,
         )
         self.train_losses_ = []
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             epoch_loss = 0.0
-            for xb, yb in loader:
+            batches = iter(loader)
+            while True:
+                try:
+                    xb, yb = next(batches)
+                except StopIteration:
+                    break
                 xb = xb.to(self._device)
                 yb = yb.to(self._device)
                 optim.zero_grad()
@@ -147,6 +153,7 @@ class UNet2D(BaseOperator):
                 epoch_loss += float(loss.item()) * xb.shape[0]
             epoch_loss /= max(len(X), 1)
             self.train_losses_.append(epoch_loss)
+            epoch_idx += 1
 
         self.n_epochs = self.max_epochs
         self.is_fitted = True
