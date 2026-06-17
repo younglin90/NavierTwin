@@ -22,6 +22,7 @@ Examples:
 from __future__ import annotations
 
 import numpy as np
+from numpy.linalg import svd as _svd
 from numpy.typing import NDArray
 
 from naviertwin.utils.logger import get_logger
@@ -40,14 +41,14 @@ def _low_pass_filter(X: NDArray[np.float64], level: int) -> NDArray[np.float64]:
     kernel = np.exp(-0.5 * (t / sigma) ** 2)
     kernel /= kernel.sum()
 
-    out = np.zeros_like(X)
-    for col in range(X.shape[1]):
-        filtered = np.convolve(X[:, col], kernel, mode="same")
+    def _filter_column(col: NDArray[np.float64]) -> NDArray[np.float64]:
+        filtered = np.convolve(col, kernel, mode="same")
         if filtered.shape[0] != X.shape[0]:
             start = max(0, (filtered.shape[0] - X.shape[0]) // 2)
             filtered = filtered[start : start + X.shape[0]]
-        out[:, col] = filtered
-    return out
+        return filtered
+
+    return np.apply_along_axis(_filter_column, 0, X)
 
 
 class MRPOD:
@@ -98,12 +99,13 @@ class MRPOD:
         self.mean_ = X.mean(axis=1, keepdims=True)
         residual = X - self.mean_
 
-        for scale in range(self.n_scales):
+        scale = 0
+        while scale < self.n_scales:
             # 이 스케일의 저주파 컴포넌트
             low = _low_pass_filter(residual, level=scale)
 
             # POD: SVD
-            U, s, _ = np.linalg.svd(low, full_matrices=False)
+            U, s, _ = _svd(low, full_matrices=False)
             modes = U[:, :r]
             energies = s[:r] ** 2
 
@@ -116,12 +118,13 @@ class MRPOD:
             logger.debug(
                 "MRPOD 스케일 %d: 에너지=%.4g", scale, float(energies.sum())
             )
+            scale += 1
 
         self.is_fitted = True
         self.modes_ = self.get_modes()
-        singular_values = []
-        for energies in self.scale_energies:
-            singular_values.append(np.sqrt(np.maximum(energies, 0.0)))
+        singular_values = list(
+            map(lambda energies: np.sqrt(np.maximum(energies, 0.0)), self.scale_energies)
+        )
         self.singular_values_ = np.hstack(singular_values) if singular_values else np.array([])
         total = float(np.sum(self.singular_values_ ** 2))
         if total > 0:
@@ -157,7 +160,7 @@ class MRPOD:
         """
         if not self.is_fitted:
             raise RuntimeError("fit() must be called first")
-        per_scale = np.array([e.sum() for e in self.scale_energies])
+        per_scale = np.fromiter(map(np.sum, self.scale_energies), dtype=np.float64)
         total = per_scale.sum()
         if total < 1e-30:
             return np.zeros(self.n_scales)
