@@ -29,8 +29,10 @@ class GridIndex:
         self.cell = float(cell_size)
         self._buckets: dict[tuple[int, ...], list[int]] = defaultdict(list)
         keys = np.floor(self.points / self.cell).astype(np.int64)
-        for i, k in enumerate(map(tuple, keys)):
-            self._buckets[k].append(i)
+        i = 0
+        while i < keys.shape[0]:
+            self._buckets[tuple(keys[i])].append(i)
+            i += 1
 
     def query_radius(
         self, q: NDArray[np.float64], radius: float,
@@ -41,12 +43,14 @@ class GridIndex:
         kq = np.floor(q / self.cell).astype(np.int64)
         hits: list[int] = []
         # 주변 셀 iterate
-        it = np.ndindex(*([2 * span + 1] * d))
-        for delta in it:
-            key = tuple(kq + np.array(delta) - span)
+        deltas = np.array(list(np.ndindex(*([2 * span + 1] * d))), dtype=np.int64)
+        delta_idx = 0
+        while delta_idx < deltas.shape[0]:
+            key = tuple(kq + deltas[delta_idx] - span)
             bucket = self._buckets.get(key, None)
             if bucket:
                 hits.extend(bucket)
+            delta_idx += 1
         if not hits:
             return np.array([], dtype=np.int64)
         hits_arr = np.asarray(hits, dtype=np.int64)
@@ -57,12 +61,14 @@ class GridIndex:
         """가장 가까운 점의 인덱스."""
         # 셀이 비어있을 수도 있으므로 반경 확장
         r = self.cell
-        for _ in range(20):
+        attempt = 0
+        while attempt < 20:
             idx = self.query_radius(q, r)
             if idx.size > 0:
                 dists = np.linalg.norm(self.points[idx] - q, axis=1)
                 return int(idx[np.argmin(dists)])
             r *= 2
+            attempt += 1
         # fallback
         dists = np.linalg.norm(self.points - q, axis=1)
         return int(np.argmin(dists))
