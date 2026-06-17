@@ -172,7 +172,8 @@ class GNNAE(BaseReducer):
         loss_fn = torch.nn.MSELoss()
 
         self.train_losses_ = []
-        for epoch in range(self.max_epochs):
+        epoch = 0
+        while epoch < self.max_epochs:
             optim.zero_grad()
             z = self._encoder(x, self._edge_tensor)
             x_hat = self._decoder(z, self._edge_tensor)
@@ -180,6 +181,7 @@ class GNNAE(BaseReducer):
             loss.backward()
             optim.step()
             self.train_losses_.append(float(loss.item()))
+            epoch += 1
 
         self.n_components = self.latent_dim
         self.is_fitted = True
