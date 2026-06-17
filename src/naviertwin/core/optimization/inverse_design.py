@@ -30,18 +30,21 @@ def inverse_design(
     p = np.asarray(p0, dtype=np.float64).ravel().copy()
     target = np.asarray(target, dtype=np.float64).ravel()
     history = []
-    for _ in range(n_iter):
+    it = 0
+    while it < n_iter:
         y = forward(p)
         r = y - target
         J = 0.5 * float(r @ r) + 0.5 * reg * float(p @ p)
         history.append(J)
         # FD gradient
         g = np.zeros_like(p)
-        for i in range(p.size):
+        i = 0
+        while i < p.size:
             pp = p.copy()
             pp[i] += eps
             yp = forward(pp)
             g[i] = ((yp - target) @ (yp - target) - r @ r) / (2 * eps)
+            i += 1
         g += reg * p
         p = p - lr * g
         if bounds is not None:
@@ -50,6 +53,7 @@ def inverse_design(
                 p = np.maximum(p, lo)
             if hi is not None:
                 p = np.minimum(p, hi)
+        it += 1
     return p, history
 
 
