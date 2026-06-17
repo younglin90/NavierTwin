@@ -104,8 +104,7 @@ class ConditionalVAE:
 
         self._device = self._resolve_device()
         self._build()
-        for m in (self._enc_body, self._mu, self._logvar, self._dec):
-            m.to(self._device)
+        tuple(map(lambda m: m.to(self._device), (self._enc_body, self._mu, self._logvar, self._dec)))
 
         params = (
             list(self._enc_body.parameters())
@@ -121,9 +120,15 @@ class ConditionalVAE:
             shuffle=True,
         )
         self.train_losses_ = []
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             epoch = 0.0
-            for xb, cb in loader:
+            batches = iter(loader)
+            while True:
+                try:
+                    xb, cb = next(batches)
+                except StopIteration:
+                    break
                 xb = xb.to(self._device)
                 cb = cb.to(self._device)
                 optim.zero_grad()
@@ -141,6 +146,7 @@ class ConditionalVAE:
                 epoch += float(loss.item()) * xb.shape[0]
             epoch /= max(len(Xa), 1)
             self.train_losses_.append(epoch)
+            epoch_idx += 1
 
         self.is_fitted = True
         logger.info("cVAE 학습 완료: loss=%.6g", self.train_losses_[-1])
