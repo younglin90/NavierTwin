@@ -27,7 +27,10 @@ def linreg_influence(
     Hinv = np.linalg.inv(H)
     beta, *_ = np.linalg.lstsq(X, y, rcond=None)
     res = y - X @ beta
-    return np.array([Hinv @ X[i] * res[i] for i in range(len(y))])
+    projected = X @ Hinv.T
+    if res.ndim == 1:
+        return projected * res[:, None]
+    return projected[:, :, None] * res[:, None, :]
 
 
 __all__ = ["linreg_influence"]
