@@ -132,9 +132,15 @@ class TransformerForecaster(BaseTimeSeries):
             shuffle=True,
         )
         self.train_losses_ = []
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             epoch_loss = 0.0
-            for xb, yb in loader:
+            batches = iter(loader)
+            while True:
+                try:
+                    xb, yb = next(batches)
+                except StopIteration:
+                    break
                 xb = xb.to(self._device)
                 yb = yb.to(self._device)
                 optim.zero_grad()
@@ -145,6 +151,7 @@ class TransformerForecaster(BaseTimeSeries):
                 epoch_loss += float(loss.item()) * xb.shape[0]
             epoch_loss /= max(len(X), 1)
             self.train_losses_.append(epoch_loss)
+            epoch_idx += 1
 
         self.is_fitted = True
         logger.info(
@@ -169,12 +176,14 @@ class TransformerForecaster(BaseTimeSeries):
         window = state[-self.lookback :].copy()
 
         preds: list[np.ndarray] = []
-        for _ in range(n_steps):
+        step = 0
+        while step < n_steps:
             x = torch.tensor(window[None, :, :], device=self._device)
             with torch.no_grad():
                 yhat = self._model(x).cpu().numpy()[0]
             preds.append(yhat)
             window = np.concatenate([window[1:], yhat[None, :]], axis=0)
+            step += 1
         return np.stack(preds)
 
 
