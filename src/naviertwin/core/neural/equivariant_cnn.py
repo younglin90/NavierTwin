@@ -34,10 +34,13 @@ class C4Conv2d(nn.Module):
         self.bias = nn.Parameter(torch.zeros(out_ch))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        outs = []
-        for r in range(4):
-            w = torch.rot90(self.weight, r, dims=(-2, -1))
-            outs.append(F.conv2d(x, w, bias=self.bias, padding=self.kernel_size // 2))
+        padding = self.kernel_size // 2
+        outs = (
+            F.conv2d(x, self.weight, bias=self.bias, padding=padding),
+            F.conv2d(x, torch.rot90(self.weight, 1, dims=(-2, -1)), bias=self.bias, padding=padding),
+            F.conv2d(x, torch.rot90(self.weight, 2, dims=(-2, -1)), bias=self.bias, padding=padding),
+            F.conv2d(x, torch.rot90(self.weight, 3, dims=(-2, -1)), bias=self.bias, padding=padding),
+        )
         return torch.stack(outs, dim=0).mean(dim=0)
 
 
