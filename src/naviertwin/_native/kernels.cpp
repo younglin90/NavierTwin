@@ -1564,6 +1564,68 @@ static py::tuple fd_heat_1d_evolve(ArrayD u0, int n_steps, double coef, double d
     return py::make_tuple(t, U);
 }
 
+static py::tuple conservation_1d_linear_native(
+    int n_cells, double L, double T, const std::string& scheme, double dt_factor, double c_max
+) {
+    if (n_cells <= 0) {
+        throw std::invalid_argument("n_cells must be positive");
+    }
+    if (c_max == 0.0) {
+        throw std::invalid_argument("c_max must be non-zero");
+    }
+    const double dx = L / static_cast<double>(n_cells);
+    double dt = dt_factor * dx / c_max;
+    const int n_steps = static_cast<int>(std::ceil(T / dt));
+    if (n_steps <= 0) {
+        throw std::invalid_argument("n_steps must be positive");
+    }
+    dt = T / static_cast<double>(n_steps);
+
+    const py::ssize_t nx = static_cast<py::ssize_t>(n_cells);
+    const py::ssize_t nt = static_cast<py::ssize_t>(n_steps) + 1;
+    auto x = py::array_t<double>({nx});
+    auto t = py::array_t<double>({nt});
+    auto U = py::array_t<double>({nx, nt});
+    double* xp = x.mutable_data();
+    double* tp = t.mutable_data();
+    double* Up = U.mutable_data();
+    std::vector<double> u(static_cast<std::size_t>(n_cells));
+    std::vector<double> u_new(static_cast<std::size_t>(n_cells));
+    const double pi = std::acos(-1.0);
+
+    for (int i = 0; i < n_cells; ++i) {
+        const double xi = 0.5 * dx + static_cast<double>(i) * dx;
+        xp[i] = xi;
+        u[static_cast<std::size_t>(i)] = std::sin(2.0 * pi * xi / L);
+        Up[static_cast<py::ssize_t>(i) * nt] = u[static_cast<std::size_t>(i)];
+    }
+    tp[0] = 0.0;
+
+    for (int k = 0; k < n_steps; ++k) {
+        for (int i = 0; i < n_cells; ++i) {
+            const int il = (i + n_cells - 1) % n_cells;
+            const int ir = (i + 1) % n_cells;
+            const double ui = u[static_cast<std::size_t>(i)];
+            const double u_l = u[static_cast<std::size_t>(il)];
+            const double u_r = u[static_cast<std::size_t>(ir)];
+            double flux_right = ui;
+            double flux_left = u_l;
+            if (scheme == "lxf") {
+                flux_right = 0.5 * (ui + u_r) - 0.5 * (dx / dt) * (u_r - ui);
+                flux_left = 0.5 * (u_l + ui) - 0.5 * (dx / dt) * (ui - u_l);
+            }
+            u_new[static_cast<std::size_t>(i)] = ui - dt / dx * (flux_right - flux_left);
+        }
+        u.swap(u_new);
+        const py::ssize_t col = static_cast<py::ssize_t>(k) + 1;
+        for (int i = 0; i < n_cells; ++i) {
+            Up[static_cast<py::ssize_t>(i) * nt + col] = u[static_cast<std::size_t>(i)];
+        }
+        tp[col] = static_cast<double>(k + 1) * dt;
+    }
+    return py::make_tuple(x, t, U);
+}
+
 static py::tuple fd_burgers_1d_evolve(ArrayD u0, int n_steps, double dt, double dx, double nu) {
     if (u0.ndim() != 1) {
         throw std::invalid_argument("u0 must be a 1D array");
@@ -4864,6 +4926,10 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("jensen_farm_velocity", &jensen_farm_velocity, py::arg("V0"), py::arg("distances"), py::arg("R"), py::arg("a") = 0.3, py::arg("k") = 0.04);
     m.def("conservative_remap_1d", &conservative_remap_1d, py::arg("x_old_edges"), py::arg("u_old"), py::arg("x_new_edges"));
     m.def("fd_heat_1d_evolve", &fd_heat_1d_evolve, py::arg("u0"), py::arg("n_steps"), py::arg("coef"), py::arg("dt"));
+    m.def(
+        "conservation_1d_linear", &conservation_1d_linear_native, py::arg("n_cells"),
+        py::arg("L"), py::arg("T"), py::arg("scheme"), py::arg("dt_factor"), py::arg("c_max")
+    );
     m.def("fd_burgers_1d_evolve", &fd_burgers_1d_evolve, py::arg("u0"), py::arg("n_steps"), py::arg("dt"), py::arg("dx"), py::arg("nu"));
     m.def("poisson_2d_jacobi", &poisson_2d_jacobi_native, py::arg("f"), py::arg("dx") = 1.0, py::arg("dy") = 1.0, py::arg("max_iter") = 5000, py::arg("tol") = 1e-6);
     m.def("levelset_reinit_1d", &levelset_reinit_1d, py::arg("phi"), py::arg("dx") = 1.0, py::arg("n_iter") = 30);

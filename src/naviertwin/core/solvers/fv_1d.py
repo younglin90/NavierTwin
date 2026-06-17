@@ -17,6 +17,8 @@ from typing import Callable
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import HAS_NATIVE_KERNELS, _kernels
+
 
 def solve_conservation_1d(
     n_cells: int = 100, L: float = 1.0, T: float = 0.2,
@@ -25,6 +27,21 @@ def solve_conservation_1d(
     *, scheme: str = "lxf", dt_factor: float = 0.4, c_max: float = 1.0,
 ) -> tuple[NDArray, NDArray, NDArray]:
     """periodic BC. Returns (x, t, U[n_cells, n_steps+1])."""
+    native_linear = (
+        getattr(_kernels, "conservation_1d_linear", None)
+        if HAS_NATIVE_KERNELS
+        else None
+    )
+    if flux is None and u0 is None and native_linear is not None:
+        return native_linear(
+            n_cells,
+            L,
+            T,
+            scheme,
+            dt_factor,
+            c_max,
+        )
+
     dx = L / n_cells
     x = np.linspace(0.5 * dx, L - 0.5 * dx, n_cells)
     u = u0(x) if u0 else np.sin(2 * np.pi * x / L)
@@ -37,7 +54,8 @@ def solve_conservation_1d(
     U[:, 0] = u
     t = np.zeros(n_steps + 1)
 
-    for k in range(n_steps):
+    k = 0
+    while k < n_steps:
         u_L = np.roll(u, 1)
         u_R = np.roll(u, -1)
         f_center = f(u)
@@ -54,6 +72,7 @@ def solve_conservation_1d(
         u = u - dt / dx * (flux_right - flux_left)
         U[:, k + 1] = u
         t[k + 1] = (k + 1) * dt
+        k += 1
     return x, t, U
 
 
