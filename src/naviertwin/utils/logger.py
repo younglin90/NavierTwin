@@ -46,7 +46,10 @@ def _candidate_log_dirs() -> list[Path]:
 def _build_file_handler(formatter: logging.Formatter) -> logging.Handler | None:
     """Create a rotating file handler, falling back to temp when needed."""
     last_error: OSError | None = None
-    for log_dir in _candidate_log_dirs():
+    candidates = _candidate_log_dirs()
+    idx = 0
+    while idx < len(candidates):
+        log_dir = candidates[idx]
         try:
             log_dir.mkdir(parents=True, exist_ok=True)
             file_handler = logging.handlers.RotatingFileHandler(
@@ -57,6 +60,7 @@ def _build_file_handler(formatter: logging.Formatter) -> logging.Handler | None:
             )
         except OSError as exc:
             last_error = exc
+            idx += 1
             continue
 
         file_handler.setLevel(logging.DEBUG)
