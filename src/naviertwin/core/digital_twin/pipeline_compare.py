@@ -90,13 +90,13 @@ def compare_models(
     Returns:
         result 리스트 (각 row: reducer_kind/n_modes/surrogate_kind/rmse/r2/train_time_s).
     """
-    rows: list[dict[str, Any]] = []
-    for red, nm, sur in configs:
+    def score_config(config: tuple[str, int, str]) -> dict[str, Any]:
+        red, nm, sur = config
         try:
-            rows.append(_score(snapshots, params, red, nm, sur, val_ratio, seed))
+            return _score(snapshots, params, red, nm, sur, val_ratio, seed)
         except Exception as e:  # noqa: BLE001
             logger.warning("compare 실패 (%s,%d,%s): %s", red, nm, sur, e)
-            rows.append({
+            return {
                 "reducer_kind": red,
                 "n_modes": int(nm),
                 "surrogate_kind": sur,
@@ -104,7 +104,9 @@ def compare_models(
                 "r2": float("-inf"),
                 "train_time_s": 0.0,
                 "error": str(e),
-            })
+            }
+
+    rows = list(map(score_config, configs))
     rows.sort(key=lambda r: r["rmse"])
     logger.info("compare_models: %d configs, best rmse=%.6g", len(rows), rows[0]["rmse"])
     return rows
@@ -113,13 +115,15 @@ def compare_models(
 def rank_table(rows: list[dict[str, Any]]) -> str:
     """비교 결과를 텍스트 표로 포매팅."""
     header = f"{'rank':>4} {'reducer':>8} {'n_modes':>7} {'surrogate':>10} {'rmse':>10} {'r2':>8} {'time_s':>8}"
-    lines = [header, "-" * len(header)]
-    for i, r in enumerate(rows, 1):
-        lines.append(
-            f"{i:>4} {r['reducer_kind']:>8} {r['n_modes']:>7} "
-            f"{r['surrogate_kind']:>10} {r['rmse']:>10.4g} {r['r2']:>8.4g} "
-            f"{r['train_time_s']:>8.3f}"
-        )
+    body = map(
+        lambda item: (
+            f"{item[0]:>4} {item[1]['reducer_kind']:>8} {item[1]['n_modes']:>7} "
+            f"{item[1]['surrogate_kind']:>10} {item[1]['rmse']:>10.4g} "
+            f"{item[1]['r2']:>8.4g} {item[1]['train_time_s']:>8.3f}"
+        ),
+        enumerate(rows, 1),
+    )
+    lines = [header, "-" * len(header), *body]
     return "\n".join(lines)
 
 
