@@ -62,7 +62,15 @@ def list_units(category: str | None = None) -> list[str]:
     """사용 가능한 단위 리스트 (옵션 카테고리 필터)."""
     if category is None:
         return sorted(_UNITS.keys())
-    return sorted(u for u, (_, _, k) in _UNITS.items() if k == category)
+    units: list[str] = []
+    items = list(_UNITS.items())
+    idx = 0
+    while idx < len(items):
+        u, (_, _, k) = items[idx]
+        if k == category:
+            units.append(u)
+        idx += 1
+    return sorted(units)
 
 
 __all__ = ["convert", "list_units"]
