@@ -32,30 +32,30 @@ def _sample_random(
     rng: np.random.Generator,
 ) -> dict[str, Any]:
     """한 번의 random 샘플."""
-    out: dict[str, Any] = {}
-    for name, (low, high, typ) in space.items():
+    def sample_item(item: tuple[str, tuple]) -> tuple[str, Any]:
+        name, (low, high, typ) = item
         if typ == "float":
-            out[name] = float(rng.uniform(low, high))
-        elif typ == "logfloat":
+            return name, float(rng.uniform(low, high))
+        if typ == "logfloat":
             log_lo = np.log10(low)
             log_hi = np.log10(high)
-            out[name] = float(10 ** rng.uniform(log_lo, log_hi))
-        elif typ == "int":
-            out[name] = int(rng.integers(low, high + 1))
-        else:
-            raise ValueError(f"알 수 없는 type: {typ}")
-    return out
+            return name, float(10 ** rng.uniform(log_lo, log_hi))
+        if typ == "int":
+            return name, int(rng.integers(low, high + 1))
+        raise ValueError(f"알 수 없는 type: {typ}")
+
+    return dict(map(sample_item, space.items()))
 
 
 def _to_bounds(space: dict[str, tuple]) -> NDArray[np.float64]:
     """BoTorch 용 (n, 2) bounds. int 는 그대로 float 영역."""
-    rows = []
-    for name, (low, high, typ) in space.items():
+    def bound_row(item: tuple[str, tuple]) -> list[float]:
+        _, (low, high, typ) = item
         if typ == "logfloat":
-            rows.append([np.log10(low), np.log10(high)])
-        else:
-            rows.append([low, high])
-    return np.asarray(rows, dtype=np.float64)
+            return [np.log10(low), np.log10(high)]
+        return [low, high]
+
+    return np.asarray(tuple(map(bound_row, space.items())), dtype=np.float64)
 
 
 def _denormalize(
@@ -63,16 +63,17 @@ def _denormalize(
     space: dict[str, tuple],
 ) -> dict[str, Any]:
     """BoTorch 제안값 x 를 space 형식 dict 로."""
-    out: dict[str, Any] = {}
-    for i, (name, (low, high, typ)) in enumerate(space.items()):
-        v = float(x[i])
+    def denorm_item(pair: tuple[np.float64, tuple[str, tuple]]) -> tuple[str, Any]:
+        xi, item = pair
+        name, (_, _, typ) = item
+        v = float(xi)
         if typ == "logfloat":
-            out[name] = float(10 ** v)
-        elif typ == "int":
-            out[name] = int(round(v))
-        else:
-            out[name] = v
-    return out
+            return name, float(10 ** v)
+        if typ == "int":
+            return name, int(round(v))
+        return name, v
+
+    return dict(map(denorm_item, zip(x, space.items(), strict=True)))
 
 
 def hyperopt(
@@ -111,13 +112,15 @@ def _hyperopt_random(
     history: list[dict[str, Any]] = []
     best: dict[str, Any] | None = None
     best_val = np.inf
-    for _ in range(n_trials):
+    trial_idx = 0
+    while trial_idx < n_trials:
         p = _sample_random(space, rng)
         v = float(objective(p))
         history.append({"params": p, "value": v})
         if v < best_val:
             best_val = v
             best = p
+        trial_idx += 1
     logger.info("hyperopt(random): %d trials, best=%.6g", n_trials, best_val)
     return best or {}, history
 
@@ -172,14 +175,16 @@ def _hyperopt_optuna(
     history: list[dict[str, Any]] = []
 
     def _obj(trial: "optuna.Trial") -> float:
-        p: dict[str, Any] = {}
-        for name, (low, high, typ) in space.items():
+        def suggest_item(item: tuple[str, tuple]) -> tuple[str, Any]:
+            name, (low, high, typ) = item
             if typ == "int":
-                p[name] = trial.suggest_int(name, int(low), int(high))
-            elif typ == "logfloat":
-                p[name] = trial.suggest_float(name, float(low), float(high), log=True)
-            else:
-                p[name] = trial.suggest_float(name, float(low), float(high))
+                return name, trial.suggest_int(name, int(low), int(high))
+            if typ == "logfloat":
+                value = trial.suggest_float(name, float(low), float(high), log=True)
+                return name, value
+            return name, trial.suggest_float(name, float(low), float(high))
+
+        p = dict(map(suggest_item, space.items()))
         v = float(objective(p))
         history.append({"params": p, "value": v})
         return v
