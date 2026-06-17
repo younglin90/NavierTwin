@@ -30,7 +30,8 @@ def sa(
     best_x = x.copy()
     best_f = f
     T = float(T0)
-    for _ in range(n_iter):
+    it = 0
+    while it < n_iter:
         prop = x + rng.normal(0, step, size=x.size)
         fp = float(objective(prop))
         if fp < f or rng.random() < np.exp(-(fp - f) / max(T, 1e-30)):
@@ -40,6 +41,7 @@ def sa(
                 best_x = x.copy()
                 best_f = f
         T *= cooling
+        it += 1
     return best_x, best_f
 
 
