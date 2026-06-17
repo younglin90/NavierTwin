@@ -44,13 +44,15 @@ def integrate_streamline(
     path = np.zeros((n_steps + 1, start.size), dtype=np.float64)
     path[0] = start
     p = start.copy()
-    for i in range(n_steps):
+    i = 0
+    while i < n_steps:
         p_next = rk4_step(vf, p, dt)
         if np.linalg.norm(p_next - p) < stop_if_stagnant:
             path[i + 1:] = p_next
             break
         p = p_next
         path[i + 1] = p
+        i += 1
     return path
 
 
@@ -63,7 +65,7 @@ def integrate_streamlines(
     """여러 시드 병렬 적분. starts: (n_seeds, dim)."""
     starts = np.asarray(starts, dtype=np.float64)
     out = np.stack(
-        [integrate_streamline(vf, s, dt, n_steps) for s in starts],
+        tuple(map(lambda s: integrate_streamline(vf, s, dt, n_steps), starts)),
         axis=0,
     )
     return out  # (n_seeds, n_steps+1, dim)
