@@ -14,6 +14,8 @@ from typing import Callable
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
 
 def linear_adjoint_sensitivity(
     A_fn: Callable[[NDArray], NDArray],
@@ -31,22 +33,27 @@ def linear_adjoint_sensitivity(
     p = np.asarray(p, dtype=np.float64).ravel()
     A = A_fn(p)
     b = b_fn(p)
-    u = np.linalg.solve(A, b)
+    if _kernels is None:
+        raise ImportError("naviertwin._native._kernels is required by adjoint")
+    u = _kernels.solve_dense(A, b)
     J0 = float(J_fn(u, p))
 
     # ∂J/∂u (FD)
     dJdu = np.zeros_like(u)
-    for i in range(u.size):
+    i = 0
+    while i < u.size:
         up = u.copy()
         up[i] += eps
         dJdu[i] = (J_fn(up, p) - J0) / eps
+        i += 1
 
     # adjoint: Aᵀ λ = ∂J/∂u
-    lam = np.linalg.solve(A.T, dJdu)
+    lam = _kernels.solve_dense(A.T, dJdu)
 
     # dJ/dp = ∂J/∂p - λᵀ (∂A/∂p u - ∂b/∂p)  (FD on A, b)
     grad = np.zeros_like(p)
-    for k in range(p.size):
+    k = 0
+    while k < p.size:
         pp = p.copy()
         pp[k] += eps
         dA_u = (A_fn(pp) - A) @ u / eps
@@ -54,6 +61,7 @@ def linear_adjoint_sensitivity(
         # ∂J/∂p (explicit)
         dJdp_explicit = (J_fn(u, pp) - J0) / eps
         grad[k] = dJdp_explicit - lam @ (dA_u - db)
+        k += 1
     return J0, grad
 
 
@@ -65,10 +73,12 @@ def fd_sensitivity(
     p = np.asarray(p, dtype=np.float64).ravel()
     J0 = float(forward(p))
     g = np.zeros_like(p)
-    for i in range(p.size):
+    i = 0
+    while i < p.size:
         pp = p.copy()
         pp[i] += eps
         g[i] = (forward(pp) - J0) / eps
+        i += 1
     return J0, g
 
 
