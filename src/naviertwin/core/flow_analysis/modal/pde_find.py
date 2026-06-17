@@ -24,6 +24,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
 from naviertwin.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -33,10 +34,9 @@ def _derivative(
     U: NDArray[np.float64], axis: int, d: float, order: int = 1
 ) -> NDArray[np.float64]:
     """중앙차분 n차 도함수."""
-    result = U
-    for _ in range(order):
-        result = np.gradient(result, d, axis=axis)
-    return result
+    if _kernels is None:
+        raise ImportError("naviertwin._native._kernels is required by PDE-FIND")
+    return _kernels.derivative_2d(np.asarray(U, dtype=np.float64), d, axis, order)
 
 
 def _build_library(
@@ -59,7 +59,12 @@ def _build_library(
         "U*U_xx": flat(U * Uxx),
     }
     names = list(cols.keys())
-    Theta = np.stack([cols[n] for n in names], axis=1)
+    theta_cols = []
+    idx = 0
+    while idx < len(names):
+        theta_cols.append(cols[names[idx]])
+        idx += 1
+    Theta = np.stack(theta_cols, axis=1)
     return Theta, names
 
 
@@ -67,7 +72,8 @@ def _stridge(
     Theta: NDArray[np.float64], ut: NDArray[np.float64], threshold: float, max_iter: int = 10
 ) -> NDArray[np.float64]:
     coef, *_ = np.linalg.lstsq(Theta, ut, rcond=None)
-    for _ in range(max_iter):
+    it = 0
+    while it < max_iter:
         small = np.abs(coef) < threshold
         coef[small] = 0
         big_cols = np.where(~small)[0]
@@ -76,6 +82,7 @@ def _stridge(
         coef_new, *_ = np.linalg.lstsq(Theta[:, big_cols], ut, rcond=None)
         coef = np.zeros_like(coef)
         coef[big_cols] = coef_new
+        it += 1
     return coef
 
 
@@ -108,11 +115,12 @@ def pde_find_1d(
     Theta, names = _build_library(U, dx)
     coef = _stridge(Theta, Ut.ravel(), threshold=threshold)
 
-    terms = [
-        f"{coef[i]:.4g}*{names[i]}"
-        for i in range(len(names))
-        if abs(coef[i]) > 0
-    ]
+    terms = []
+    i = 0
+    while i < len(names):
+        if abs(coef[i]) > 0:
+            terms.append(f"{coef[i]:.4g}*{names[i]}")
+        i += 1
     equation = "U_t = " + (" + ".join(terms) if terms else "0")
     logger.info("PDE-FIND: %s", equation)
     return {"coef": coef, "names": names, "equation": equation}

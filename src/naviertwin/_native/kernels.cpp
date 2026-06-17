@@ -4490,6 +4490,40 @@ static py::array_t<double> lcs_ftle_from_flow_map_native(Array2D X, Array2D Y, d
     return out;
 }
 
+static py::array_t<double> derivative_2d_native(Array2D U, double spacing, int axis, int order) {
+    if (spacing == 0.0) {
+        throw std::invalid_argument("spacing must be non-zero");
+    }
+    if (axis != 0 && axis != 1) {
+        throw std::invalid_argument("axis must be 0 or 1");
+    }
+    if (order < 0) {
+        throw std::invalid_argument("order must be non-negative");
+    }
+    const py::ssize_t ny = U.shape(0);
+    const py::ssize_t nx = U.shape(1);
+    std::vector<double> current(U.data(), U.data() + ny * nx);
+    std::vector<double> next(static_cast<size_t>(ny * nx), 0.0);
+
+    for (int step = 0; step < order; ++step) {
+        for (py::ssize_t i = 0; i < ny; ++i) {
+            for (py::ssize_t j = 0; j < nx; ++j) {
+                if (axis == 1) {
+                    next[static_cast<size_t>(i * nx + j)] = grad_x(current.data(), ny, nx, i, j, spacing);
+                } else {
+                    next[static_cast<size_t>(i * nx + j)] = grad_y(current.data(), ny, nx, i, j, spacing);
+                }
+            }
+        }
+        current.swap(next);
+        std::fill(next.begin(), next.end(), 0.0);
+    }
+
+    auto out = py::array_t<double>({ny, nx});
+    std::copy(current.begin(), current.end(), out.mutable_data());
+    return out;
+}
+
 static void schedule_berger_oliger_fill(int level, int max_level, int refine_ratio, std::vector<int>& out) {
     if (level >= max_level) {
         out.push_back(level);
@@ -4718,6 +4752,7 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("gmm_log_prob_matrix", &gmm_log_prob_matrix_native, py::arg("X"), py::arg("weights"), py::arg("means"), py::arg("covs"));
     m.def("ftle_from_advected_stencils", &ftle_from_advected_stencils_native, py::arg("adv"), py::arg("T"), py::arg("eps"));
     m.def("lcs_ftle_from_flow_map", &lcs_ftle_from_flow_map_native, py::arg("X"), py::arg("Y"), py::arg("dx"), py::arg("dy"), py::arg("T"));
+    m.def("derivative_2d", &derivative_2d_native, py::arg("U"), py::arg("spacing"), py::arg("axis"), py::arg("order") = 1);
     m.def(
         "schedule_berger_oliger", &schedule_berger_oliger_native, py::arg("level") = 0,
         py::arg("max_level") = 2, py::arg("refine_ratio") = 2
