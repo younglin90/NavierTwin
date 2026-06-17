@@ -21,6 +21,7 @@ Examples:
 from __future__ import annotations
 
 import numpy as np
+from numpy.linalg import svd as _svd
 from numpy.typing import NDArray
 
 from naviertwin.utils.logger import get_logger
@@ -54,7 +55,7 @@ class BalancedPOD:
 
         # Hankel-like matrix H = Yᵀ X (n_snap × n_snap)
         H = Y.T @ X
-        U, s, Vt = np.linalg.svd(H, full_matrices=False)
+        U, s, Vt = _svd(H, full_matrices=False)
         r = min(self.n_modes, s.size)
 
         # Balanced direct / adjoint modes
