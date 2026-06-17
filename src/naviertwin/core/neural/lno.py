@@ -24,7 +24,7 @@ class LNOBlock1D(nn.Module):
         super().__init__()
         self.channels = channels
         self.n_modes = n_modes
-        # learnable poles (real, ≤0 for stability) and residues
+        # learnable poles (real, stability-constrained) and residues
         self.log_neg_poles = nn.Parameter(torch.randn(n_modes) * 0.1)
         self.residues = nn.Parameter(torch.randn(channels, channels, n_modes) * 0.1)
         self.bias_w = nn.Conv1d(channels, channels, 1)
@@ -46,13 +46,15 @@ class LNO1D(nn.Module):
                  n_layers: int = 2) -> None:
         super().__init__()
         self.layers = nn.ModuleList(
-            [LNOBlock1D(channels, n_modes) for _ in range(n_layers)],
+            map(lambda _: LNOBlock1D(channels, n_modes), range(n_layers)),
         )
         self.act = nn.GELU()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        for layer in self.layers:
-            x = self.act(layer(x))
+        layer_idx = 0
+        while layer_idx < len(self.layers):
+            x = self.act(self.layers[layer_idx](x))
+            layer_idx += 1
         return x
 
 
