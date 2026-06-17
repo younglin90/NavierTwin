@@ -49,24 +49,30 @@ class RealNVPLite(nn.Module):
     def __init__(self, dim: int = 4, hidden: int = 32, n_layers: int = 4) -> None:
         super().__init__()
         masks = []
-        for i in range(n_layers):
+        i = 0
+        while i < n_layers:
             m = torch.zeros(dim)
             m[i % 2::2] = 1.0
             masks.append(m)
+            i += 1
         self.layers = nn.ModuleList(
-            [AffineCoupling(dim, hidden, m) for m in masks],
+            map(lambda m: AffineCoupling(dim, hidden, m), masks),
         )
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         logdet = torch.zeros(x.shape[0], device=x.device)
-        for layer in self.layers:
-            x, ld = layer(x)
+        layer_idx = 0
+        while layer_idx < len(self.layers):
+            x, ld = self.layers[layer_idx](x)
             logdet = logdet + ld
+            layer_idx += 1
         return x, logdet
 
     def inverse(self, z: torch.Tensor) -> torch.Tensor:
-        for layer in reversed(self.layers):
-            z = layer.inverse(z)
+        layer_idx = len(self.layers) - 1
+        while layer_idx >= 0:
+            z = self.layers[layer_idx].inverse(z)
+            layer_idx -= 1
         return z
 
 
