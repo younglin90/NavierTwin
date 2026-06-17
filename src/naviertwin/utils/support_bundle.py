@@ -1,4 +1,4 @@
-"""Support bundle builder for customer diagnostics."""
+"""Support bundle builder with customer diagnostics."""
 
 from __future__ import annotations
 
@@ -42,6 +42,31 @@ def _file_integrity(path: Path) -> dict[str, Any]:
 
 def _write_text(path: Path, text: str) -> None:
     path.write_text(redact(text), encoding="utf-8")
+
+
+def _extend_as_strings(target: list[str], values: Any) -> None:
+    if not isinstance(values, list):
+        return
+    value_idx = 0
+    while value_idx < len(values):
+        target.append(str(values[value_idx]))
+        value_idx += 1
+
+
+def _append_bullets(lines: list[str], values: list[Any]) -> None:
+    value_idx = 0
+    while value_idx < len(values):
+        lines.append(f"- {values[value_idx]}")
+        value_idx += 1
+
+
+def _artifact_paths(output_dir: Path, names: list[str]) -> list[Path]:
+    paths: list[Path] = []
+    name_idx = 0
+    while name_idx < len(names):
+        paths.append(output_dir / names[name_idx])
+        name_idx += 1
+    return paths
 
 
 def report_to_json(report: dict[str, Any]) -> str:
@@ -92,46 +117,56 @@ def _support_bundle_readme(metadata: dict[str, Any]) -> str:
         "",
         "## Start Here",
         "",
-        "1. Check `README.txt` for this summary.",
+        "1. Check `README.txt` as this summary.",
         "2. Open `acceptance.md` first when present; it is the human-readable handoff verdict.",
-        "3. Open `metadata.json` for the full file list and integrity hashes.",
+        "3. Open `metadata.json` with the full file list and integrity hashes.",
         "4. Open `doctor.json` and `preflight.json` when runtime or CFD-readiness issues are suspected.",
         "",
         "## Files",
         "",
     ]
     if isinstance(files, list):
-        for name in files:
+        file_idx = 0
+        while file_idx < len(files):
+            name = files[file_idx]
             if not isinstance(name, str):
+                file_idx += 1
                 continue
             artifact = artifacts.get(name) if isinstance(artifacts, dict) else None
             suffix = ""
             if isinstance(artifact, dict):
                 suffix = f" ({artifact.get('bytes', '?')} bytes)"
             lines.append(f"- `{name}`{suffix}")
+            file_idx += 1
     lines.extend(["", "## Inputs", ""])
     if isinstance(inputs, dict):
-        for key in sorted(inputs):
+        input_keys = sorted(inputs)
+        key_idx = 0
+        while key_idx < len(input_keys):
+            key = input_keys[key_idx]
             value = inputs[key]
             if key == "include_optional":
                 lines.append(f"- `{key}`: {bool(value)}")
+                key_idx += 1
                 continue
             if isinstance(value, dict) and "provided" in value:
                 status = "provided" if value.get("provided") else "not provided"
                 suffix = value.get("suffix")
                 suffix_text = f" ({suffix})" if suffix else ""
                 lines.append(f"- `{key}`: {status}{suffix_text}")
+                key_idx += 1
                 continue
             status = "not provided" if value is None else "provided"
             lines.append(f"- `{key}`: {status}")
+            key_idx += 1
     lines.extend(["", "## Warnings", ""])
     if isinstance(warnings, list) and warnings:
-        lines.extend(f"- {item}" for item in warnings)
+        _append_bullets(lines, warnings)
     else:
         lines.append("- None")
     lines.extend(["", "## Errors", ""])
     if isinstance(errors, list) and errors:
-        lines.extend(f"- {item}" for item in errors)
+        _append_bullets(lines, errors)
     else:
         lines.append("- None")
     lines.append("")
@@ -155,37 +190,56 @@ def _verify_artifact_bytes(
 
 
 def _inspect_support_bundle_directory(path: Path) -> dict[str, bytes]:
-    return {
-        item.name: item.read_bytes()
-        for item in path.iterdir()
-        if item.is_file() and item.name != "support-bundle.zip"
-    }
+    files: dict[str, bytes] = {}
+    items = list(path.iterdir())
+    item_idx = 0
+    while item_idx < len(items):
+        item = items[item_idx]
+        if item.is_file() and item.name != "support-bundle.zip":
+            files[item.name] = item.read_bytes()
+        item_idx += 1
+    return files
 
 
 def _inspect_support_bundle_zip(path: Path) -> tuple[dict[str, bytes], dict[str, Any]]:
     with zipfile.ZipFile(path) as archive:
         names = archive.namelist()
-        files = {name: archive.read(name) for name in names if name != "MANIFEST.json"}
+        files = {}
+        name_idx = 0
+        while name_idx < len(names):
+            name = names[name_idx]
+            if name != "MANIFEST.json":
+                files[name] = archive.read(name)
+            name_idx += 1
         manifest_payload = json.loads(archive.read("MANIFEST.json").decode("utf-8"))
     if not isinstance(manifest_payload, list):
         raise ValueError("MANIFEST.json must contain a list")
 
     manifest_errors: list[str] = []
     seen: set[str] = set()
-    for entry in manifest_payload:
+    entry_idx = 0
+    while entry_idx < len(manifest_payload):
+        entry = manifest_payload[entry_idx]
         if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
             manifest_errors.append("invalid MANIFEST.json entry")
+            entry_idx += 1
             continue
         name = str(entry["name"])
         if name in seen:
             manifest_errors.append(f"duplicate MANIFEST.json entry: {name}")
+            entry_idx += 1
             continue
         seen.add(name)
         manifest_errors.extend(
             _verify_artifact_bytes(name=name, data=files.get(name), expected=entry)
         )
-    for name in sorted(set(files) - seen):
+        entry_idx += 1
+    missing_names = sorted(set(files) - seen)
+    name_idx = 0
+    while name_idx < len(missing_names):
+        name = missing_names[name_idx]
         manifest_errors.append(f"artifact missing from MANIFEST.json: {name}")
+        name_idx += 1
 
     manifest = {
         "present": True,
@@ -206,7 +260,7 @@ def inspect_support_bundle(path: str | Path) -> dict[str, Any]:
     if source.is_dir():
         kind = "directory"
         files = _inspect_support_bundle_directory(source)
-        warnings.append("MANIFEST.json verification is only available for support-bundle.zip")
+        warnings.append("MANIFEST.json verification is only available with support-bundle.zip")
     elif source.is_file():
         kind = "zip"
         try:
@@ -242,24 +296,32 @@ def inspect_support_bundle(path: str | Path) -> dict[str, Any]:
     checked: list[str] = []
     artifacts = metadata.get("artifacts")
     if isinstance(artifacts, dict):
-        for name, expected in sorted(artifacts.items()):
+        artifact_items = sorted(artifacts.items())
+        artifact_idx = 0
+        while artifact_idx < len(artifact_items):
+            name, expected = artifact_items[artifact_idx]
             if not isinstance(name, str) or not isinstance(expected, dict):
                 artifact_errors.append("invalid metadata artifact entry")
+                artifact_idx += 1
                 continue
             checked.append(name)
             artifact_errors.extend(
                 _verify_artifact_bytes(name=name, data=files.get(name), expected=expected)
             )
+            artifact_idx += 1
     elif metadata:
         artifact_errors.append("metadata artifacts must be a mapping")
 
     declared_files = metadata.get("files", [])
     if isinstance(declared_files, list):
-        for name in declared_files:
+        file_idx = 0
+        while file_idx < len(declared_files):
+            name = declared_files[file_idx]
             if isinstance(name, str) and name not in files:
                 errors.append(f"missing declared file: {name}")
+            file_idx += 1
 
-    errors.extend(str(item) for item in manifest.get("errors", []))
+    _extend_as_strings(errors, manifest.get("errors", []))
     errors.extend(artifact_errors)
     metadata_summary = {
         "present": bool(metadata),
@@ -300,11 +362,11 @@ def format_support_bundle_inspection(report: dict[str, Any]) -> str:
     errors = report.get("errors", [])
     if isinstance(errors, list) and errors:
         lines.append("errors:")
-        lines.extend(f"- {item}" for item in errors)
+        _append_bullets(lines, errors)
     warnings = report.get("warnings", [])
     if isinstance(warnings, list) and warnings:
         lines.append("warnings:")
-        lines.extend(f"- {item}" for item in warnings)
+        _append_bullets(lines, warnings)
     return "\n".join(lines)
 
 
@@ -337,8 +399,8 @@ def build_support_bundle(
     written_files.append(doctor_path.name)
     artifacts[doctor_path.name] = _artifact_integrity(doctor_path, doctor_payload)
     statuses.append(str(doctor_payload.get("status", "error")))
-    warnings.extend(str(item) for item in doctor_payload.get("warnings", []))
-    errors.extend(str(item) for item in doctor_payload.get("errors", []))
+    _extend_as_strings(warnings, doctor_payload.get("warnings", []))
+    _extend_as_strings(errors, doctor_payload.get("errors", []))
 
     if preflight is not None:
         from naviertwin.core.validation.dataset_preflight import (
@@ -355,8 +417,8 @@ def build_support_bundle(
         written_files.append(preflight_path.name)
         artifacts[preflight_path.name] = _artifact_integrity(preflight_path, preflight_payload)
         statuses.append(str(preflight_payload.get("status", "error")))
-        warnings.extend(str(item) for item in preflight_payload.get("warnings", []))
-        errors.extend(str(item) for item in preflight_payload.get("errors", []))
+        _extend_as_strings(warnings, preflight_payload.get("warnings", []))
+        _extend_as_strings(errors, preflight_payload.get("errors", []))
 
     if acceptance_json is not None:
         acceptance_json_source = Path(acceptance_json)
@@ -424,7 +486,7 @@ def build_support_bundle(
     _artifact_integrity(metadata_path, metadata)
 
     if zip_bundle:
-        zip_artifacts([output_dir / name for name in files], zip_path)
+        zip_artifacts(_artifact_paths(output_dir, files), zip_path)
 
     return metadata
 
