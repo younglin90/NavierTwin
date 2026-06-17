@@ -30,9 +30,13 @@ class RBAC:
         self.users.get(user, set()).discard(role)
 
     def can(self, user: str, perm: str) -> bool:
-        for role in self.users.get(user, set()):
+        roles = list(self.users.get(user, set()))
+        idx = 0
+        while idx < len(roles):
+            role = roles[idx]
             if perm in self.roles.get(role, set()):
                 return True
+            idx += 1
         return False
 
 
