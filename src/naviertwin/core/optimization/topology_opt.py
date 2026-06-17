@@ -18,6 +18,7 @@ Examples:
 from __future__ import annotations
 
 import numpy as np
+from numpy.linalg import solve as _solve
 from numpy.typing import NDArray
 
 from naviertwin.utils.logger import get_logger
@@ -84,28 +85,26 @@ def simp_2d(
         return j * (nx + 1) + i
 
     # 글로벌 요소별 dof 인덱스
-    edof = np.zeros((n_el, 8), dtype=int)
-    for j in range(ny):
-        for i in range(nx):
-            e = j * nx + i
-            n1 = _node(i, j)
-            n2 = _node(i + 1, j)
-            n3 = _node(i + 1, j + 1)
-            n4 = _node(i, j + 1)
-            edof[e] = [
-                2 * n1, 2 * n1 + 1, 2 * n2, 2 * n2 + 1,
-                2 * n3, 2 * n3 + 1, 2 * n4, 2 * n4 + 1,
-            ]
+    nodes = np.arange(n_node, dtype=int).reshape(ny + 1, nx + 1)
+    n1 = nodes[:-1, :-1].ravel()
+    n2 = nodes[:-1, 1:].ravel()
+    n3 = nodes[1:, 1:].ravel()
+    n4 = nodes[1:, :-1].ravel()
+    edof = np.column_stack(
+        [
+            2 * n1, 2 * n1 + 1, 2 * n2, 2 * n2 + 1,
+            2 * n3, 2 * n3 + 1, 2 * n4, 2 * n4 + 1,
+        ]
+    )
 
     KE = _element_stiffness()
 
     # 고정 DOF
-    fixed: list[int] = []
     if fixed_left_edge:
-        for j in range(ny + 1):
-            n = _node(0, j)
-            fixed.extend([2 * n, 2 * n + 1])
-    fixed_arr = np.array(sorted(set(fixed)), dtype=int)
+        left_nodes = nodes[:, 0]
+        fixed_arr = np.ravel(np.column_stack([2 * left_nodes, 2 * left_nodes + 1]))
+    else:
+        fixed_arr = np.array([], dtype=int)
     free_arr = np.setdiff1d(np.arange(n_dof), fixed_arr)
 
     # 하중 벡터
@@ -115,19 +114,21 @@ def simp_2d(
     F[load_node] = -1.0
 
     rho = np.full((ny, nx), vol_frac)
-    for it in range(n_iter):
+    it = 0
+    while it < n_iter:
         # 글로벌 K 조립
         K = np.zeros((n_dof, n_dof))
-        for j in range(ny):
-            for i in range(nx):
-                e = j * nx + i
-                E_e = rho_min + (1 - rho_min) * rho[j, i] ** penal
-                dofs = edof[e]
-                K[np.ix_(dofs, dofs)] += E_e * KE
+        rho_flat = rho.ravel()
+        elem_modulus = rho_min + (1 - rho_min) * rho_flat ** penal
+        np.add.at(
+            K,
+            (edof[:, :, None], edof[:, None, :]),
+            elem_modulus[:, None, None] * KE[None, :, :],
+        )
 
         # 선형 시스템 K u = F (free DOFs 만)
         try:
-            u_free = np.linalg.solve(K[np.ix_(free_arr, free_arr)], F[free_arr])
+            u_free = _solve(K[np.ix_(free_arr, free_arr)], F[free_arr])
         except np.linalg.LinAlgError:
             logger.warning("SIMP: 특이 행렬 — 반복 중단")
             break
@@ -135,15 +136,12 @@ def simp_2d(
         U[free_arr] = u_free
 
         # 요소별 컴플라이언스 dc/drho
-        dc = np.zeros((ny, nx))
-        c = 0.0
-        for j in range(ny):
-            for i in range(nx):
-                e = j * nx + i
-                ue = U[edof[e]]
-                ke_val = ue @ KE @ ue
-                c += (rho_min + (1 - rho_min) * rho[j, i] ** penal) * ke_val
-                dc[j, i] = -penal * (1 - rho_min) * rho[j, i] ** (penal - 1) * ke_val
+        Ue = U[edof]
+        ke_vals = np.einsum("ei,ij,ej->e", Ue, KE, Ue)
+        c = float(np.sum(elem_modulus * ke_vals))
+        dc = (
+            -penal * (1 - rho_min) * rho_flat ** (penal - 1) * ke_vals
+        ).reshape(ny, nx)
 
         # OC 업데이트 (bisection on Lagrange multiplier)
         l1, l2 = 1e-9, 1e9
@@ -171,6 +169,7 @@ def simp_2d(
 
         if it % max(1, n_iter // 5) == 0:
             logger.debug("SIMP iter %d: c=%.4g", it, c)
+        it += 1
 
     return rho
 
