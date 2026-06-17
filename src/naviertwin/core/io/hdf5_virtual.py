@@ -33,9 +33,12 @@ def create_virtual(
         raise ImportError("h5py not installed; pip install h5py")
     import h5py
     layout = h5py.VirtualLayout(shape=shape, dtype=dtype)
-    for k, (fp, dn) in enumerate(sources):
+    k = 0
+    while k < len(sources):
+        fp, dn = sources[k]
         vsource = h5py.VirtualSource(str(fp), dn, shape=shape[1:])
         layout[k] = vsource
+        k += 1
     with h5py.File(str(out_path), "w") as f:
         f.create_virtual_dataset(name, layout)
 
