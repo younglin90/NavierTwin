@@ -70,22 +70,28 @@ def granger_causality(
 
     N = x.size
     p_values = np.zeros(max_lag)
+    from numpy.lib.stride_tricks import sliding_window_view
 
-    for L in range(1, max_lag + 1):
+    def _lagged(values: NDArray[np.float64], lag: int) -> NDArray[np.float64]:
+        return sliding_window_view(values[:-1], lag)[:, ::-1]
+
+    L = 1
+    while L <= max_lag:
         if N - L < L + 2:
             p_values[L - 1] = 1.0
+            L += 1
             continue
 
         # Restricted model: y_t ~ y_{t-1..t-L}
         Y = y[L:]
-        X_r = np.column_stack([y[L - i - 1 : N - i - 1] for i in range(L)])
+        X_r = _lagged(y, L)
         X_r = np.column_stack([np.ones(N - L), X_r])
         beta_r, *_ = np.linalg.lstsq(X_r, Y, rcond=None)
         res_r = Y - X_r @ beta_r
         rss_r = float(np.sum(res_r ** 2))
 
         # Unrestricted: y_t ~ y_{t-1..t-L} + x_{t-1..t-L}
-        X_x = np.column_stack([x[L - i - 1 : N - i - 1] for i in range(L)])
+        X_x = _lagged(x, L)
         X_u = np.column_stack([X_r, X_x])
         beta_u, *_ = np.linalg.lstsq(X_u, Y, rcond=None)
         res_u = Y - X_u @ beta_u
@@ -95,10 +101,12 @@ def granger_causality(
         df_den = (N - L) - (2 * L + 1)
         if df_den <= 0 or rss_u <= 0:
             p_values[L - 1] = 1.0
+            L += 1
             continue
 
         f_stat = ((rss_r - rss_u) / df_num) / (rss_u / df_den)
         p_values[L - 1] = 1.0 - float(f_dist.cdf(f_stat, df_num, df_den))
+        L += 1
 
     logger.info(
         "granger_causality: p_values(lag 1..%d) = %s",
