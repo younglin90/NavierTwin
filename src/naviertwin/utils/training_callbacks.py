@@ -5,9 +5,8 @@ PyTorch 학습 루프에 바로 끼워 쓸 수 있는 경량 헬퍼.
 Examples:
     >>> from naviertwin.utils.training_callbacks import EarlyStopping
     >>> es = EarlyStopping(patience=3, min_delta=1e-4)
-    >>> for loss in [1.0, 0.9, 0.85, 0.849, 0.8489, 0.8489]:
-    ...     if es.step(loss):
-    ...         break
+    >>> es.step(1.0)
+    False
 """
 
 from __future__ import annotations
