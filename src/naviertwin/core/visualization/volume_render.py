@@ -15,6 +15,8 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from naviertwin._native import _kernels
+
 
 def ray_march(
     volume: NDArray[np.float64],
@@ -23,17 +25,9 @@ def ray_march(
     alpha: float = 0.1,
 ) -> NDArray[np.float64]:
     """Front-to-back along `axis`. Returns 2D projection."""
-    V = np.moveaxis(np.asarray(volume), axis, -1)  # (H, W, D)
-    H, W, D = V.shape
-    img = np.zeros((H, W))
-    trans = np.ones((H, W))
-    step = max(D // n_steps, 1)
-    for k in range(0, D, step):
-        sample = V[:, :, k]
-        a = alpha * sample
-        img += trans * a * sample
-        trans *= (1 - a)
-    return img
+    if _kernels is None:
+        raise ImportError("NavierTwin native kernels are required by ray_march")
+    return _kernels.ray_march(np.asarray(volume, dtype=np.float64), n_steps, axis, alpha)
 
 
 __all__ = ["ray_march"]

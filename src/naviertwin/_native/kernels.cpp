@@ -3527,6 +3527,54 @@ static py::array_t<double> arrow_segments_native(ArrayD points, ArrayD vectors, 
     return out;
 }
 
+static py::array_t<double> ray_march_native(ArrayD volume, int n_steps, int axis, double alpha) {
+    if (volume.ndim() != 3) {
+        throw std::invalid_argument("volume must be a 3D array");
+    }
+    int ax = axis;
+    if (ax < 0) {
+        ax += 3;
+    }
+    if (ax < 0 || ax > 2) {
+        throw std::invalid_argument("axis must be 0, 1, or 2");
+    }
+    if (n_steps == 0) {
+        throw std::invalid_argument("n_steps must be non-zero");
+    }
+    const py::ssize_t s0 = volume.shape(0);
+    const py::ssize_t s1 = volume.shape(1);
+    const py::ssize_t s2 = volume.shape(2);
+    const py::ssize_t H = (ax == 0) ? s1 : s0;
+    const py::ssize_t W = (ax == 2) ? s1 : s2;
+    const py::ssize_t D = (ax == 0) ? s0 : ((ax == 1) ? s1 : s2);
+    const py::ssize_t step = std::max<py::ssize_t>(D / static_cast<py::ssize_t>(n_steps), 1);
+    const double* vp = volume.data();
+    auto out = py::array_t<double>({H, W});
+    double* op = out.mutable_data();
+    std::vector<double> trans(static_cast<std::size_t>(H * W), 1.0);
+    std::fill(op, op + H * W, 0.0);
+    for (py::ssize_t k = 0; k < D; k += step) {
+        for (py::ssize_t i = 0; i < H; ++i) {
+            for (py::ssize_t j = 0; j < W; ++j) {
+                py::ssize_t idx = 0;
+                if (ax == 0) {
+                    idx = (k * s1 + i) * s2 + j;
+                } else if (ax == 1) {
+                    idx = (i * s1 + k) * s2 + j;
+                } else {
+                    idx = (i * s1 + j) * s2 + k;
+                }
+                const py::ssize_t out_idx = i * W + j;
+                const double sample = vp[idx];
+                const double a = alpha * sample;
+                op[out_idx] += trans[static_cast<std::size_t>(out_idx)] * a * sample;
+                trans[static_cast<std::size_t>(out_idx)] *= (1.0 - a);
+            }
+        }
+    }
+    return out;
+}
+
 static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
     check_square_matrix(a);
     const py::ssize_t n = a.shape(0);
@@ -3679,5 +3727,6 @@ PYBIND11_MODULE(_kernels, m) {
     m.def("ewma_alarms", &ewma_alarms_native, py::arg("residuals"), py::arg("lam") = 0.2, py::arg("k") = 3.0);
     m.def("pareto_front", &pareto_front_native, py::arg("objectives"));
     m.def("arrow_segments", &arrow_segments_native, py::arg("points"), py::arg("vectors"), py::arg("scale") = 1.0);
+    m.def("ray_march", &ray_march_native, py::arg("volume"), py::arg("n_steps") = 32, py::arg("axis") = 2, py::arg("alpha") = 0.1);
     m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
 }
