@@ -47,10 +47,12 @@ def _mlp(sizes: list[int], activation: str = "gelu") -> Any:
     acts = {"relu": nn.ReLU, "gelu": nn.GELU, "tanh": nn.Tanh}
     act_cls = acts.get(activation.lower(), nn.GELU)
     layers: list[Any] = []
-    for i in range(len(sizes) - 1):
+    i = 0
+    while i < len(sizes) - 1:
         layers.append(nn.Linear(sizes[i], sizes[i + 1]))
         if i < len(sizes) - 2:
             layers.append(act_cls())
+        i += 1
     return nn.Sequential(*layers)
 
 
@@ -158,10 +160,16 @@ class DeepONet(BaseOperator):
         )
         trunk_feat = None  # cache
         self.train_losses_ = []
-        for _ in range(self.max_epochs):
+        epoch_idx = 0
+        while epoch_idx < self.max_epochs:
             epoch_loss = 0.0
             trunk_feat = self._trunk(trunk_t)  # (q, p)
-            for bb, yb in loader:
+            batches = iter(loader)
+            while True:
+                try:
+                    bb, yb = next(batches)
+                except StopIteration:
+                    break
                 bb = bb.to(self._device)
                 yb = yb.to(self._device)
                 optim.zero_grad()
@@ -174,6 +182,7 @@ class DeepONet(BaseOperator):
                 epoch_loss += float(loss.item()) * bb.shape[0]
             epoch_loss /= max(len(B), 1)
             self.train_losses_.append(epoch_loss)
+            epoch_idx += 1
 
         self._trunk_cache = T
         self.n_epochs = self.max_epochs
