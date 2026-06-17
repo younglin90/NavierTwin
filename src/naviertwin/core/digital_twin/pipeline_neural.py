@@ -162,7 +162,10 @@ class NeuralOperatorPipeline:
             "project": project,
             "summary": f"{self.kind.upper()} 기반 신경 연산자 파이프라인",
             "metrics": self.state.metrics,
-            "model_info": {"kind": self.kind, **{k: str(v) for k, v in self.kwargs.items()}},
+            "model_info": {
+                "kind": self.kind,
+                **dict(map(lambda item: (item[0], str(item[1])), self.kwargs.items())),
+            },
             "notes": (
                 f"최종 훈련 loss={self.state.train_losses[-1]:.6g}"
                 if self.state.train_losses else ""
