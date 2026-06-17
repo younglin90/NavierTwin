@@ -31,7 +31,8 @@ def metropolis_hastings(
     out = np.zeros((n, d))
     lp = log_prob(x)
     accepts = 0
-    for i in range(n + burn):
+    i = 0
+    while i < n + burn:
         prop = x + rng.normal(0, step, size=d)
         lp_new = log_prob(prop)
         if np.log(rng.random()) < lp_new - lp:
@@ -40,6 +41,7 @@ def metropolis_hastings(
             accepts += 1
         if i >= burn:
             out[i - burn] = x
+        i += 1
     # 사용자 접근을 위해 acceptance rate 을 attribute 가 아닌 return 으로 숨겨 둠 (단순화)
     return out
 
@@ -54,13 +56,15 @@ def acceptance_rate(
     d = x.size
     lp = log_prob(x)
     acc = 0
-    for _ in range(n):
+    i = 0
+    while i < n:
         prop = x + rng.normal(0, step, size=d)
         lp_new = log_prob(prop)
         if np.log(rng.random()) < lp_new - lp:
             x = prop
             lp = lp_new
             acc += 1
+        i += 1
     return acc / n
 
 
