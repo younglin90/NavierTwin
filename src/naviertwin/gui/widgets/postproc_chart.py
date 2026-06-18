@@ -19,6 +19,42 @@ from matplotlib.figure import Figure
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 
+def _is_line_array(value: Any) -> bool:
+    return isinstance(value, np.ndarray) and value.size > 1 and value.ndim == 1
+
+
+def _count_line_arrays(values: tuple[Any, ...]) -> int:
+    count = 0
+    index = 0
+    while index < len(values):
+        if _is_line_array(values[index]):
+            count += 1
+        index += 1
+    return count
+
+
+def _collect_critical_types(points: list[dict[str, Any]]) -> set[str]:
+    types: set[str] = set()
+    index = 0
+    while index < len(points):
+        types.add(str(points[index].get("type", "?")))
+        index += 1
+    return types
+
+
+def _critical_coords(
+    points: list[dict[str, Any]], point_type: str, coord_key: str
+) -> list[Any]:
+    coords: list[Any] = []
+    index = 0
+    while index < len(points):
+        point = points[index]
+        if point.get("type") == point_type:
+            coords.append(point[coord_key])
+        index += 1
+    return coords
+
+
 class PostProcessChart(QWidget):
     """Op별 결과를 자동 차트로 시각화."""
 
@@ -77,14 +113,19 @@ class PostProcessChart(QWidget):
         ax = self._figure.add_subplot(111)
         ax.set_title(f"{op_name} (fallback)")
         plotted = False
-        for k, v in result.items():
+        items = tuple(result.items())
+        line_count = _count_line_arrays(tuple(result.values()))
+        item_index = 0
+        while item_index < len(items):
+            k, v = items[item_index]
             if isinstance(v, np.ndarray) and v.size > 1 and v.ndim == 1:
                 ax.plot(v, label=k)
                 plotted = True
-                if len([x for x in result.values()
-                         if isinstance(x, np.ndarray) and x.ndim == 1]) <= 4:
+                if line_count <= 4:
+                    item_index += 1
                     continue
                 break
+            item_index += 1
         if plotted:
             ax.legend()
             ax.grid(True, alpha=0.3)
@@ -132,11 +173,13 @@ def _chart_eof(fig: Figure, result: dict[str, Any]) -> None:
     var = np.asarray(result["var_explained"])
     n_modes = eofs.shape[1]
     n_show = min(4, n_modes)
-    for i in range(n_show):
+    i = 0
+    while i < n_show:
         ax = fig.add_subplot(2, 2, i + 1)
         ax.plot(eofs[:, i])
         ax.set_title(f"EOF{i + 1} ({var[i] * 100:.1f}%)")
         ax.grid(True, alpha=0.3)
+        i += 1
 
 
 def _chart_two_point_acf(fig: Figure, result: dict[str, Any]) -> None:
@@ -196,13 +239,23 @@ def _chart_phase_average(fig: Figure, result: dict[str, Any]) -> None:
 
 def _chart_quadrant(fig: Figure, result: dict[str, Any]) -> None:
     q = result.get("quadrants", result)
-    fractions = [q.get(f"Q{i + 1}", {}).get("fraction", 0.0) for i in range(4)]
+    fractions = []
+    fraction_index = 0
+    while fraction_index < 4:
+        fractions.append(
+            q.get(f"Q{fraction_index + 1}", {}).get("fraction", 0.0)
+        )
+        fraction_index += 1
     ax = fig.add_subplot(111)
     bars = ax.bar(["Q1", "Q2", "Q3", "Q4"], fractions,
                    color=["tab:blue", "tab:red", "tab:blue", "tab:red"])
-    for bar, f in zip(bars, fractions):
+    bar_index = 0
+    while bar_index < len(fractions):
+        bar = bars[bar_index]
+        f = fractions[bar_index]
         ax.text(bar.get_x() + bar.get_width() / 2, f, f"{f:.2f}",
                 ha="center", va="bottom")
+        bar_index += 1
     ax.set_ylabel("fraction")
     ax.set_title("Quadrant Analysis (Q2=ejection, Q4=sweep)")
     ax.grid(True, axis="y", alpha=0.3)
@@ -250,11 +303,14 @@ def _chart_critical_points(fig: Figure, result: dict[str, Any]) -> None:
     cps = result.get("critical_points", [])
     ax = fig.add_subplot(111)
     if cps:
-        types = {c.get("type", "?") for c in cps}
-        for t in types:
-            xs = [c["x"] for c in cps if c.get("type") == t]
-            ys = [c["y"] for c in cps if c.get("type") == t]
+        types = tuple(_collect_critical_types(cps))
+        type_index = 0
+        while type_index < len(types):
+            t = types[type_index]
+            xs = _critical_coords(cps, t, "x")
+            ys = _critical_coords(cps, t, "y")
             ax.scatter(xs, ys, label=t, s=50)
+            type_index += 1
         ax.legend()
     ax.set_title(f"Vector Field Critical Points (n={len(cps)})")
     ax.set_xlabel("x")
@@ -278,9 +334,11 @@ def _chart_morris_sensitivity(fig: Figure, result: dict[str, Any]) -> None:
     sig = np.asarray(result["sigma"])
     ax = fig.add_subplot(111)
     ax.scatter(mu, sig, s=80)
-    for i in range(len(mu)):
+    i = 0
+    while i < len(mu):
         ax.annotate(f"x{i}", (mu[i], sig[i]),
                      textcoords="offset points", xytext=(5, 5))
+        i += 1
     ax.set_xlabel("μ* (mean |EE|)")
     ax.set_ylabel("σ (std EE)")
     ax.set_title("Morris Elementary Effects")
@@ -290,12 +348,16 @@ def _chart_morris_sensitivity(fig: Figure, result: dict[str, Any]) -> None:
 def _chart_helmholtz(fig: Figure, result: dict[str, Any]) -> None:
     titles = ["Solenoidal U", "Solenoidal V", "Irrotational U", "Irrotational V"]
     keys = ["solenoidal_u", "solenoidal_v", "irrotational_u", "irrotational_v"]
-    for i, (k, t) in enumerate(zip(keys, titles)):
+    i = 0
+    while i < len(keys):
+        k = keys[i]
+        t = titles[i]
         ax = fig.add_subplot(2, 2, i + 1)
         arr = np.asarray(result[k])
         im = ax.imshow(arr, cmap="RdBu_r", origin="lower", aspect="auto")
         ax.set_title(t)
         fig.colorbar(im, ax=ax, fraction=0.046)
+        i += 1
 
 
 def _chart_mass_search(fig: Figure, result: dict[str, Any]) -> None:
