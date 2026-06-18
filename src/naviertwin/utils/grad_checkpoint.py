@@ -25,8 +25,11 @@ def checkpoint_seq(modules: list[Callable], x: Any) -> Any:
     if not has_torch():
         raise ImportError("torch not installed")
     import torch.utils.checkpoint as ckpt
-    for m in modules:
+    idx = 0
+    while idx < len(modules):
+        m = modules[idx]
         x = ckpt.checkpoint(m, x, use_reentrant=False)
+        idx += 1
     return x
 
 
