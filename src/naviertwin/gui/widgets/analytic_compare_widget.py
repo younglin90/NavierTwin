@@ -5,6 +5,8 @@ Matplotlib 선 그래프 + 메트릭 테이블을 QWidget 에 임베드한다.
 
 from __future__ import annotations
 
+from collections import deque
+from functools import partial
 from typing import Any
 
 from PySide6.QtWidgets import (
@@ -14,6 +16,23 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+_METRIC_KEYS = ("rmse", "r2", "relative_l2", "max_error")
+
+
+def _init_metric_row(table: QTableWidget, entry: tuple[int, str]) -> None:
+    row, key = entry
+    table.setItem(row, 0, QTableWidgetItem(key))
+    table.setItem(row, 1, QTableWidgetItem("—"))
+
+
+def _update_metric_row(
+    table: QTableWidget, metrics: dict[str, Any], entry: tuple[int, str]
+) -> None:
+    row, key = entry
+    val = metrics.get(key)
+    text = f"{val:.6g}" if isinstance(val, (int, float)) else "—"
+    table.setItem(row, 1, QTableWidgetItem(text))
 
 
 class AnalyticCompareWidget(QWidget):
@@ -59,9 +78,7 @@ class AnalyticCompareWidget(QWidget):
             QHeaderView.ResizeMode.Stretch
         )
         self._table.setMaximumHeight(150)
-        for i, key in enumerate(["rmse", "r2", "relative_l2", "max_error"]):
-            self._table.setItem(i, 0, QTableWidgetItem(key))
-            self._table.setItem(i, 1, QTableWidgetItem("—"))
+        deque(map(partial(_init_metric_row, self._table), enumerate(_METRIC_KEYS)), maxlen=0)
         layout.addWidget(self._table, stretch=1)
 
     def update_result(self, result: dict[str, Any]) -> None:
@@ -75,10 +92,8 @@ class AnalyticCompareWidget(QWidget):
                 - "coords": ndarray
         """
         metrics = result.get("metrics", {})
-        for i, key in enumerate(["rmse", "r2", "relative_l2", "max_error"]):
-            val = metrics.get(key)
-            text = f"{val:.6g}" if isinstance(val, (int, float)) else "—"
-            self._table.setItem(i, 1, QTableWidgetItem(text))
+        update_row = partial(_update_metric_row, self._table, metrics)
+        deque(map(update_row, enumerate(_METRIC_KEYS)), maxlen=0)
 
         if not self._mpl_available or self._figure is None:
             return
