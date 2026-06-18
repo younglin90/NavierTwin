@@ -245,11 +245,13 @@ class SimulationPanel(QWidget):
         truth = rng.standard_normal(d)
         twin.initialize(truth + rng.standard_normal((N, d)))
         errs = []
-        for _ in range(n_steps):
+        step = 0
+        while step < n_steps:
             twin.step()
             y = truth + 0.05 * rng.standard_normal(d)
             twin.assimilate(y)
             errs.append(float(np.linalg.norm(twin.estimate() - truth)))
+            step += 1
         return {
             "estimate": twin.estimate(),
             "uncertainty": twin.uncertainty(),
@@ -270,11 +272,13 @@ class SimulationPanel(QWidget):
         episodes = self._rl_episodes.value()
         pol = GaussianPolicy(state_dim=sd, action_dim=ad, hidden=16, seed=0)
         losses = []
-        for _ in range(episodes):
+        episode = 0
+        while episode < episodes:
             s = rng.standard_normal((20, sd)).astype(np.float32)
             a, _ = pol.sample(s)
             r = -np.abs(a).ravel()  # 작은 액션 선호
             losses.append(reinforce_update(pol, s, a, None, r, lr=1e-2))
+            episode += 1
         return {
             "losses": losses,
             "summary": f"episodes={episodes}, 최종 loss={losses[-1]:.4g}",
