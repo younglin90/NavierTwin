@@ -33,6 +33,27 @@ from PySide6.QtWidgets import (
 )
 
 
+def _spin_values(spins: list[QDoubleSpinBox]) -> list[float]:
+    values: list[float] = []
+    index = 0
+    while index < len(spins):
+        values.append(float(spins[index].value()))
+        index += 1
+    return values
+
+
+def _param_spin_array(spins: list[QDoubleSpinBox]) -> np.ndarray:
+    return np.array([_spin_values(spins)], dtype=float)
+
+
+def _set_spin_values(spins: list[QDoubleSpinBox], values: np.ndarray) -> None:
+    index = 0
+    limit = min(len(spins), len(values))
+    while index < limit:
+        spins[index].setValue(float(values[index]))
+        index += 1
+
+
 class TwinPanel(QWidget):
     """디지털 트윈 탭 패널.
 
@@ -328,7 +349,8 @@ class TwinPanel(QWidget):
         self._param_spins.clear()
 
         self._n_params = n
-        for i in range(n):
+        i = 0
+        while i < n:
             spin = QDoubleSpinBox()
             spin.setRange(-1e6, 1e6)
             spin.setValue(0.5)
@@ -337,6 +359,7 @@ class TwinPanel(QWidget):
             label = self._param_names[i] if i < len(self._param_names) else f"param_{i}"
             self._param_layout.addRow(f"{label}:", spin)
             self._param_spins.append(spin)
+            i += 1
 
     # ──────────────────────────────────────────────────────────────────
     # 공개 API
@@ -369,13 +392,17 @@ class TwinPanel(QWidget):
     def _sync_parameter_names(self, engine: object) -> None:
         """Use model metadata to label Twin input controls."""
         names: list[str] = []
-        for source in (engine, getattr(engine, "surrogate", None)):
+        sources = (engine, getattr(engine, "surrogate", None))
+        source_index = 0
+        while source_index < len(sources):
+            source = sources[source_index]
             meta = getattr(source, "training_metadata", None)
             if isinstance(meta, dict):
                 raw = meta.get("parameter_names")
                 if isinstance(raw, list):
-                    names = [str(item) for item in raw]
+                    names = list(map(str, raw))
                     break
+            source_index += 1
         self._param_names = names
 
     def _set_external_engine_mode(self, enabled: bool) -> None:
@@ -420,7 +447,7 @@ class TwinPanel(QWidget):
             self._log("[WARN] TwinEngine이 없습니다. 먼저 로드하거나 데모를 실행하세요.")
             return
         try:
-            params = np.array([[spin.value() for spin in self._param_spins]], dtype=float)
+            params = _param_spin_array(self._param_spins)
             result = self._engine.predict(params)  # type: ignore[union-attr]
             self._log(f"예측 완료: shape={result.shape}, min={result.min():.4g}, max={result.max():.4g}")
             self._status_label.setText("예측 완료.")
@@ -448,8 +475,7 @@ class TwinPanel(QWidget):
             objective = self._build_objective(objective_name)
             x_best, f_best = optimizer.minimize(objective)  # type: ignore[attr-defined]
             x_best = np.asarray(x_best, dtype=float).reshape(-1)
-            for spin, value in zip(self._param_spins, x_best):
-                spin.setValue(float(value))
+            _set_spin_values(self._param_spins, x_best)
             n_eval = len(getattr(optimizer, "y_", []))
             result = {
                 "optimizer": self._optimizer_combo.currentText(),
@@ -550,7 +576,7 @@ class TwinPanel(QWidget):
         return {
             "method": "SIMP Topology",
             "density": density,
-            "shape": tuple(int(v) for v in density.shape),
+            "shape": tuple(map(int, density.shape)),
             "volume_fraction": float(np.mean(density)),
             "density_min": float(np.min(density)),
             "density_max": float(np.max(density)),
@@ -602,9 +628,12 @@ class TwinPanel(QWidget):
         pf.initialize(particles)
         Q = (obs_noise**2 + 1e-9) * np.eye(n_state, dtype=float)
         R = (obs_noise**2 + 1e-9) * np.eye(n_state, dtype=float)
-        for obs in Y:
+        obs_index = 0
+        while obs_index < len(Y):
+            obs = Y[obs_index]
             pf.predict(lambda x: M @ x, process_cov=Q, rng=rng)
             pf.update(obs, H, R)
+            obs_index += 1
         estimate = pf.estimate()
         truth = np.linalg.matrix_power(M, n_steps) @ x_true
         result = self._assimilation_result("Particle Filter", estimate, truth, n_steps)
@@ -623,9 +652,12 @@ class TwinPanel(QWidget):
             if self._engine is None:
                 return np.sin(X[:, 0]) + 0.1 * np.sum(X**2, axis=1)
             values = []
-            for row in X:
+            row_index = 0
+            while row_index < len(X):
+                row = X[row_index]
                 field = np.asarray(self._engine.predict(row.reshape(1, -1)), dtype=float)
                 values.append(float(np.mean(field)))
+                row_index += 1
             return np.asarray(values, dtype=float)
 
         try:
@@ -711,7 +743,9 @@ class TwinPanel(QWidget):
         P = np.eye(n_state, dtype=float)
         Q = (obs_noise**2 + 1e-9) * np.eye(n_state, dtype=float)
         R = (obs_noise**2 + 1e-9) * np.eye(n_state, dtype=float)
-        for obs in Y:
+        obs_index = 0
+        while obs_index < len(Y):
+            obs = Y[obs_index]
             x, P = ukf_step(
                 x,
                 P,
@@ -721,6 +755,7 @@ class TwinPanel(QWidget):
                 Q=Q,
                 R=R,
             )
+            obs_index += 1
         truth = np.linalg.matrix_power(M, n_steps) @ x_true
         result = self._assimilation_result("UKF", x, truth, n_steps)
         result["cov_trace"] = float(np.trace(P))
@@ -737,9 +772,12 @@ class TwinPanel(QWidget):
         ensemble = rng.normal(loc=x_true, scale=0.25, size=(n_particles, n_state))
         R = (obs_noise**2 + 1e-9) * np.eye(n_state, dtype=float)
         enkf = EnKF(H=H, R=R)
-        for obs in Y:
+        obs_index = 0
+        while obs_index < len(Y):
+            obs = Y[obs_index]
             ensemble = ensemble @ M.T
             ensemble = enkf.analysis(ensemble, obs, rng=rng)
+            obs_index += 1
         estimate = ensemble.mean(axis=0)
         truth = np.linalg.matrix_power(M, n_steps) @ x_true
         result = self._assimilation_result("EnKF", estimate, truth, n_steps)
@@ -758,9 +796,11 @@ class TwinPanel(QWidget):
         x = x_true.copy()
         observations: list[np.ndarray] = []
         deterministic_noise = obs_noise * np.linspace(-0.5, 0.5, n_state)
-        for _ in range(n_steps):
+        step_index = 0
+        while step_index < n_steps:
             x = M @ x
             observations.append(H @ x + deterministic_noise)
+            step_index += 1
         return x_true, M, H, np.vstack(observations)
 
     @staticmethod
@@ -848,7 +888,7 @@ class TwinPanel(QWidget):
             self._save_btn.setEnabled(True)
 
             # 예측
-            test_params = np.array([[spin.value() for spin in self._param_spins]], dtype=float)
+            test_params = _param_spin_array(self._param_spins)
             if test_params.shape[1] != n_params:
                 test_params = rng.random((1, n_params))
 
