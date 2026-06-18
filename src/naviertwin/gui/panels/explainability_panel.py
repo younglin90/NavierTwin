@@ -1,4 +1,4 @@
-"""Explainability panel for trained surrogate and attention models."""
+"""Explainability panel used with trained surrogate and attention models."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 
 
 class ExplainabilityPanel(QWidget):
-    """SHAP and attention explainability tab for GUI-trained models."""
+    """SHAP and attention explainability tab used with GUI-trained models."""
 
     explanation_done = Signal(object)
 
@@ -262,12 +262,16 @@ class ExplainabilityPanel(QWidget):
                 source = self._resolve_attr_path(model, str(path))
                 source_name = str(path)
             if source is None:
-                for key in ("module", "attention_module", "mha", "source"):
+                keys = ("module", "attention_module", "mha", "source")
+                key_index = 0
+                while key_index < len(keys):
+                    key = keys[key_index]
                     value = attention_meta.get(key)
                     if value is not None:
                         source = value
                         source_name = key
                         break
+                    key_index += 1
             probe_value = attention_meta.get("probe")
             if probe_value is None:
                 probe_value = attention_meta.get("input")
@@ -430,11 +434,13 @@ class ExplainabilityPanel(QWidget):
         mean_phi = np.mean(phi, axis=0)
         mean_abs = np.mean(np.abs(phi), axis=0)
         self._table.setRowCount(phi.shape[1])
-        for row in range(phi.shape[1]):
+        row = 0
+        while row < phi.shape[1]:
             feature = self._feature_names[row] if row < len(self._feature_names) else f"param_{row}"
             self._table.setItem(row, 0, QTableWidgetItem(feature))
             self._table.setItem(row, 1, QTableWidgetItem(f"{mean_phi[row]:.6g}"))
             self._table.setItem(row, 2, QTableWidgetItem(f"{mean_abs[row]:.6g}"))
+            row += 1
 
     def _render_attention(self, weights: np.ndarray, top_tokens: np.ndarray) -> None:
         if weights.ndim != 3:
@@ -449,23 +455,34 @@ class ExplainabilityPanel(QWidget):
         self._attention_matrix_table.setColumnCount(max_cols)
         self._attention_matrix_table.setVerticalHeaderLabels(row_names)
         self._attention_matrix_table.setHorizontalHeaderLabels(col_names)
-        for row in range(max_rows):
-            for col in range(max_cols):
+        row = 0
+        while row < max_rows:
+            col = 0
+            while col < max_cols:
                 self._attention_matrix_table.setItem(
                     row, col, QTableWidgetItem(f"{mat[row, col]:.4f}")
                 )
+                col += 1
+            row += 1
 
         self._attention_top_table.setRowCount(max_rows)
-        for row in range(max_rows):
-            keys = [
-                int(idx)
-                for idx in top_tokens[0, row, : min(top_tokens.shape[-1], max_cols)]
-            ]
-            key_labels = [
-                f"{self._attention_label_for(idx)} ({mat[row, idx]:.4f})"
-                for idx in keys
-                if idx < mat.shape[1]
-            ]
+        row = 0
+        while row < max_rows:
+            keys = []
+            token_limit = min(top_tokens.shape[-1], max_cols)
+            token_index = 0
+            while token_index < token_limit:
+                keys.append(int(top_tokens[0, row, token_index]))
+                token_index += 1
+            key_labels = []
+            key_index = 0
+            while key_index < len(keys):
+                idx = keys[key_index]
+                if idx < mat.shape[1]:
+                    key_labels.append(
+                        f"{self._attention_label_for(idx)} ({mat[row, idx]:.4f})"
+                    )
+                key_index += 1
             self._attention_top_table.setItem(
                 row, 0, QTableWidgetItem(self._attention_label_for(row))
             )
@@ -475,6 +492,7 @@ class ExplainabilityPanel(QWidget):
             self._attention_top_table.setItem(
                 row, 2, QTableWidgetItem(f"{float(np.max(mat[row])):.4f}")
             )
+            row += 1
 
     def _refresh_enabled(self) -> None:
         self._explain_btn.setEnabled(self._model is not None and self._background is not None)
@@ -489,10 +507,15 @@ class ExplainabilityPanel(QWidget):
     @staticmethod
     def _normalize_feature_names(value: object, n_features: int) -> list[str]:
         if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-            names = [str(item) for item in value[:n_features]]
+            names = list(map(str, value[:n_features]))
             if len(names) == n_features:
                 return names
-        return [f"param_{i}" for i in range(n_features)]
+        names = []
+        index = 0
+        while index < n_features:
+            names.append(f"param_{index}")
+            index += 1
+        return names
 
     @staticmethod
     def _safe_int(value: object, default: int) -> int:
@@ -504,12 +527,17 @@ class ExplainabilityPanel(QWidget):
     @staticmethod
     def _resolve_attr_path(root: object, path: str) -> object | None:
         current: object = root
-        for part in path.split("."):
+        parts = path.split(".")
+        part_index = 0
+        while part_index < len(parts):
+            part = parts[part_index]
             if not part:
+                part_index += 1
                 continue
             if part.isdigit() and hasattr(current, "__getitem__"):
                 try:
                     current = current[int(part)]  # type: ignore[index]
+                    part_index += 1
                     continue
                 except (IndexError, KeyError, TypeError):
                     return None
@@ -517,10 +545,12 @@ class ExplainabilityPanel(QWidget):
                 current = current.get(part)
                 if current is None:
                     return None
+                part_index += 1
                 continue
             if not hasattr(current, part):
                 return None
             current = getattr(current, part)
+            part_index += 1
         return current
 
     @staticmethod
@@ -555,21 +585,33 @@ class ExplainabilityPanel(QWidget):
             ("model.network", getattr(model, "network", None)),
         ]
         seen: set[int] = set()
-        for prefix, candidate in candidates:
+        candidate_index = 0
+        while candidate_index < len(candidates):
+            prefix, candidate = candidates[candidate_index]
             if candidate is None or id(candidate) in seen:
+                candidate_index += 1
                 continue
             seen.add(id(candidate))
             if isinstance(candidate, nn.MultiheadAttention):
                 return candidate, prefix
             modules = getattr(candidate, "modules", None)
             if callable(modules):
-                for module in modules():
+                module_list = tuple(modules())
+                module_index = 0
+                while module_index < len(module_list):
+                    module = module_list[module_index]
                     if isinstance(module, nn.MultiheadAttention):
                         return module, f"{prefix}.{type(module).__name__}"
-            for attr in ("attn", "mha", "attention"):
+                    module_index += 1
+            attrs = ("attn", "mha", "attention")
+            attr_index = 0
+            while attr_index < len(attrs):
+                attr = attrs[attr_index]
                 value = getattr(candidate, attr, None)
                 if isinstance(value, nn.MultiheadAttention):
                     return value, f"{prefix}.{attr}"
+                attr_index += 1
+            candidate_index += 1
         return None, ""
 
     def _make_attention_input(self, source: object) -> object:
@@ -597,7 +639,12 @@ class ExplainabilityPanel(QWidget):
         return torch.zeros(shape, dtype=dtype, device=device)
 
     def _attention_labels(self, count: int) -> list[str]:
-        return [self._attention_label_for(i) for i in range(count)]
+        labels: list[str] = []
+        index = 0
+        while index < count:
+            labels.append(self._attention_label_for(index))
+            index += 1
+        return labels
 
     def _attention_label_for(self, index: int) -> str:
         if index < len(self._attention_token_names):
