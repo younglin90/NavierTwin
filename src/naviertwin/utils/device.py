@@ -49,11 +49,28 @@ def move_to(obj: Any, device: Any) -> Any:
     if isinstance(obj, torch.nn.Module):
         return obj.to(device)
     if isinstance(obj, dict):
-        return {k: move_to(v, device) for k, v in obj.items()}
+        moved: dict[Any, Any] = {}
+        items = list(obj.items())
+        idx = 0
+        while idx < len(items):
+            k, v = items[idx]
+            moved[k] = move_to(v, device)
+            idx += 1
+        return moved
     if isinstance(obj, list):
-        return [move_to(v, device) for v in obj]
+        moved_list: list[Any] = []
+        idx = 0
+        while idx < len(obj):
+            moved_list.append(move_to(obj[idx], device))
+            idx += 1
+        return moved_list
     if isinstance(obj, tuple):
-        return tuple(move_to(v, device) for v in obj)
+        moved_tuple: list[Any] = []
+        idx = 0
+        while idx < len(obj):
+            moved_tuple.append(move_to(obj[idx], device))
+            idx += 1
+        return tuple(moved_tuple)
     return obj
 
 
