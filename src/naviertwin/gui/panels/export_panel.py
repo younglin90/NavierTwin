@@ -328,17 +328,28 @@ class ExportPanel(QWidget):
         pts = mesh.points
         header = "x,y,z"
         rows = [pts]
-        for name in self._dataset.field_names:
+        field_index = 0
+        while field_index < len(self._dataset.field_names):
+            name = self._dataset.field_names[field_index]
             if name in mesh.point_data:
                 arr = np.array(mesh.point_data[name])
                 if arr.ndim == 1:
                     header += f",{name}"
                     rows.append(arr.reshape(-1, 1))
                 else:
-                    for i in range(arr.shape[1]):
+                    column_index = 0
+                    while column_index < arr.shape[1]:
+                        i = column_index
                         header += f",{name}_{i}"
+                        column_index += 1
                     rows.append(arr)
-        data = np.hstack([r.reshape(len(pts), -1) for r in rows])
+            field_index += 1
+        reshaped_rows = []
+        row_index = 0
+        while row_index < len(rows):
+            reshaped_rows.append(rows[row_index].reshape(len(pts), -1))
+            row_index += 1
+        data = np.hstack(reshaped_rows)
         np.savetxt(str(path), data, delimiter=",", header=header, comments="")
         self._log(f"✓ CSV 저장: {path} ({len(pts)} rows)")
         self.export_done.emit(str(path))
@@ -412,17 +423,24 @@ class ExportPanel(QWidget):
             raise RuntimeError("내보낼 모델이 없습니다. Model 탭에서 신경 연산자를 먼저 학습하세요.")
 
         candidates = [source]
-        for attr in ("surrogate", "model", "_model", "module", "net", "network"):
+        attrs = ("surrogate", "model", "_model", "module", "net", "network")
+        attr_index = 0
+        while attr_index < len(attrs):
+            attr = attrs[attr_index]
             value = getattr(source, attr, None)
             if value is not None:
                 candidates.append(value)
                 nested = getattr(value, "_model", None)
                 if nested is not None:
                     candidates.append(nested)
+            attr_index += 1
 
-        for candidate in candidates:
+        candidate_index = 0
+        while candidate_index < len(candidates):
+            candidate = candidates[candidate_index]
             if isinstance(candidate, torch.nn.Module):
                 return candidate, source
+            candidate_index += 1
         raise RuntimeError("PyTorch nn.Module을 찾을 수 없습니다.")
 
     def _resolve_sample_input(self, module: object, source: object) -> object:
@@ -433,14 +451,22 @@ class ExportPanel(QWidget):
 
         explicit = self._model_sample_input
         if explicit is None:
-            for owner in (source, module):
-                for attr in ("sample_input", "example_input", "example_input_array", "_sample_input"):
+            owners = (source, module)
+            owner_index = 0
+            attrs = ("sample_input", "example_input", "example_input_array", "_sample_input")
+            while owner_index < len(owners):
+                owner = owners[owner_index]
+                attr_index = 0
+                while attr_index < len(attrs):
+                    attr = attrs[attr_index]
                     value = getattr(owner, attr, None)
                     if value is not None:
                         explicit = value
                         break
+                    attr_index += 1
                 if explicit is not None:
                     break
+                owner_index += 1
         if explicit is not None:
             return self._move_sample_input(explicit, module)
 
@@ -456,10 +482,15 @@ class ExportPanel(QWidget):
         if "2d" in name or "unet" in name or "tfno" in name:
             return torch.zeros((1, 16, 16, in_channels), device=device, dtype=dtype)
 
-        first_linear = next(
-            (m for m in module.modules() if isinstance(m, torch.nn.Linear)),  # type: ignore[attr-defined]
-            None,
-        )
+        first_linear = None
+        modules = tuple(module.modules())  # type: ignore[attr-defined]
+        module_index = 0
+        while module_index < len(modules):
+            candidate = modules[module_index]
+            if isinstance(candidate, torch.nn.Linear):
+                first_linear = candidate
+                break
+            module_index += 1
         if first_linear is not None:
             return torch.zeros((1, int(first_linear.in_features)), device=device, dtype=dtype)
         raise RuntimeError("trace용 sample_input을 추론할 수 없습니다.")
@@ -475,9 +506,19 @@ class ExportPanel(QWidget):
         if isinstance(value, torch.Tensor):
             return value.to(device=device)
         if isinstance(value, tuple):
-            return tuple(self._move_sample_input(item, module) for item in value)
+            moved_items = []
+            item_index = 0
+            while item_index < len(value):
+                moved_items.append(self._move_sample_input(value[item_index], module))
+                item_index += 1
+            return tuple(moved_items)
         if isinstance(value, list):
-            return tuple(self._move_sample_input(item, module) for item in value)
+            moved_items = []
+            item_index = 0
+            while item_index < len(value):
+                moved_items.append(self._move_sample_input(value[item_index], module))
+                item_index += 1
+            return tuple(moved_items)
         return value
 
     def _export_to_onnx(self, model: object, sample_input: object, path: Path) -> Path:
@@ -620,10 +661,13 @@ class ExportPanel(QWidget):
             candidates.append(surrogate_meta.get("validation_metrics"))
             candidates.append(surrogate_meta.get("metrics"))
 
-        for candidate in candidates:
+        candidate_index = 0
+        while candidate_index < len(candidates):
+            candidate = candidates[candidate_index]
             metrics = self._numeric_mapping(candidate)
             if metrics:
                 return metrics
+            candidate_index += 1
         return {}
 
     @staticmethod
@@ -632,15 +676,21 @@ class ExportPanel(QWidget):
         if not isinstance(value, Mapping):
             return {}
         out: dict[str, float] = {}
-        for key, raw in value.items():
+        items = tuple(value.items())
+        item_index = 0
+        while item_index < len(items):
+            key, raw = items[item_index]
             if not isinstance(key, str):
+                item_index += 1
                 continue
             try:
                 number = float(raw)  # type: ignore[arg-type]
             except (TypeError, ValueError):
+                item_index += 1
                 continue
             if math.isfinite(number):
                 out[key] = number
+            item_index += 1
         return out
 
     def _write_metadata_sidecar(self, path: Path, metadata: dict[str, Any]) -> None:
