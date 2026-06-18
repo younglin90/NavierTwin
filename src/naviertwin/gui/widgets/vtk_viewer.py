@@ -190,29 +190,35 @@ class VtkViewer(QWidget):
         self._side_btn = QPushButton("Side")
         self._reset_btn = QPushButton("Reset")
         self._reset_btn.setToolTip("Reset View")
-        for button, slot in (
+        view_buttons = (
             (self._iso_btn, self._view_iso),
             (self._front_btn, self._view_front),
             (self._top_btn, self._view_top),
             (self._side_btn, self._view_side),
             (self._reset_btn, self._reset_camera),
-        ):
+        )
+        view_index = 0
+        while view_index < len(view_buttons):
+            button, slot = view_buttons[view_index]
             button.setEnabled(False)
             button.setSizePolicy(
                 QSizePolicy.Policy.Preferred,
                 QSizePolicy.Policy.Fixed,
             )
             button.clicked.connect(slot)
-        for col, button in enumerate(
-            (
-                self._iso_btn,
-                self._front_btn,
-                self._top_btn,
-                self._side_btn,
-                self._reset_btn,
-            )
-        ):
+            view_index += 1
+        layout_buttons = (
+            self._iso_btn,
+            self._front_btn,
+            self._top_btn,
+            self._side_btn,
+            self._reset_btn,
+        )
+        col = 0
+        while col < len(layout_buttons):
+            button = layout_buttons[col]
             controls_layout.addWidget(button, 1, col)
+            col += 1
 
         self._screenshot_btn = QPushButton("Shot")
         self._screenshot_btn.setToolTip("Save Screenshot")
@@ -286,16 +292,16 @@ class VtkViewer(QWidget):
             if self._static_render_enabled:
                 self._set_message(
                     "Static CFD viewer fallback.\n"
-                    "Set a real display and install pyvistaqt for mouse rotation."
+                    "Set a real display and install pyvistaqt to enable mouse rotation."
                 )
             else:
                 self._set_message(
                     "3D viewer loaded in headless shell mode.\n"
-                    "Use a desktop display with pyvistaqt for interactive rendering."
+                    "Use a desktop display with pyvistaqt to enable interactive rendering."
                 )
             self._set_render_controls_enabled(True)
         else:
-            self._set_message("PyVista unavailable.\nInstall naviertwin[core] for 3D viewing.")
+            self._set_message("PyVista unavailable.\nInstall naviertwin[core] to view 3D.")
             self._set_render_controls_enabled(False)
 
     def _configure_plotter(self) -> None:
@@ -308,11 +314,15 @@ class VtkViewer(QWidget):
                 self._plotter.background_color = _BACKGROUND_BOTTOM
             except Exception:
                 pass
-        for antialias in ("ssaa", "msaa", "fxaa"):
+        antialias_modes = ("ssaa", "msaa", "fxaa")
+        antialias_index = 0
+        while antialias_index < len(antialias_modes):
+            antialias = antialias_modes[antialias_index]
             try:
                 self._plotter.enable_anti_aliasing(antialias)
                 break
             except Exception:
+                antialias_index += 1
                 continue
         try:
             self._plotter.enable_lightkit()
@@ -349,15 +359,19 @@ class VtkViewer(QWidget):
                 pass
 
     def _set_render_controls_enabled(self, enabled: bool) -> None:
-        for button in (
+        buttons = (
             self._iso_btn,
             self._front_btn,
             self._top_btn,
             self._side_btn,
             self._reset_btn,
             self._screenshot_btn,
-        ):
+        )
+        button_index = 0
+        while button_index < len(buttons):
+            button = buttons[button_index]
             button.setEnabled(enabled)
+            button_index += 1
         self._cmap_combo.setEnabled(enabled)
         self._edge_check.setEnabled(enabled)
 
@@ -417,9 +431,13 @@ class VtkViewer(QWidget):
         """현재 dataset의 field 목록을 콤보박스에 반영한다."""
         names = list(getattr(self._dataset, "field_names", []) or [])
         if self._dataset is not None:
-            for name in self._field_names_from_mesh(self._dataset.mesh):
+            mesh_names = self._field_names_from_mesh(self._dataset.mesh)
+            name_index = 0
+            while name_index < len(mesh_names):
+                name = mesh_names[name_index]
                 if name not in names:
                     names.append(name)
+                name_index += 1
 
         current = prefer_field or self._current_field
         self._field_combo.blockSignals(True)
@@ -430,11 +448,15 @@ class VtkViewer(QWidget):
             self._current_field = current
         elif names:
             preferred_idx = 0
-            for preferred in ("p", "pressure", "T", "U", "velocity"):
+            preferred_names = ("p", "pressure", "T", "U", "velocity")
+            preferred_cursor = 0
+            while preferred_cursor < len(preferred_names):
+                preferred = preferred_names[preferred_cursor]
                 idx = names.index(preferred) if preferred in names else -1
                 if idx >= 0:
                     preferred_idx = idx
                     break
+                preferred_cursor += 1
             self._field_combo.setCurrentIndex(preferred_idx)
             self._current_field = names[preferred_idx]
         else:
@@ -468,7 +490,12 @@ class VtkViewer(QWidget):
             spacing=(1.0, 1.0, 1.0),
             origin=(0.0, 0.0, 0.0),
         )
-        flattened = np.stack([snap.ravel(order="F") for snap in snapshots])
+        flattened_rows = []
+        snapshot_index = 0
+        while snapshot_index < len(snapshots):
+            flattened_rows.append(snapshots[snapshot_index].ravel(order="F"))
+            snapshot_index += 1
+        flattened = np.stack(flattened_rows)
         image.point_data[field_name] = flattened[0]
 
         from naviertwin.core.cfd_reader.base import CFDDataset
@@ -476,7 +503,7 @@ class VtkViewer(QWidget):
         self.load_dataset(
             CFDDataset(
                 mesh=image,
-                time_steps=[float(i) for i in range(nt)],
+                time_steps=list(map(float, range(nt))),
                 field_names=[field_name],
                 metadata={
                     "source": "simulation_grid_2d",
@@ -558,7 +585,7 @@ class VtkViewer(QWidget):
         if self._dataset is None:
             return
         if not PYVISTA_AVAILABLE or pv is None:
-            self._set_message("PyVista unavailable.\nInstall naviertwin[core] for 3D viewing.")
+            self._set_message("PyVista unavailable.\nInstall naviertwin[core] to view 3D.")
             return
 
         try:
@@ -864,8 +891,18 @@ class VtkViewer(QWidget):
     def _field_names_from_mesh(self, mesh: Any) -> list[str]:
         names: list[str] = []
         try:
-            names.extend(str(name) for name in mesh.point_data.keys())
-            names.extend(str(name) for name in mesh.cell_data.keys() if str(name) not in names)
+            point_keys = tuple(mesh.point_data.keys())
+            point_index = 0
+            while point_index < len(point_keys):
+                names.append(str(point_keys[point_index]))
+                point_index += 1
+            cell_keys = tuple(mesh.cell_data.keys())
+            cell_index = 0
+            while cell_index < len(cell_keys):
+                name = str(cell_keys[cell_index])
+                if name not in names:
+                    names.append(name)
+                cell_index += 1
         except Exception:
             pass
         return names
