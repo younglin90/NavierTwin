@@ -54,7 +54,7 @@ from naviertwin.utils.feature_packs import (
 
 @dataclass(frozen=True)
 class LibraryStatus:
-    """Runtime availability status for an optional/core package."""
+    """Runtime availability status describing an optional/core package."""
 
     name: str
     module: str
@@ -166,7 +166,10 @@ def _package_version(module: str) -> str:
 def list_library_statuses() -> list[LibraryStatus]:
     """Return runtime dependency availability without importing heavy packages."""
     statuses: list[LibraryStatus] = []
-    for name, module, purpose, hint in _LIBRARIES:
+    library_index = 0
+    while library_index < len(_LIBRARIES):
+        name, module, purpose, hint = _LIBRARIES[library_index]
+        library_index += 1
         available = _module_available(module)
         statuses.append(
             LibraryStatus(
@@ -427,7 +430,11 @@ def list_capability_specs() -> list[CapabilitySpec]:
         from naviertwin.core.post_process_facade import PostProcessFacade
 
         facade = PostProcessFacade()
-        for op_name in facade.list_operations():
+        operations = facade.list_operations()
+        op_index = 0
+        while op_index < len(operations):
+            op_name = operations[op_index]
+            op_index += 1
             info = facade.describe(op_name)
             specs.append(
                 CapabilitySpec(
@@ -458,7 +465,11 @@ def list_core_api_items(root: Path | None = None) -> list[CoreApiItem]:
 
     items: list[CoreApiItem] = []
     seen: set[tuple[str, str]] = set()
-    for py_file in sorted(core_root.rglob("*.py")):
+    py_files = sorted(core_root.rglob("*.py"))
+    file_index = 0
+    while file_index < len(py_files):
+        py_file = py_files[file_index]
+        file_index += 1
         if "__pycache__" in py_file.parts:
             continue
         try:
@@ -474,7 +485,10 @@ def list_core_api_items(root: Path | None = None) -> list[CoreApiItem]:
         imported_exports = _collect_imported_export_names(tree)
 
         names = exported if exported else sorted(definitions)
-        for name in names:
+        name_index = 0
+        while name_index < len(names):
+            name = names[name_index]
+            name_index += 1
             if name.startswith("_"):
                 continue
 
@@ -528,7 +542,10 @@ def _collect_public_definitions(
     tree: ast.Module,
 ) -> dict[str, tuple[str, str, int, str]]:
     definitions: dict[str, tuple[str, str, int, str]] = {}
-    for node in tree.body:
+    node_index = 0
+    while node_index < len(tree.body):
+        node = tree.body[node_index]
+        node_index += 1
         if isinstance(node, ast.ClassDef) and not node.name.startswith("_"):
             definitions[node.name] = (
                 "class",
@@ -551,7 +568,11 @@ def _collect_public_definitions(
                 ast.get_docstring(node) or "",
             )
         elif isinstance(node, (ast.Assign, ast.AnnAssign)):
-            for name in _assigned_public_names(node):
+            assigned_names = _assigned_public_names(node)
+            name_index = 0
+            while name_index < len(assigned_names):
+                name = assigned_names[name_index]
+                name_index += 1
                 definitions.setdefault(
                     name,
                     ("constant", name, getattr(node, "lineno", 1), ""),
@@ -567,17 +588,26 @@ def _assigned_public_names(node: ast.Assign | ast.AnnAssign) -> list[str]:
         targets = [node.target]
 
     names: list[str] = []
-    for target in targets:
+    target_index = 0
+    while target_index < len(targets):
+        target = targets[target_index]
+        target_index += 1
         if isinstance(target, ast.Name) and not target.id.startswith("_"):
             names.append(target.id)
     return names
 
 
 def _extract_all_names(tree: ast.Module) -> list[str]:
-    for node in tree.body:
+    node_index = 0
+    while node_index < len(tree.body):
+        node = tree.body[node_index]
+        node_index += 1
         if not isinstance(node, ast.Assign):
             continue
-        for target in node.targets:
+        target_index = 0
+        while target_index < len(node.targets):
+            target = node.targets[target_index]
+            target_index += 1
             if isinstance(target, ast.Name) and target.id == "__all__":
                 return _literal_str_sequence(node.value)
     return []
@@ -586,7 +616,10 @@ def _extract_all_names(tree: ast.Module) -> list[str]:
 def _literal_str_sequence(node: ast.AST) -> list[str]:
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
         names: list[str] = []
-        for element in node.elts:
+        element_index = 0
+        while element_index < len(node.elts):
+            element = node.elts[element_index]
+            element_index += 1
             if isinstance(element, ast.Constant) and isinstance(element.value, str):
                 names.append(element.value)
         return names
@@ -597,10 +630,16 @@ def _literal_str_sequence(node: ast.AST) -> list[str]:
 
 def _collect_imported_export_names(tree: ast.Module) -> dict[str, int]:
     imports: dict[str, int] = {}
-    for node in tree.body:
+    node_index = 0
+    while node_index < len(tree.body):
+        node = tree.body[node_index]
+        node_index += 1
         if not isinstance(node, ast.ImportFrom):
             continue
-        for alias in node.names:
+        alias_index = 0
+        while alias_index < len(node.names):
+            alias = node.names[alias_index]
+            alias_index += 1
             if alias.name == "*":
                 continue
             name = alias.asname or alias.name
@@ -610,14 +649,14 @@ def _collect_imported_export_names(tree: ast.Module) -> dict[str, int]:
 
 
 def _signature_for_class(node: ast.ClassDef) -> str:
-    init = next(
-        (
-            child
-            for child in node.body
-            if isinstance(child, ast.FunctionDef) and child.name == "__init__"
-        ),
-        None,
-    )
+    init = None
+    child_index = 0
+    while child_index < len(node.body):
+        child = node.body[child_index]
+        child_index += 1
+        if isinstance(child, ast.FunctionDef) and child.name == "__init__":
+            init = child
+            break
     if init is None:
         return f"{node.name}()"
     return _signature_for_function(node.name, init.args, None)
@@ -631,7 +670,11 @@ def _signature_for_function(
     params: list[str] = []
     positional = [*args.posonlyargs, *args.args]
     defaults = [None] * (len(positional) - len(args.defaults)) + list(args.defaults)
-    for arg, default in zip(positional, defaults):
+    positional_pairs = list(zip(positional, defaults))
+    positional_index = 0
+    while positional_index < len(positional_pairs):
+        arg, default = positional_pairs[positional_index]
+        positional_index += 1
         if arg.arg in {"self", "cls"}:
             continue
         params.append(_format_arg(arg, default is not None))
@@ -641,7 +684,11 @@ def _signature_for_function(
     elif args.kwonlyargs:
         params.append("*")
 
-    for arg, default in zip(args.kwonlyargs, args.kw_defaults):
+    kwonly_pairs = list(zip(args.kwonlyargs, args.kw_defaults))
+    kwonly_index = 0
+    while kwonly_index < len(kwonly_pairs):
+        arg, default = kwonly_pairs[kwonly_index]
+        kwonly_index += 1
         params.append(_format_arg(arg, default is not None))
 
     if args.kwarg is not None:
@@ -684,14 +731,17 @@ def _gui_route_for_module(module: str) -> str:
         (".explainability", "Explain"),
         (".export", "Export"),
     ]
-    for needle, route in route_rules:
+    route_index = 0
+    while route_index < len(route_rules):
+        needle, route = route_rules[route_index]
+        route_index += 1
         if needle in module:
             return route
     return "Library"
 
 
 def run_capability_demo(capability_id: str) -> dict[str, Any]:
-    """Run a small deterministic smoke demo for a capability."""
+    """Run a small deterministic smoke demo linked to a capability."""
     if capability_id.startswith("postproc:"):
         op_name = capability_id.split(":", 1)[1]
         return _run_postproc_demo(op_name)
@@ -1064,7 +1114,7 @@ class LibraryPanel(QWidget):
         self._refresh_pack_table()
 
     def set_dataset(self, dataset: object) -> None:
-        """Attach dataset context for future dataset-aware capability demos."""
+        """Attach dataset context used by dataset-aware capability demos."""
         self._dataset = dataset
         n_points = getattr(dataset, "n_points", "?")
         n_cells = getattr(dataset, "n_cells", "?")
@@ -1097,7 +1147,11 @@ class LibraryPanel(QWidget):
 
         self._category_combo = QComboBox()
         self._category_combo.addItem("전체")
-        for category in sorted({cap.category for cap in self._capabilities}):
+        categories = sorted(set(map(lambda cap: cap.category, self._capabilities)))
+        category_index = 0
+        while category_index < len(categories):
+            category = categories[category_index]
+            category_index += 1
             self._category_combo.addItem(category)
         self._category_combo.currentTextChanged.connect(self._refresh_capability_list)
         left_layout.addWidget(self._category_combo)
@@ -1218,7 +1272,9 @@ class LibraryPanel(QWidget):
 
     def _refresh_library_table(self) -> None:
         self._library_table.setRowCount(len(self._libraries))
-        for row, status in enumerate(self._libraries):
+        row = 0
+        while row < len(self._libraries):
+            status = self._libraries[row]
             values = [
                 status.name,
                 "OK" if status.available else "MISSING",
@@ -1226,13 +1282,17 @@ class LibraryPanel(QWidget):
                 status.purpose,
                 "" if status.available else status.install_hint,
             ]
-            for col, value in enumerate(values):
+            col = 0
+            while col < len(values):
+                value = values[col]
                 item = QTableWidgetItem(value)
                 if col == 1:
                     item.setForeground(
                         Qt.GlobalColor.green if status.available else Qt.GlobalColor.yellow
                     )
                 self._library_table.setItem(row, col, item)
+                col += 1
+            row += 1
 
     def _refresh_capability_list(self) -> None:
         category = self._category_combo.currentText() if hasattr(self, "_category_combo") else "전체"
@@ -1242,7 +1302,10 @@ class LibraryPanel(QWidget):
         self._capability_list.blockSignals(True)
         self._capability_list.clear()
         selected_row = -1
-        for cap in self._capabilities:
+        cap_index = 0
+        while cap_index < len(self._capabilities):
+            cap = self._capabilities[cap_index]
+            cap_index += 1
             if category not in ("", "전체") and cap.category != category:
                 continue
             haystack = f"{cap.id} {cap.category} {cap.name} {cap.description} {cap.module}".lower()
@@ -1275,7 +1338,7 @@ class LibraryPanel(QWidget):
             return
         cap_id = str(current.data(Qt.ItemDataRole.UserRole))
         self._selected_capability = next(
-            (cap for cap in self._capabilities if cap.id == cap_id),
+            filter(lambda cap: cap.id == cap_id, self._capabilities),
             None,
         )
         self._render_capability_detail(self._selected_capability)
@@ -1292,7 +1355,7 @@ class LibraryPanel(QWidget):
             return
 
         dep_status = self._dependency_summary(cap.dependencies)
-        missing_deps = [dep for dep in cap.dependencies if not _module_available(dep)]
+        missing_deps = list(filter(lambda dep: not _module_available(dep), cap.dependencies))
         pack_id = recommended_pack_for_modules(missing_deps)
         self._selected_feature_pack_id = pack_id
         pack_hint = None
@@ -1334,16 +1397,16 @@ class LibraryPanel(QWidget):
 
         query = self._search_edit.text().strip().lower() if hasattr(self, "_search_edit") else ""
         selected = self._selected_api.import_path if self._selected_api is not None else None
-        self._visible_api_items = [
-            item
-            for item in self._core_api_items
-            if not query or query in _api_haystack(item)
-        ]
+        self._visible_api_items = list(
+            filter(lambda item: not query or query in _api_haystack(item), self._core_api_items)
+        )
 
         self._api_table.blockSignals(True)
         self._api_table.setRowCount(len(self._visible_api_items))
         selected_row = -1
-        for row, item in enumerate(self._visible_api_items):
+        row = 0
+        while row < len(self._visible_api_items):
+            item = self._visible_api_items[row]
             values = [
                 item.category,
                 item.kind,
@@ -1352,12 +1415,16 @@ class LibraryPanel(QWidget):
                 item.gui_route,
                 item.signature,
             ]
-            for col, value in enumerate(values):
+            col = 0
+            while col < len(values):
+                value = values[col]
                 table_item = QTableWidgetItem(value)
                 table_item.setToolTip(_api_tooltip(item))
                 self._api_table.setItem(row, col, table_item)
+                col += 1
             if item.import_path == selected:
                 selected_row = row
+            row += 1
         self._api_table.blockSignals(False)
 
         if selected_row >= 0:
@@ -1395,13 +1462,12 @@ class LibraryPanel(QWidget):
     def _dependency_summary(self, dependencies: tuple[str, ...]) -> dict[str, str]:
         if not dependencies:
             return {"required": "none"}
-        return {
-            dep: "OK" if _module_available(dep) else "MISSING"
-            for dep in dependencies
-        }
+        return dict(
+            map(lambda dep: (dep, "OK" if _module_available(dep) else "MISSING"), dependencies)
+        )
 
     def _dependencies_available(self, dependencies: tuple[str, ...]) -> bool:
-        return all(_module_available(dep) for dep in dependencies)
+        return all(map(_module_available, dependencies))
 
     def _run_selected_demo(self) -> None:
         cap = self._selected_capability
@@ -1546,13 +1612,15 @@ class LibraryPanel(QWidget):
             return
         pack_ids = list(FEATURE_PACKS.keys())
         self._pack_table.setRowCount(len(pack_ids))
-        for row, pack_id in enumerate(pack_ids):
+        row = 0
+        while row < len(pack_ids):
+            pack_id = pack_ids[row]
             try:
                 st = feature_pack_status(pack_id)
             except Exception:
+                row += 1
                 continue
             installed = bool(st.get("installed"))
-            readable = st.get("readable", True)
             missing = st.get("missing_modules") or []
             unreadable = st.get("unreadable_paths") or []
 
@@ -1563,9 +1631,9 @@ class LibraryPanel(QWidget):
                 color = Qt.GlobalColor.red
                 button_label = "내 계정에 재설치"
                 tooltip = (
-                    f"인스톨러가 ProgramData 에 설치한 site 디렉토리를 현재 "
-                    f"사용자가 읽지 못합니다.\n"
-                    f"권한 부족 경로:\n  " + "\n  ".join(unreadable) +
+                    "인스톨러가 ProgramData 에 설치한 site 디렉토리를 현재 "
+                    "사용자가 읽지 못합니다.\n"
+                    "권한 부족 경로:\n  " + "\n  ".join(unreadable) +
                     "\n\n[내 계정에 재설치] 누르면 LOCALAPPDATA 에 새로 설치합니다."
                 )
             elif installed and not missing:
@@ -1602,6 +1670,7 @@ class LibraryPanel(QWidget):
                 lambda _checked=False, pid=pack_id: self._kick_off_online_install(pid)
             )
             self._pack_table.setCellWidget(row, 3, btn)
+            row += 1
 
     def _navigate_selected(self) -> None:
         cap = self._selected_capability
@@ -1643,9 +1712,9 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, Path):
         return str(value)
     if isinstance(value, dict):
-        return {str(k): _json_safe(v) for k, v in value.items()}
+        return dict(map(lambda item: (str(item[0]), _json_safe(item[1])), value.items()))
     if isinstance(value, (list, tuple)):
-        return [_json_safe(v) for v in value]
+        return list(map(_json_safe, value))
     if callable(value):
         return f"<callable {getattr(value, '__name__', type(value).__name__)}>"
     return value
