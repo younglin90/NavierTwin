@@ -37,7 +37,11 @@ def safe_thread_map(
 ) -> list[tuple[bool, R | str]]:
     """(ok, result|error_message) 쌍 반환."""
     items_list = list(items)
-    results: list[tuple[bool, R | str]] = [(False, "") for _ in items_list]
+    results: list[tuple[bool, R | str]] = []
+    result_idx = 0
+    while result_idx < len(items_list):
+        results.append((False, ""))
+        result_idx += 1
 
     def _wrap(i: int, x: T):
         try:
@@ -46,10 +50,17 @@ def safe_thread_map(
             return i, False, f"{type(e).__name__}: {e}"
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = [ex.submit(_wrap, i, x) for i, x in enumerate(items_list)]
-        for fut in futures:
+        futures = []
+        item_idx = 0
+        while item_idx < len(items_list):
+            futures.append(ex.submit(_wrap, item_idx, items_list[item_idx]))
+            item_idx += 1
+        future_idx = 0
+        while future_idx < len(futures):
+            fut = futures[future_idx]
             idx, ok, payload = fut.result()
             results[idx] = (ok, payload)
+            future_idx += 1
     return results
 
 
