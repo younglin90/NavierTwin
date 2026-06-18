@@ -1,4 +1,4 @@
-"""Experiment registry — SQLite store for runs.
+"""Experiment registry — SQLite store of runs.
 
 Examples:
     >>> import tempfile, pathlib
@@ -39,11 +39,18 @@ class ExperimentRegistry:
             rows = c.execute(
                 "SELECT id, name, params, metrics FROM runs",
             ).fetchall()
-        return [
-            {"id": r[0], "name": r[1], "params": json.loads(r[2]),
-             "metrics": json.loads(r[3])}
-            for r in rows
-        ]
+        out: list[dict] = []
+        idx = 0
+        while idx < len(rows):
+            r = rows[idx]
+            out.append({
+                "id": r[0],
+                "name": r[1],
+                "params": json.loads(r[2]),
+                "metrics": json.loads(r[3]),
+            })
+            idx += 1
+        return out
 
 
 __all__ = ["ExperimentRegistry"]
