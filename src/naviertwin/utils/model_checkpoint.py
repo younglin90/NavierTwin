@@ -100,9 +100,20 @@ def load_model(
 
 def count_parameters(model: Any, trainable_only: bool = True) -> int:
     """nn.Module 의 파라미터 수 합."""
+    total = 0
+    params = list(model.parameters())
+    idx = 0
     if trainable_only:
-        return sum(p.numel() for p in model.parameters() if p.requires_grad)
-    return sum(p.numel() for p in model.parameters())
+        while idx < len(params):
+            p = params[idx]
+            if p.requires_grad:
+                total += p.numel()
+            idx += 1
+        return total
+    while idx < len(params):
+        total += params[idx].numel()
+        idx += 1
+    return total
 
 
 __all__ = ["save_model", "load_model", "count_parameters"]
