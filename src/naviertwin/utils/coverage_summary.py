@@ -19,9 +19,13 @@ _LINE = re.compile(
 
 def parse_coverage_text(text: str) -> list[dict]:
     rows = []
-    for line in text.splitlines():
+    lines = text.splitlines()
+    idx = 0
+    while idx < len(lines):
+        line = lines[idx]
         m = _LINE.match(line.strip())
         if not m:
+            idx += 1
             continue
         rows.append({
             "name": m.group(1),
@@ -29,11 +33,19 @@ def parse_coverage_text(text: str) -> list[dict]:
             "miss": int(m.group(3)),
             "cover": int(m.group(4)),
         })
+        idx += 1
     return rows
 
 
 def below_threshold(rows: list[dict], *, min_pct: int = 70) -> list[dict]:
-    return [r for r in rows if r["name"] != "TOTAL" and r["cover"] < min_pct]
+    weak: list[dict] = []
+    idx = 0
+    while idx < len(rows):
+        row = rows[idx]
+        if row["name"] != "TOTAL" and row["cover"] < min_pct:
+            weak.append(row)
+        idx += 1
+    return weak
 
 
 __all__ = ["below_threshold", "parse_coverage_text"]
