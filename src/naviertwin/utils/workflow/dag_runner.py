@@ -32,19 +32,31 @@ class DAGRunner:
         def dfs(n: str) -> None:
             if n in visited:
                 return
-            for d in self.deps.get(n, []):
+            deps = self.deps.get(n, [])
+            dep_idx = 0
+            while dep_idx < len(deps):
+                d = deps[dep_idx]
                 dfs(d)
+                dep_idx += 1
             visited.add(n)
             order.append(n)
 
-        for n in self.nodes:
+        node_names = list(self.nodes)
+        node_idx = 0
+        while node_idx < len(node_names):
+            n = node_names[node_idx]
             dfs(n)
+            node_idx += 1
         return order
 
     def run(self) -> dict[str, Any]:
         results: dict[str, Any] = {}
-        for n in self.topo():
+        order = self.topo()
+        idx = 0
+        while idx < len(order):
+            n = order[idx]
             results[n] = self.nodes[n](results)
+            idx += 1
         return results
 
 
