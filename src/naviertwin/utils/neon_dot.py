@@ -1,6 +1,6 @@
-"""ARM NEON dot proxy — uses numpy as a stand-in for SIMD-accelerated dot.
+"""ARM NEON dot proxy — uses numpy as a stand-in to emulate SIMD-accelerated dot.
 
-Provides a name-stable API for embedded paths that may swap to true NEON later.
+Provides a name-stable API so embedded paths may swap to true NEON later.
 
 Examples:
     >>> import numpy as np
@@ -16,7 +16,7 @@ from numpy.typing import NDArray
 
 
 def dot_int8(a: NDArray[np.int8], b: NDArray[np.int8]) -> int:
-    """Dot product over int8 vectors with int32 accumulator."""
+    """Dot product with int8 vectors and int32 accumulator."""
     return int(np.dot(a.astype(np.int32), b.astype(np.int32)))
 
 
