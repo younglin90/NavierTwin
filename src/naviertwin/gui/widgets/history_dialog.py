@@ -98,7 +98,9 @@ class HistoryDialog(QDialog):
 
     def _populate(self) -> None:
         self._table.setRowCount(len(self._entries))
-        for i, e in enumerate(self._entries):
+        i = 0
+        while i < len(self._entries):
+            e = self._entries[i]
             self._table.setItem(i, 0, QTableWidgetItem(str(i)))
             self._table.setItem(
                 i, 1, QTableWidgetItem(str(e.get("timestamp", "-"))),
@@ -119,6 +121,7 @@ class HistoryDialog(QDialog):
                 if isinstance(rs, dict):
                     err_or_summary = ", ".join(list(rs.keys())[:6])
             self._table.setItem(i, 4, QTableWidgetItem(err_or_summary))
+            i += 1
         self._table.resizeColumnsToContents()
 
     def _on_selection_changed(self) -> None:
@@ -139,13 +142,21 @@ class HistoryDialog(QDialog):
         kw = e.get("kwargs_summary") or {}
         if kw:
             lines.append("\nKwargs:")
-            for k, v in kw.items():
+            kw_items = tuple(kw.items())
+            kw_idx = 0
+            while kw_idx < len(kw_items):
+                k, v = kw_items[kw_idx]
                 lines.append(f"  {k}: {v}")
+                kw_idx += 1
         rs = e.get("result_summary") or {}
         if rs:
             lines.append("\nResult:")
-            for k, v in rs.items():
+            rs_items = tuple(rs.items())
+            rs_idx = 0
+            while rs_idx < len(rs_items):
+                k, v = rs_items[rs_idx]
                 lines.append(f"  {k}: {v}")
+                rs_idx += 1
         self._detail.setPlainText("\n".join(lines))
 
     def _on_double_clicked(self, _item: QTableWidgetItem) -> None:
