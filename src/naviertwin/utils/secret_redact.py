@@ -31,10 +31,13 @@ _SENSITIVE_KEY = re.compile(
 
 def redact(text: str) -> str:
     out = text
-    for pat in _PATTERNS:
+    idx = 0
+    while idx < len(_PATTERNS):
+        pat = _PATTERNS[idx]
         out = pat.sub(lambda m: m.group(0).split("=")[0].split(":")[0].rstrip()
                        + "=***REDACTED***" if "=" in m.group(0) or ":" in m.group(0)
                        else "***REDACTED***", out)
+        idx += 1
     return out
 
 
@@ -50,15 +53,25 @@ def redact_object(value: Any, key_name: str | None = None) -> Any:
             return "***REDACTED***"
         return redact(value)
     if isinstance(value, list):
-        return [redact_object(item, key_name=key_name) for item in value]
+        out: list[Any] = []
+        idx = 0
+        while idx < len(value):
+            out.append(redact_object(value[idx], key_name=key_name))
+            idx += 1
+        return out
     if isinstance(value, dict):
         sanitized: dict[str, Any] = {}
-        for key, item in value.items():
+        items = list(value.items())
+        idx = 0
+        while idx < len(items):
+            key, item = items[idx]
             child_key = str(key)
             if is_sensitive_key(child_key):
                 sanitized[child_key] = "***REDACTED***"
+                idx += 1
                 continue
             sanitized[child_key] = redact_object(item, key_name=child_key)
+            idx += 1
         return sanitized
     return value
 
