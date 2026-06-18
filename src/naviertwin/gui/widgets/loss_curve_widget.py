@@ -5,7 +5,22 @@
 
 from __future__ import annotations
 
+from collections import deque
+from functools import partial
+
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+
+
+def _copy_loss_series(item: tuple[str, list[float]]) -> tuple[str, list[float]]:
+    label, losses = item
+    return label, list(losses)
+
+
+def _plot_loss_series(ax: object, item: tuple[str, list[float]]) -> None:
+    label, losses = item
+    if not losses:
+        return
+    ax.plot(range(1, len(losses) + 1), losses, label=label, linewidth=1.5)
 
 
 class LossCurveWidget(QWidget):
@@ -42,15 +57,12 @@ class LossCurveWidget(QWidget):
             series: {label: [loss_0, loss_1, ...]}.
             log_scale: y 축 로그 여부.
         """
-        self._series = {label: list(losses) for label, losses in series.items()}
+        self._series = dict(map(_copy_loss_series, series.items()))
         if not self._mpl or self._figure is None:
             return
         self._figure.clear()
         ax = self._figure.add_subplot(111)
-        for label, losses in self._series.items():
-            if not losses:
-                continue
-            ax.plot(range(1, len(losses) + 1), losses, label=label, linewidth=1.5)
+        deque(map(partial(_plot_loss_series, ax), self._series.items()), maxlen=0)
         ax.set_xlabel("epoch")
         ax.set_ylabel("loss")
         if log_scale:
