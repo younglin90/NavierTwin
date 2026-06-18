@@ -94,8 +94,20 @@ def load_config(path: Path) -> NavierTwinConfig:
         data: dict = json.load(fp)
 
     # 알 수 없는 키는 무시하고 알려진 키만 사용
-    known_fields = {f.name for f in NavierTwinConfig.__dataclass_fields__.values()}  # type: ignore[attr-defined]
-    filtered = {k: v for k, v in data.items() if k in known_fields}
+    fields = list(NavierTwinConfig.__dataclass_fields__.values())  # type: ignore[attr-defined]
+    known_fields: set[str] = set()
+    field_idx = 0
+    while field_idx < len(fields):
+        known_fields.add(fields[field_idx].name)
+        field_idx += 1
+    filtered = {}
+    items = list(data.items())
+    item_idx = 0
+    while item_idx < len(items):
+        k, v = items[item_idx]
+        if k in known_fields:
+            filtered[k] = v
+        item_idx += 1
     return NavierTwinConfig(**filtered)
 
 
