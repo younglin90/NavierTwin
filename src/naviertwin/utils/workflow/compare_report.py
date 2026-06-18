@@ -14,9 +14,23 @@ from collections.abc import Sequence
 
 def compare_md(runs: Sequence[dict], *, columns: list[str]) -> str:
     header = "| " + " | ".join(columns) + " |"
-    sep = "| " + " | ".join("---" for _ in columns) + " |"
-    rows = ["| " + " | ".join(str(r.get(c, "")) for c in columns) + " |"
-            for r in runs]
+    sep_cells: list[str] = []
+    col_idx = 0
+    while col_idx < len(columns):
+        sep_cells.append("---")
+        col_idx += 1
+    sep = "| " + " | ".join(sep_cells) + " |"
+    rows = []
+    run_idx = 0
+    while run_idx < len(runs):
+        r = runs[run_idx]
+        cells: list[str] = []
+        col_idx = 0
+        while col_idx < len(columns):
+            cells.append(str(r.get(columns[col_idx], "")))
+            col_idx += 1
+        rows.append("| " + " | ".join(cells) + " |")
+        run_idx += 1
     return "\n".join([header, sep, *rows]) + "\n"
 
 
