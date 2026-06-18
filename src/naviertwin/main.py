@@ -23,6 +23,36 @@ from typing import Any
 from naviertwin import __version__
 
 
+def _csv_items(value: str, *, lowercase: bool = False) -> list[str]:
+    """쉼표 구분 값을 공백 제거 후 비어 있지 않은 항목으로 반환한다."""
+    items = filter(None, map(str.strip, value.split(",")))
+    if lowercase:
+        return list(map(str.lower, items))
+    return list(items)
+
+
+def _nonempty_strings(values: Any) -> list[str]:
+    """값 컬렉션을 비어 있지 않은 문자열 목록으로 변환한다."""
+    return list(filter(None, map(str, values)))
+
+
+def _sample_header(width: int) -> str:
+    """sample_N CSV 헤더를 만든다."""
+    return ",".join(map(lambda idx: f"sample_{idx}", range(width)))
+
+
+def _checks_passed(checks: list[dict[str, Any]]) -> bool:
+    """checks payload의 passed 값을 모두 확인한다."""
+    return all(map(lambda check: check["passed"], checks))
+
+
+def _metadata_without_artifact_integrity(metadata: dict[str, Any]) -> dict[str, Any]:
+    """artifact_integrity 항목만 제거한 metadata 사본을 만든다."""
+    copied = dict(metadata)
+    copied.pop("artifact_integrity", None)
+    return copied
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """CLI 인수 파서를 구성하여 반환한다.
 
@@ -778,7 +808,8 @@ def _run_pipeline_demo(*, outdir: str, n_modes: int, surrogate: str) -> int:
         t = params[:, 0]
         basis = rng.standard_normal((n_features, rank))
         coeff_rows = []
-        for mode in range(rank):
+        mode = 0
+        while mode < rank:
             frequency = mode + 1
             if mode % 3 == 0:
                 coeff_rows.append(np.sin(frequency * np.pi * t))
@@ -786,6 +817,7 @@ def _run_pipeline_demo(*, outdir: str, n_modes: int, surrogate: str) -> int:
                 coeff_rows.append(np.cos(frequency * np.pi * t))
             else:
                 coeff_rows.append((t - 0.5) ** frequency)
+            mode += 1
         coeffs = np.vstack(coeff_rows)
         snapshots = basis @ coeffs + 0.005 * rng.standard_normal((n_features, n_snapshots))
 
@@ -835,7 +867,7 @@ def _run_pipeline_demo(*, outdir: str, n_modes: int, surrogate: str) -> int:
 
 def _parse_csv_tokens(value: str, *, allowed: set[str], label: str) -> list[str]:
     """쉼표 구분 문자열을 검증된 토큰 목록으로 변환한다."""
-    parsed = [token.strip().lower() for token in value.split(",") if token.strip()]
+    parsed = _csv_items(value, lowercase=True)
     if not parsed:
         raise ValueError(f"{label} must include at least one value")
     invalid = sorted(set(parsed) - allowed)
@@ -848,7 +880,11 @@ def _parse_csv_tokens(value: str, *, allowed: set[str], label: str) -> list[str]
 def _parse_csv_ints(value: str, *, label: str) -> list[int]:
     """쉼표 구분 문자열을 양의 정수 목록으로 변환한다."""
     parsed: list[int] = []
-    for token in value.split(","):
+    tokens = value.split(",")
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        index += 1
         stripped = token.strip()
         if not stripped:
             continue
@@ -899,13 +935,16 @@ def _run_model_sweep(
         if features < 4:
             raise ValueError("features must be at least 4")
 
+        from itertools import product
+
         rng = np.random.default_rng(seed)
         rank = max(max(mode_values), 2)
         params = np.linspace(0, 1, samples).reshape(-1, 1)
         t = params[:, 0]
         basis = rng.standard_normal((features, rank))
         coeff_rows = []
-        for mode in range(rank):
+        mode = 0
+        while mode < rank:
             frequency = mode + 1
             if mode % 3 == 0:
                 coeff_rows.append(np.sin(frequency * np.pi * t))
@@ -913,15 +952,11 @@ def _run_model_sweep(
                 coeff_rows.append(np.cos(frequency * np.pi * t))
             else:
                 coeff_rows.append((t - 0.5) ** frequency)
+            mode += 1
         coeffs = np.vstack(coeff_rows)
         snapshots = basis @ coeffs + 0.005 * rng.standard_normal((features, samples))
 
-        configs = [
-            (reducer, mode_count, surrogate)
-            for reducer in reducer_values
-            for mode_count in mode_values
-            for surrogate in surrogate_values
-        ]
+        configs = list(product(reducer_values, mode_values, surrogate_values))
         rows = compare_models(snapshots, params, configs, seed=seed)
     except (ImportError, ValueError) as exc:
         print(f"model-sweep error: {exc}", file=sys.stderr)
@@ -952,7 +987,11 @@ def _expand_csv_snapshot_paths(value: str) -> list[Path]:
     from glob import glob
 
     paths: list[Path] = []
-    for token in value.split(","):
+    tokens = value.split(",")
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        index += 1
         raw = token.strip()
         if not raw:
             continue
@@ -960,15 +999,15 @@ def _expand_csv_snapshot_paths(value: str) -> list[Path]:
         if candidate.is_dir():
             matches = sorted(candidate.glob("*.csv"))
         else:
-            matches = [Path(match) for match in sorted(glob(str(candidate)))]
+            matches = list(map(Path, sorted(glob(str(candidate)))))
             if not matches:
                 matches = [candidate]
         paths.extend(matches)
 
-    unique_paths = list(dict.fromkeys(path.resolve() for path in paths))
+    unique_paths = list(dict.fromkeys(map(Path.resolve, paths)))
     if not unique_paths:
         raise ValueError("csv-snapshots must resolve to at least one CSV file")
-    missing = [str(path) for path in unique_paths if not path.exists()]
+    missing = list(map(str, filter(lambda path: not path.exists(), unique_paths)))
     if missing:
         raise FileNotFoundError(f"CSV snapshot file not found: {missing[0]}")
     return unique_paths
@@ -998,7 +1037,7 @@ def _load_build_twin_params(
 
     df = pd.read_csv(params_path)
     if param_columns:
-        columns = [column.strip() for column in param_columns.split(",") if column.strip()]
+        columns = _csv_items(param_columns)
         invalid = sorted(set(columns) - set(map(str, df.columns)))
         if invalid:
             raise ValueError(f"unsupported param-columns: {','.join(invalid)}")
@@ -1014,7 +1053,7 @@ def _load_build_twin_params(
         )
     return values, _build_parameter_contract(
         values,
-        names=[str(column) for column in columns],
+        names=list(map(str, columns)),
         source=str(Path(params_path).expanduser()),
     )
 
@@ -1035,14 +1074,16 @@ def _build_parameter_contract(
         raise ValueError("parameter names must match parameter dimension")
     mins = np.min(array, axis=0)
     maxs = np.max(array, axis=0)
-    ranges = [
-        {
-            "name": name,
-            "observed_min": float(mins[index]),
-            "observed_max": float(maxs[index]),
-        }
-        for index, name in enumerate(names)
-    ]
+    ranges = list(
+        map(
+            lambda item: {
+                "name": item[1],
+                "observed_min": float(mins[item[0]]),
+                "observed_max": float(maxs[item[0]]),
+            },
+            enumerate(names),
+        )
+    )
     return {
         "schema": "naviertwin-parameter-contract-v1",
         "source": source,
@@ -1068,11 +1109,11 @@ def _load_build_twin_snapshots(
         paths = _expand_csv_snapshot_paths(csv_snapshots)
         column = field_column or field
         if not column:
-            raise ValueError("--field-column or --field is required for --csv-snapshots")
+            raise ValueError("--field-column or --field is required with --csv-snapshots")
         snapshots, coords = load_csv_snapshots(paths, column=column)
         metadata: dict[str, object] = {
             "source": "csv-snapshots",
-            "files": [str(path) for path in paths],
+            "files": list(map(str, paths)),
             "field_column": column,
         }
         if coords is not None:
@@ -1288,7 +1329,11 @@ def _artifact_integrity_map(paths: dict[str, Path]) -> dict[str, dict[str, Any]]
     from naviertwin.utils.hashing import hash_file
 
     records: dict[str, dict[str, Any]] = {}
-    for name, path in paths.items():
+    path_items = list(paths.items())
+    index = 0
+    while index < len(path_items):
+        name, path = path_items[index]
+        index += 1
         if path.exists():
             records[name] = {
                 "path": str(path),
@@ -1320,7 +1365,7 @@ def _load_predict_twin_params(
 
     df = pd.read_csv(params_csv)
     if param_columns:
-        columns = [column.strip() for column in param_columns.split(",") if column.strip()]
+        columns = _csv_items(param_columns)
         invalid = sorted(set(columns) - set(map(str, df.columns)))
         if invalid:
             raise ValueError(f"unsupported param-columns: {','.join(invalid)}")
@@ -1334,7 +1379,11 @@ def _load_predict_twin_params(
 def _parse_csv_floats(value: str, *, label: str) -> list[float]:
     """쉼표 구분 문자열을 float 목록으로 변환한다."""
     parsed: list[float] = []
-    for token in value.split(","):
+    tokens = value.split(",")
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        index += 1
         stripped = token.strip()
         if not stripped:
             continue
@@ -1401,21 +1450,25 @@ def _check_twin_parameter_contract(
         raise ValueError(f"params must be 1D or 2D, got shape {array.shape}")
 
     expected_dim = int(contract.get("dim", -1))
-    names = [str(name) for name in contract.get("names", [])]
+    names = list(map(str, contract.get("names", [])))
     source = str(contract.get("source", "unknown"))
     if input_dim != expected_dim:
         display_names = ", ".join(names) if names else "-"
         raise ValueError(
             "parameter dimension mismatch: "
             f"expected {expected_dim} from contract source={source} "
-            f"names=[{display_names}], got {input_dim} for input shape {list(array.shape)}"
+            f"names=[{display_names}], got {input_dim} with input shape {list(array.shape)}"
         )
 
     warnings: list[dict[str, Any]] = []
     ranges = contract.get("ranges", [])
     if isinstance(ranges, list):
-        for index, record in enumerate(ranges[:input_dim]):
+        limited_ranges = ranges[:input_dim]
+        index = 0
+        while index < len(limited_ranges):
+            record = limited_ranges[index]
             if not isinstance(record, dict):
+                index += 1
                 continue
             name = str(record.get("name", names[index] if index < len(names) else index))
             observed_min = float(record.get("observed_min", float("-inf")))
@@ -1432,6 +1485,7 @@ def _check_twin_parameter_contract(
                         "input_max": actual_max,
                     }
                 )
+            index += 1
 
     return {
         "available": True,
@@ -1477,7 +1531,7 @@ def _run_predict_twin(
         if output_path is not None:
             output_path.parent.mkdir(parents=True, exist_ok=True)
             matrix = prediction.reshape(-1, 1) if prediction.ndim == 1 else prediction
-            header = ",".join(f"sample_{idx}" for idx in range(matrix.shape[1]))
+            header = _sample_header(matrix.shape[1])
             np.savetxt(output_path, matrix, delimiter=",", header=header, comments="")
 
         preview_array = prediction.reshape(-1)[: min(8, prediction.size)]
@@ -1490,7 +1544,7 @@ def _run_predict_twin(
             "output": str(output_path) if output_path is not None else None,
             "parameter_contract": parameter_contract,
             "parameter_check": parameter_check,
-            "preview": [float(value) for value in preview_array],
+            "preview": list(map(float, preview_array)),
         }
     except (ImportError, RuntimeError, OSError, ValueError) as exc:
         print(f"predict-twin error: {exc}", file=sys.stderr)
@@ -1545,16 +1599,20 @@ def _benchmark_twin_payload(
     parameter_contract = _load_twin_parameter_contract(engine_file)
     parameter_check = _check_twin_parameter_contract(params, parameter_contract)
 
-    for _ in range(warmup):
+    warmup_index = 0
+    while warmup_index < warmup:
         engine.predict(params)
+        warmup_index += 1
 
     samples_ms: list[float] = []
     prediction_shape: list[int] = []
-    for _ in range(repeat):
+    repeat_index = 0
+    while repeat_index < repeat:
         started = perf_counter()
         prediction = np.asarray(engine.predict(params), dtype=np.float64)
         samples_ms.append(float((perf_counter() - started) * 1000.0))
         prediction_shape = list(prediction.shape)
+        repeat_index += 1
 
     durations = np.asarray(samples_ms, dtype=np.float64)
     mean_ms = float(np.mean(durations))
@@ -1675,7 +1733,10 @@ def _benchmark_twin_acceptance(
         ("latency_ms.p95", "p95", max_p95_ms),
         ("latency_ms.p99", "p99", max_p99_ms),
     ]
-    for metric, key, threshold in latency_specs:
+    latency_index = 0
+    while latency_index < len(latency_specs):
+        metric, key, threshold = latency_specs[latency_index]
+        latency_index += 1
         if threshold is None:
             continue
         value = float(latency_ms[key])
@@ -1703,7 +1764,7 @@ def _benchmark_twin_acceptance(
 
     return {
         "configured": bool(checks),
-        "passed": all(check["passed"] for check in checks),
+        "passed": _checks_passed(checks),
         "checks": checks,
     }
 
@@ -1825,7 +1886,10 @@ def _validate_twin_acceptance(
         ("r2", ">=", min_r2),
         ("relative_l2", "<=", max_relative_l2),
     ]
-    for metric, op, threshold in specs:
+    spec_index = 0
+    while spec_index < len(specs):
+        metric, op, threshold = specs[spec_index]
+        spec_index += 1
         if threshold is None:
             continue
         value = float(metrics.get(metric, float("nan")))
@@ -1841,7 +1905,7 @@ def _validate_twin_acceptance(
         )
     return {
         "configured": bool(checks),
-        "passed": all(check["passed"] for check in checks),
+        "passed": _checks_passed(checks),
         "checks": checks,
     }
 
@@ -1907,7 +1971,7 @@ def _package_twin_payload(
         "status": "ok",
         "output": str(output_path),
         "artifacts_dir": str(root),
-        "files": [path.name for path in files],
+        "files": list(map(lambda path: path.name, files)),
         "generated_entries": list(delivery_entries),
         "source_integrity": source_integrity,
         "latency_slo": latency_slo,
@@ -2009,7 +2073,7 @@ def _build_twin_delivery_entries(
         "format": "NavierTwin delivery package",
         "schema": "naviertwin-delivery-v1",
         "artifacts_dir": str(root),
-        "files": [path.name for path in files],
+        "files": list(map(lambda path: path.name, files)),
         "generated_entries": generated_entries,
         "source_integrity": source_integrity,
         "parameter_contract": parameter_contract,
@@ -2017,11 +2081,7 @@ def _build_twin_delivery_entries(
         "build_manifest": {
             "config": manifest.get("config", {}),
             "metrics": manifest.get("metrics", {}),
-            "extra": {
-                key: value
-                for key, value in extra_meta.items()
-                if key != "artifact_integrity"
-            },
+            "extra": _metadata_without_artifact_integrity(extra_meta),
         },
         "commands": {
             "accept_package": accept_command,
@@ -2040,7 +2100,10 @@ def _build_twin_delivery_entries(
         ranges = parameter_contract.get("ranges", [])
         range_lines: list[str] = []
         if isinstance(ranges, list):
-            for record in ranges:
+            range_index = 0
+            while range_index < len(ranges):
+                record = ranges[range_index]
+                range_index += 1
                 if not isinstance(record, dict):
                     continue
                 range_lines.append(
@@ -2063,12 +2126,12 @@ def _build_twin_delivery_entries(
             "========================================",
             "",
             "Included core artifacts:",
-            "- engine.pkl: loadable TwinEngine for parameter-to-field prediction",
+            "- engine.pkl: loadable parameter-to-field prediction TwinEngine",
             "- manifest.json: build configuration, metrics, and artifact integrity",
             "- metrics.json: build/validation metrics from build-twin",
             "- report.html: customer-readable build report",
             "- validation.json: optional independent validation report",
-            "- sample_params.csv: generated example input parameters for this twin",
+            "- sample_params.csv: generated example input parameters used by this twin",
             "",
             *contract_lines,
             "",
@@ -2087,7 +2150,7 @@ def _build_twin_delivery_entries(
             "5. Validate against held-out snapshots:",
             f"   {validate_command}",
             "",
-            "See delivery.json for machine-readable package metadata.",
+            "See delivery.json to read machine-readable package metadata.",
             "",
         ]
     )
@@ -2102,7 +2165,8 @@ def _build_twin_delivery_entries(
 
 def _command_with_parts(*parts: str | None) -> str:
     """비어 있지 않은 CLI 조각만 공백 하나로 이어 붙인다."""
-    return " ".join(part.strip() for part in parts if part and part.strip())
+    stripped = map(lambda part: part.strip() if part else "", parts)
+    return " ".join(filter(None, stripped))
 
 
 def _build_latency_slo_policy(
@@ -2115,17 +2179,15 @@ def _build_latency_slo_policy(
     source: str,
 ) -> dict[str, Any] | None:
     """delivery metadata에 기록할 latency SLO 정책을 만든다."""
-    thresholds = {
-        key: float(value)
-        for key, value in {
-            "max_mean_ms": max_mean_ms,
-            "max_p50_ms": max_p50_ms,
-            "max_p95_ms": max_p95_ms,
-            "max_p99_ms": max_p99_ms,
-            "min_throughput_hz": min_throughput_hz,
-        }.items()
-        if value is not None
+    raw_thresholds = {
+        "max_mean_ms": max_mean_ms,
+        "max_p50_ms": max_p50_ms,
+        "max_p95_ms": max_p95_ms,
+        "max_p99_ms": max_p99_ms,
+        "min_throughput_hz": min_throughput_hz,
     }
+    threshold_items = filter(lambda item: item[1] is not None, raw_thresholds.items())
+    thresholds = dict(map(lambda item: (item[0], float(item[1])), threshold_items))
     if not thresholds:
         return None
     return {
@@ -2150,7 +2212,10 @@ def _latency_slo_command_args(policy: dict[str, Any] | None) -> str:
         ("min_throughput_hz", "--min-throughput-hz"),
     ]
     args: list[str] = []
-    for key, flag in flag_map:
+    flag_index = 0
+    while flag_index < len(flag_map):
+        key, flag = flag_map[flag_index]
+        flag_index += 1
         if key not in thresholds:
             continue
         args.extend([flag, f"{float(thresholds[key]):.12g}"])
@@ -2178,7 +2243,11 @@ def _latency_slo_readme_lines(policy: dict[str, Any] | None) -> list[str]:
         "min_throughput_hz": "throughput >=",
     }
     lines = ["Recommended latency SLO:"]
-    for key in label_map:
+    label_keys = list(label_map)
+    label_index = 0
+    while label_index < len(label_keys):
+        key = label_keys[label_index]
+        label_index += 1
         if key not in thresholds:
             continue
         unit = "Hz" if key == "min_throughput_hz" else "ms"
@@ -2200,7 +2269,11 @@ def _latency_slo_thresholds(policy: dict[str, Any] | None) -> dict[str, float | 
     thresholds = policy.get("thresholds")
     if not isinstance(thresholds, dict):
         return values
-    for key in values:
+    keys = list(values)
+    key_index = 0
+    while key_index < len(keys):
+        key = keys[key_index]
+        key_index += 1
         if key not in thresholds:
             continue
         try:
@@ -2228,7 +2301,11 @@ def _merge_latency_slo_policy(
         "max_p99_ms": max_p99_ms,
         "min_throughput_hz": min_throughput_hz,
     }
-    for key, value in overrides.items():
+    override_items = list(overrides.items())
+    override_index = 0
+    while override_index < len(override_items):
+        key, value = override_items[override_index]
+        override_index += 1
         if value is not None:
             thresholds[key] = float(value)
     return thresholds
@@ -2238,7 +2315,7 @@ def _parameter_input_args_from_contract(contract: dict[str, Any] | None) -> str:
     """delivery command에 넣을 contract-aware 입력 인자 예시를 만든다."""
     if not isinstance(contract, dict):
         return "--params 0.25"
-    names = [str(name) for name in contract.get("names", []) if str(name)]
+    names = _nonempty_strings(contract.get("names", []))
     try:
         dim = int(contract.get("dim", 0))
     except (TypeError, ValueError):
@@ -2255,7 +2332,7 @@ def _sample_params_csv_from_contract(contract: dict[str, Any] | None) -> str | N
     """parameter contract에서 1-row sample_params.csv 내용을 만든다."""
     if not isinstance(contract, dict):
         return None
-    names = [str(name) for name in contract.get("names", []) if str(name)]
+    names = _nonempty_strings(contract.get("names", []))
     try:
         dim = int(contract.get("dim", 0))
     except (TypeError, ValueError):
@@ -2276,7 +2353,11 @@ def _example_params_from_contract(contract: dict[str, Any] | None) -> str:
     ranges = contract.get("ranges", [])
     values: list[float] = []
     if isinstance(ranges, list):
-        for record in ranges[:dim]:
+        limited_ranges = ranges[:dim]
+        range_index = 0
+        while range_index < len(limited_ranges):
+            record = limited_ranges[range_index]
+            range_index += 1
             if not isinstance(record, dict):
                 break
             try:
@@ -2287,7 +2368,7 @@ def _example_params_from_contract(contract: dict[str, Any] | None) -> str:
             values.append((observed_min + observed_max) / 2.0)
     if len(values) != dim:
         values = [0.25] * max(1, dim)
-    return ",".join(f"{value:.6g}" for value in values)
+    return ",".join(map(lambda value: f"{value:.6g}", values))
 
 
 def _verify_twin_source_integrity(root: Path) -> dict[str, Any]:
@@ -2303,7 +2384,11 @@ def _verify_twin_source_integrity(root: Path) -> dict[str, Any]:
         return {"configured": False, "passed": True, "checks": []}
 
     checks: list[dict[str, Any]] = []
-    for name, record in records.items():
+    record_items = list(records.items())
+    record_index = 0
+    while record_index < len(record_items):
+        name, record = record_items[record_index]
+        record_index += 1
         if not isinstance(record, dict):
             continue
         recorded_path = Path(str(record.get("path", name)))
@@ -2327,7 +2412,7 @@ def _verify_twin_source_integrity(root: Path) -> dict[str, Any]:
             }
         )
         if not passed:
-            raise ValueError(f"integrity mismatch for {candidate.name}")
+            raise ValueError(f"integrity mismatch: {candidate.name}")
     return {"configured": True, "passed": True, "checks": checks}
 
 
@@ -2339,15 +2424,16 @@ def _collect_twin_package_artifacts(
     """고객 전달 ZIP에 포함할 build-twin 산출물 목록을 결정한다."""
     required = ["engine.pkl", "manifest.json"]
     optional = ["metrics.json", "pipeline.h5", "report.html"]
-    missing = [name for name in required if not (root / name).exists()]
+    missing = list(filter(lambda name: not (root / name).exists(), required))
     if missing:
         raise FileNotFoundError(f"missing required twin artifact: {missing[0]}")
 
-    files = [root / name for name in [*optional, *required] if (root / name).exists()]
+    artifact_names = filter(lambda name: (root / name).exists(), [*optional, *required])
+    files = list(map(lambda name: root / name, artifact_names))
     validation_path = Path(include_validation).expanduser() if include_validation else root / "validation.json"
     if validation_path.exists():
         files.append(validation_path)
-    return list(dict.fromkeys(path.resolve() for path in files))
+    return list(dict.fromkeys(map(Path.resolve, files)))
 
 
 def _run_verify_twin_package(
@@ -2561,13 +2647,20 @@ def _format_accept_twin_package_summary(payload: dict[str, Any]) -> str:
             "| --- | --- |",
         ]
     )
-    for key in ("max_mean_ms", "max_p50_ms", "max_p95_ms", "max_p99_ms", "min_throughput_hz"):
+    slo_keys = ("max_mean_ms", "max_p50_ms", "max_p95_ms", "max_p99_ms", "min_throughput_hz")
+    slo_index = 0
+    while slo_index < len(slo_keys):
+        key = slo_keys[slo_index]
+        slo_index += 1
         value = effective_slo.get(key) if isinstance(effective_slo, dict) else None
         lines.append(f"| {key} | {_summary_float(value)} |")
 
     lines.extend(["", "## SLO Checks", "", "| Metric | Rule | Threshold | Value | Result |", "| --- | --- | --- | --- | --- |"])
     if checks:
-        for check in checks:
+        check_index = 0
+        while check_index < len(checks):
+            check = checks[check_index]
+            check_index += 1
             if not isinstance(check, dict):
                 continue
             lines.append(
@@ -2585,7 +2678,7 @@ def _format_accept_twin_package_summary(payload: dict[str, Any]) -> str:
     errors = payload.get("verification", {}).get("errors", [])
     if isinstance(errors, list) and errors:
         lines.extend(["", "## Verification Errors", ""])
-        lines.extend(f"- {error}" for error in errors)
+        lines.extend(map(lambda error: f"- {error}", errors))
 
     return "\n".join(lines) + "\n"
 
@@ -2694,7 +2787,7 @@ def _accept_twin_package_archive(
     if prediction_path is not None:
         prediction_path.parent.mkdir(parents=True, exist_ok=True)
         matrix = prediction.reshape(-1, 1) if prediction.ndim == 1 else prediction
-        header = ",".join(f"sample_{idx}" for idx in range(matrix.shape[1]))
+        header = _sample_header(matrix.shape[1])
         np.savetxt(prediction_path, matrix, delimiter=",", header=header, comments="")
 
     preview_array = prediction.reshape(-1)[: min(8, prediction.size)]
@@ -2706,7 +2799,7 @@ def _accept_twin_package_archive(
         "output": str(prediction_path) if prediction_path is not None else None,
         "parameter_contract": parameter_contract,
         "parameter_check": parameter_check,
-        "preview": [float(value) for value in preview_array],
+        "preview": list(map(float, preview_array)),
     }
     payload["acceptance"]["prediction"] = True
 
@@ -2724,16 +2817,20 @@ def _accept_twin_package_archive(
             "acceptance": benchmark_acceptance,
         }
     else:
-        for _ in range(warmup):
+        warmup_index = 0
+        while warmup_index < warmup:
             engine.predict(params_array)
+            warmup_index += 1
 
         durations_ms: list[float] = []
         benchmark_prediction_shape: list[int] = []
-        for _ in range(repeat):
+        repeat_index = 0
+        while repeat_index < repeat:
             started = perf_counter()
             benchmark_prediction = np.asarray(engine.predict(params_array), dtype=np.float64)
             durations_ms.append(float((perf_counter() - started) * 1000.0))
             benchmark_prediction_shape = list(benchmark_prediction.shape)
+            repeat_index += 1
 
         durations = np.asarray(durations_ms, dtype=np.float64)
         mean_ms = float(np.mean(durations))
@@ -2769,8 +2866,7 @@ def _accept_twin_package_archive(
         }
     payload["acceptance"]["benchmark"] = bool(benchmark_acceptance["passed"])
     payload["acceptance"]["passed"] = all(
-        bool(payload["acceptance"][name])
-        for name in ("package", "prediction", "benchmark")
+        map(lambda name: bool(payload["acceptance"][name]), ("package", "prediction", "benchmark"))
     )
     payload["status"] = "ok" if payload["acceptance"]["passed"] else "failed"
     return payload
@@ -2813,7 +2909,7 @@ def _param_columns_from_contract(contract: dict[str, Any] | None) -> str | None:
     """계약에 명확한 파라미터 이름이 있으면 CSV 컬럼 인자로 변환한다."""
     if not isinstance(contract, dict):
         return None
-    names = [str(name) for name in contract.get("names", []) if str(name)]
+    names = _nonempty_strings(contract.get("names", []))
     try:
         dim = int(contract.get("dim", 0))
     except (TypeError, ValueError):
@@ -2845,7 +2941,11 @@ def _extract_verified_twin_package(package_path: Path, extract_to: Path) -> list
     with tempfile.TemporaryDirectory(prefix=f".{root.name}.", dir=root.parent) as staging_raw:
         staging = Path(staging_raw).resolve()
         with zipfile.ZipFile(package_path) as archive:
-            for info in archive.infolist():
+            archive_infos = archive.infolist()
+            archive_index = 0
+            while archive_index < len(archive_infos):
+                info = archive_infos[archive_index]
+                archive_index += 1
                 name = info.filename
                 if info.is_dir():
                     continue
@@ -2884,11 +2984,19 @@ def _verify_twin_package_archive(
     with zipfile.ZipFile(package_path) as archive:
         archived_names = archive.namelist()
         names = set(archived_names)
-        for name, count in sorted(Counter(archived_names).items()):
+        archive_counts = sorted(Counter(archived_names).items())
+        archive_count_index = 0
+        while archive_count_index < len(archive_counts):
+            name, count = archive_counts[archive_count_index]
+            archive_count_index += 1
             if count > 1:
                 duplicate_archive_entries.append(name)
                 errors.append(f"duplicate archive entry: {name}")
-        for name in sorted(names):
+        sorted_names = sorted(names)
+        sorted_name_index = 0
+        while sorted_name_index < len(sorted_names):
+            name = sorted_names[sorted_name_index]
+            sorted_name_index += 1
             if not _is_safe_zip_member_name(name):
                 errors.append(f"unsafe archive entry: {name}")
         if "MANIFEST.json" not in names:
@@ -2900,7 +3008,10 @@ def _verify_twin_package_archive(
                 raise ValueError("MANIFEST.json must contain a list")
 
         manifest_names: set[str] = set()
-        for entry in manifest_entries:
+        manifest_entry_index = 0
+        while manifest_entry_index < len(manifest_entries):
+            entry = manifest_entries[manifest_entry_index]
+            manifest_entry_index += 1
             if not isinstance(entry, dict):
                 errors.append("invalid MANIFEST.json entry")
                 continue
@@ -2932,11 +3043,19 @@ def _verify_twin_package_archive(
                 }
             )
 
-    for name in sorted((names - {"MANIFEST.json"}) - manifest_names):
+    extra_names = sorted((names - {"MANIFEST.json"}) - manifest_names)
+    extra_name_index = 0
+    while extra_name_index < len(extra_names):
+        name = extra_names[extra_name_index]
+        extra_name_index += 1
         errors.append(f"unmanifested archive entry: {name}")
-    for name in sorted(required_entries - manifest_names):
+    missing_required_names = sorted(required_entries - manifest_names)
+    missing_required_index = 0
+    while missing_required_index < len(missing_required_names):
+        name = missing_required_names[missing_required_index]
+        missing_required_index += 1
         errors.append(f"missing required artifact in MANIFEST.json: {name}")
-    passed = not errors and all(check.get("passed") is True for check in checks)
+    passed = not errors and all(map(lambda check: check.get("passed") is True, checks))
     payload = {
         "status": "ok" if passed else "failed",
         "package": str(package_path),
@@ -3211,7 +3330,11 @@ def _run_feature_pack(args: argparse.Namespace) -> int:
         if getattr(args, "as_json", False):
             print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         else:
-            for item in payload["feature_packs"]:
+            feature_packs = payload["feature_packs"]
+            pack_index = 0
+            while pack_index < len(feature_packs):
+                item = feature_packs[pack_index]
+                pack_index += 1
                 state = "installed" if item["installed"] else "missing"
                 missing = ",".join(item["missing_modules"]) or "-"
                 print(f"{item['id']}: {state} | missing={missing} | {item['download_url']}")
