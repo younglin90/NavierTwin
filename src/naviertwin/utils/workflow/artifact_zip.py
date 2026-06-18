@@ -35,7 +35,9 @@ def zip_artifacts(
     manifest: list[dict[str, Any]] = []
     seen: set[str] = set()
     with zipfile.ZipFile(out, "w") as zf:
-        for f in files:
+        file_idx = 0
+        while file_idx < len(files):
+            f = files[file_idx]
             fp = Path(f)
             if fp.name == manifest_name or fp.name in seen:
                 raise ValueError(f"duplicate or reserved archive entry: {fp.name}")
@@ -49,11 +51,16 @@ def zip_artifacts(
                     "sha256": sha256(data).hexdigest(),
                 }
             )
-        for name in sorted(extra_entries or {}):
+            file_idx += 1
+        extras = extra_entries or {}
+        extra_names = sorted(extras)
+        extra_idx = 0
+        while extra_idx < len(extra_names):
+            name = extra_names[extra_idx]
             if name == manifest_name or name in seen:
                 raise ValueError(f"duplicate or reserved archive entry: {name}")
             seen.add(name)
-            payload = (extra_entries or {})[name]
+            payload = extras[name]
             data = payload.encode("utf-8") if isinstance(payload, str) else payload
             zf.writestr(name, data)
             manifest.append(
@@ -63,6 +70,7 @@ def zip_artifacts(
                     "sha256": sha256(data).hexdigest(),
                 }
             )
+            extra_idx += 1
         zf.writestr(manifest_name, json.dumps(manifest, indent=2, sort_keys=True))
     return out
 
