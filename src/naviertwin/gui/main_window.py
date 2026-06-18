@@ -62,7 +62,7 @@ def open_file_filter() -> str:
     from naviertwin.core.cfd_reader import ReaderFactory
     from naviertwin.gui.panels.import_panel import cfd_file_filter
 
-    registered = " ".join(f"*{ext}" for ext in ReaderFactory.registered_extensions())
+    registered = " ".join(map(lambda ext: f"*{ext}", ReaderFactory.registered_extensions()))
     return (
         f"All NavierTwin Inputs (*.ntwin {registered});;"
         "NavierTwin Project (*.ntwin);;"
@@ -97,6 +97,21 @@ def format_update_check_message(result: UpdateCheckResult) -> tuple[str, str]:
 def default_config_path() -> Path:
     """기본 GUI 설정 파일 경로를 반환한다."""
     return Path.home() / ".naviertwin" / "config.json"
+
+
+def _paths_from_texts(paths: list[str]) -> list[Path]:
+    """문자열 경로 목록을 Path 목록으로 바꾼다."""
+    return list(map(Path, paths))
+
+
+def _join_path_csv(paths: list[Path]) -> str:
+    """Path 목록을 CLI CSV 인자로 만든다."""
+    return ",".join(map(str, paths))
+
+
+def _split_csv_preserve_empty(value: str) -> list[str]:
+    """빈 칸을 보존하며 쉼표 구분 문자열을 정리한다."""
+    return list(map(str.strip, value.split(",")))
 
 
 def _load_stylesheet(theme: str = "dark") -> str:
@@ -236,7 +251,10 @@ class MainWindow(QMainWindow):
             (self._export_panel, "panel.export", "⑥", "Export"),
         ]
 
-        for widget, key, num, default in self._tab_title_specs:
+        tab_index = 0
+        while tab_index < len(self._tab_title_specs):
+            widget, key, num, default = self._tab_title_specs[tab_index]
+            tab_index += 1
             self._tabs.addTab(widget, self._localized_tab_title(key, num, default))
 
         vbox.addWidget(self._tabs)
@@ -351,7 +369,10 @@ class MainWindow(QMainWindow):
         self._t.set_language(lang)
         self._config.language = lang  # type: ignore[assignment]
         self.setWindowTitle(self._t("app.title", "NavierTwin — CFD Digital Twin"))
-        for widget, key, num, default in self._tab_title_specs:
+        tab_index = 0
+        while tab_index < len(self._tab_title_specs):
+            widget, key, num, default = self._tab_title_specs[tab_index]
+            tab_index += 1
             index = self._tabs.indexOf(widget)
             if index >= 0:
                 self._tabs.setTabText(index, self._localized_tab_title(key, num, default))
@@ -380,9 +401,9 @@ class MainWindow(QMainWindow):
         self, results: dict[str, dict[str, float]]
     ) -> None:
         """외부에서 모델 비교 대시보드 갱신."""
-        self._model_compare_results = {
-            name: dict(metrics) for name, metrics in results.items()
-        }
+        self._model_compare_results = dict(
+            map(lambda item: (item[0], dict(item[1])), results.items())
+        )
         if self._compare_panel is not None:
             self._compare_panel.update(self._model_compare_results)
 
@@ -520,17 +541,19 @@ class MainWindow(QMainWindow):
 
         view_menu.setTitle(self._t("menu.view", "View(&V)"))
         view_menu.clear()
-        for i in range(tabs.count()):
-            title = tabs.tabText(i)
+        tab_index = 0
+        while tab_index < tabs.count():
+            title = tabs.tabText(tab_index)
             action = QAction(
                 self._t("view.tab_action", "{title} Tab").format(title=title),
                 self,
             )
-            if i < 9:
-                action.setShortcut(f"Ctrl+{i + 1}")
-            action.setData(i)
+            if tab_index < 9:
+                action.setShortcut(f"Ctrl+{tab_index + 1}")
+            action.setData(tab_index)
             action.triggered.connect(self._switch_tab)
             view_menu.addAction(action)
+            tab_index += 1
 
         viewer_dock = getattr(self, "_viewer_dock", None)
         if viewer_dock is not None:
@@ -543,10 +566,14 @@ class MainWindow(QMainWindow):
             view_menu.addAction(library_action)
 
         view_menu.addSeparator()
-        for theme, key, default in (
+        theme_specs = (
             ("dark", "view.theme.dark", "Dark Theme"),
             ("light", "view.theme.light", "Light Theme"),
-        ):
+        )
+        theme_index = 0
+        while theme_index < len(theme_specs):
+            theme, key, default = theme_specs[theme_index]
+            theme_index += 1
             label = self._t(key, default)
             action = QAction(label, self)
             action.setCheckable(True)
@@ -556,10 +583,14 @@ class MainWindow(QMainWindow):
             view_menu.addAction(action)
 
         view_menu.addSeparator()
-        for lang, key, default in (
+        language_specs = (
             ("ko", "view.language.ko", "Korean"),
             ("en", "view.language.en", "English"),
-        ):
+        )
+        language_index = 0
+        while language_index < len(language_specs):
+            lang, key, default = language_specs[language_index]
+            language_index += 1
             label = self._t(key, default)
             action = QAction(label, self)
             action.setCheckable(True)
@@ -743,7 +774,10 @@ class MainWindow(QMainWindow):
         array = np.asarray(values, dtype=float).reshape(-1)
         shown_field = ""
         attached = 0
-        for spec in output_fields:
+        spec_index = 0
+        while spec_index < len(output_fields):
+            spec = output_fields[spec_index]
+            spec_index += 1
             if not isinstance(spec, Mapping):
                 continue
             try:
@@ -776,7 +810,11 @@ class MainWindow(QMainWindow):
 
     def _latest_prediction_metadata(self) -> Mapping[str, object]:
         """Return metadata from the latest model/engine that produced predictions."""
-        for source in (self._latest_engine, self._latest_surrogate, self._latest_reducer):
+        sources = (self._latest_engine, self._latest_surrogate, self._latest_reducer)
+        source_index = 0
+        while source_index < len(sources):
+            source = sources[source_index]
+            source_index += 1
             meta = getattr(source, "training_metadata", None)
             if isinstance(meta, Mapping):
                 return meta
@@ -784,14 +822,18 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _safe_prediction_field_name(raw_name: str) -> str:
-        safe = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in raw_name)
+        safe = "".join(map(lambda ch: ch if ch.isalnum() or ch == "_" else "_", raw_name))
         return f"twin_pred_{safe or 'field'}"
 
     def _prediction_field_name(self) -> str:
         """Reducer metadata에서 예측 대상 field 이름을 추출한다."""
         reducer = self._latest_reducer
         field = ""
-        for source in (reducer, self._latest_surrogate, self._latest_engine):
+        sources = (reducer, self._latest_surrogate, self._latest_engine)
+        source_index = 0
+        while source_index < len(sources):
+            source = sources[source_index]
+            source_index += 1
             meta = getattr(source, "training_metadata", None)
             if isinstance(meta, Mapping):
                 candidate = meta.get("field_name")
@@ -916,7 +958,11 @@ class MainWindow(QMainWindow):
         except Exception:
             return
         missing: list[str] = []
-        for pack_id in FEATURE_PACKS:
+        pack_ids = list(FEATURE_PACKS)
+        pack_index = 0
+        while pack_index < len(pack_ids):
+            pack_id = pack_ids[pack_index]
+            pack_index += 1
             try:
                 st = feature_pack_status(pack_id)
             except Exception:
@@ -932,9 +978,10 @@ class MainWindow(QMainWindow):
         msg = QMessageBox(self)
         msg.setIcon(QMessageBox.Icon.Information)
         msg.setWindowTitle("Feature Pack 안내")
+        missing_text = "\n  • ".join(missing)
         msg.setText(
             "다음 선택 기능 (Feature Pack) 이 아직 설치되지 않았습니다:\n\n"
-            f"  • {chr(10).join(['• ' + p for p in missing]).replace('• ', '', 1)}\n\n"
+            f"  • {missing_text}\n\n"
             "Library 탭에서 한 번의 클릭으로 PyPI 에서 직접 설치할 수 있습니다."
         )
         go_btn = msg.addButton("Library 탭으로 이동", QMessageBox.ButtonRole.AcceptRole)
@@ -978,7 +1025,10 @@ class MainWindow(QMainWindow):
             ("twin", self._twin_panel),
             ("export", self._export_panel),
         ]
-        for key, widget in targets:
+        target_index = 0
+        while target_index < len(targets):
+            key, widget = targets[target_index]
+            target_index += 1
             if widget is not None and route_key.startswith(key):
                 self._tabs.setCurrentWidget(widget)
                 self._set_status(f"기능 탭 이동: {route}")
@@ -1119,7 +1169,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _is_direct_field_model(model: object) -> bool:
-        """Return True for models that already predict full CFD fields."""
+        """Return True when models already predict full CFD fields."""
         meta = getattr(model, "training_metadata", None)
         if not isinstance(meta, Mapping):
             return False
@@ -1294,7 +1344,7 @@ class MainWindow(QMainWindow):
         )
         if outdir:
             self._build_twin_from_csv_paths(
-                [Path(path) for path in paths],
+                _paths_from_texts(paths),
                 field_column=field_column,
                 outdir=Path(outdir),
             )
@@ -1344,7 +1394,7 @@ class MainWindow(QMainWindow):
 
         return _run_build_twin(
             input_path=None,
-            csv_snapshots=",".join(str(path) for path in csv_paths),
+            csv_snapshots=_join_path_csv(csv_paths),
             field=None,
             field_column=field_column,
             params=None,
@@ -1753,7 +1803,7 @@ class MainWindow(QMainWindow):
         )
         self._validate_twin_from_paths(
             Path(engine_path),
-            [Path(path) for path in paths],
+            _paths_from_texts(paths),
             field_column=field_column,
             output=Path(output) if output else None,
             max_rmse=max_rmse,
@@ -1815,7 +1865,7 @@ class MainWindow(QMainWindow):
         )
         self._validate_twin_from_artifacts_dir_paths(
             Path(artifacts_dir),
-            [Path(path) for path in paths],
+            _paths_from_texts(paths),
             field_column=field_column,
             output=Path(output) if output else None,
             max_rmse=max_rmse,
@@ -1932,7 +1982,7 @@ class MainWindow(QMainWindow):
             engine_path=str(engine_path),
             artifacts_dir=None,
             input_path=None,
-            csv_snapshots=",".join(str(path) for path in csv_paths),
+            csv_snapshots=_join_path_csv(csv_paths),
             field=None,
             field_column=field_column,
             params=None,
@@ -1962,7 +2012,7 @@ class MainWindow(QMainWindow):
             engine_path=None,
             artifacts_dir=str(artifacts_dir),
             input_path=None,
-            csv_snapshots=",".join(str(path) for path in csv_paths),
+            csv_snapshots=_join_path_csv(csv_paths),
             field=None,
             field_column=field_column,
             params=None,
@@ -1982,11 +2032,14 @@ class MainWindow(QMainWindow):
         stripped = value.strip()
         if not stripped:
             return None, None, None
-        parts = [part.strip() for part in stripped.split(",")]
+        parts = _split_csv_preserve_empty(stripped)
         if len(parts) > 3:
             raise ValueError("검증 기준은 max_rmse,min_r2,max_relative_l2 순서로 최대 3개입니다.")
         parsed: list[float | None] = []
-        for part in parts:
+        part_index = 0
+        while part_index < len(parts):
+            part = parts[part_index]
+            part_index += 1
             if not part:
                 parsed.append(None)
                 continue
@@ -2004,7 +2057,7 @@ class MainWindow(QMainWindow):
         stripped = value.strip()
         if not stripped:
             return 2, 20
-        parts = [part.strip() for part in stripped.split(",")]
+        parts = _split_csv_preserve_empty(stripped)
         if len(parts) > 2:
             raise ValueError("벤치마크 반복은 warmup,repeat 순서로 최대 2개입니다.")
         warmup = int(parts[0]) if parts and parts[0] else 2
@@ -2021,12 +2074,15 @@ class MainWindow(QMainWindow):
         stripped = value.strip()
         if not stripped:
             return None, None
-        parts = [part.strip() for part in stripped.split(",")]
+        parts = _split_csv_preserve_empty(stripped)
         if len(parts) > 2:
             raise ValueError("SLO는 max_p95_ms,min_throughput_hz 순서로 최대 2개입니다.")
 
         parsed: list[float | None] = []
-        for part in parts:
+        part_index = 0
+        while part_index < len(parts):
+            part = parts[part_index]
+            part_index += 1
             if not part:
                 parsed.append(None)
                 continue
@@ -2870,10 +2926,12 @@ class MainWindow(QMainWindow):
     def _remember_recent_project(self, path: Path) -> None:
         """최근 프로젝트 목록에 path를 최신 항목으로 저장한다."""
         path_text = str(path.expanduser().resolve())
-        existing = [
-            item for item in self._config.recent_projects
-            if str(Path(item).expanduser().resolve()) != path_text
-        ]
+        existing = list(
+            filter(
+                lambda item: str(Path(item).expanduser().resolve()) != path_text,
+                self._config.recent_projects,
+            )
+        )
         self._config.recent_projects = [path_text, *existing][:10]
         self._save_gui_config()
         self._refresh_recent_projects_menu()
@@ -2881,10 +2939,12 @@ class MainWindow(QMainWindow):
     def _remove_recent_project(self, path: Path) -> None:
         """존재하지 않는 최근 프로젝트를 목록에서 제거한다."""
         path_text = str(path.expanduser().resolve())
-        self._config.recent_projects = [
-            item for item in self._config.recent_projects
-            if str(Path(item).expanduser().resolve()) != path_text
-        ]
+        self._config.recent_projects = list(
+            filter(
+                lambda item: str(Path(item).expanduser().resolve()) != path_text,
+                self._config.recent_projects,
+            )
+        )
         self._save_gui_config()
         self._refresh_recent_projects_menu()
 
@@ -2901,7 +2961,10 @@ class MainWindow(QMainWindow):
             menu.addAction(empty)
             return
 
-        for path_text in self._config.recent_projects:
+        project_index = 0
+        while project_index < len(self._config.recent_projects):
+            path_text = self._config.recent_projects[project_index]
+            project_index += 1
             path = Path(path_text)
             action = QAction(path.name or path_text, self)
             action.setToolTip(path_text)
@@ -2937,7 +3000,11 @@ class MainWindow(QMainWindow):
             return {}
 
         normalized: dict[str, object] = {}
-        for key, value in metadata.items():
+        meta_items = list(metadata.items())
+        meta_index = 0
+        while meta_index < len(meta_items):
+            key, value = meta_items[meta_index]
+            meta_index += 1
             if isinstance(key, str):
                 normalized[key] = value
         return normalized
