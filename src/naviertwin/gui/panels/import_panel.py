@@ -10,6 +10,8 @@ Signals:
 from __future__ import annotations
 
 import threading
+from collections import deque
+from functools import partial
 from pathlib import Path
 from typing import Optional
 
@@ -33,6 +35,15 @@ from PySide6.QtWidgets import (
 from naviertwin.core.cfd_reader import ReaderFactory
 
 
+def _format_reader_extension(ext: str) -> str:
+    return f"*{ext}"
+
+
+def _add_info_item(info_list: QListWidget, item: tuple[object, object]) -> None:
+    key, value = item
+    info_list.addItem(f"{key}: {value}")
+
+
 def supported_format_label() -> str:
     """고객에게 표시할 지원 포맷 요약을 반환한다."""
     return (
@@ -43,7 +54,9 @@ def supported_format_label() -> str:
 
 def cfd_file_filter() -> str:
     """ReaderFactory 등록 확장자를 모두 포함한 QFileDialog 필터."""
-    registered = " ".join(f"*{ext}" for ext in ReaderFactory.registered_extensions())
+    registered = " ".join(
+        map(_format_reader_extension, ReaderFactory.registered_extensions())
+    )
     return (
         f"All Supported CFD ({registered});;"
         "OpenFOAM (*.foam *.OpenFOAM);;"
@@ -235,7 +248,7 @@ class ImportPanel(QWidget):
         )
         if not paths:
             return
-        self._case_paths = [Path(path) for path in paths]
+        self._case_paths = list(map(Path, paths))
         self._current_path = self._case_paths[0]
         self._suppress_path_change_clear = True
         try:
@@ -310,7 +323,7 @@ class ImportPanel(QWidget):
             try:
                 dataset = self._factory.create_and_read(path)
                 if case_paths:
-                    dataset.metadata["case_paths"] = [str(item) for item in case_paths]
+                    dataset.metadata["case_paths"] = list(map(str, case_paths))
                     dataset.metadata["case_count"] = len(case_paths)
                     dataset.metadata["case_representative"] = str(path)
                 self._on_load_success(dataset)
@@ -374,10 +387,9 @@ class ImportPanel(QWidget):
             ("Time Steps", str(dataset.n_time_steps)),
             ("Fields", ", ".join(dataset.field_names) or "-"),
         ]
-        for k, v in items:
-            self._info_list.addItem(f"{k}: {v}")
-        for mk, mv in dataset.metadata.items():
-            self._info_list.addItem(f"{mk}: {mv}")
+        add_item = partial(_add_info_item, self._info_list)
+        deque(map(add_item, items), maxlen=0)
+        deque(map(add_item, dataset.metadata.items()), maxlen=0)
 
     def _log(self, msg: str) -> None:
         self._log_text.append(msg)
