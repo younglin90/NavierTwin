@@ -1,4 +1,4 @@
-"""Multi-row pipeline tab widget for the main workflow."""
+"""Multi-row pipeline tab widget used by the main workflow."""
 
 from __future__ import annotations
 
@@ -107,7 +107,7 @@ class PipelineTabWidget(QWidget):
         return None
 
     def setDocumentMode(self, _enabled: bool) -> None:
-        """Compatibility no-op for QTabWidget call sites."""
+        """Compatibility no-op with QTabWidget call sites."""
 
     def setElideMode(self, _mode: Qt.TextElideMode) -> None:
         """Compatibility no-op; pipeline buttons show full labels."""
@@ -130,20 +130,28 @@ class PipelineTabWidget(QWidget):
                 widget.setParent(self._tab_bar)
 
         columns = min(self._max_columns, max(1, len(self._buttons)))
-        for index, button in enumerate(self._buttons):
+        index = 0
+        while index < len(self._buttons):
+            button = self._buttons[index]
             row = index // columns
             col = index % columns
             self._tab_layout.addWidget(button, row, col)
-        for col in range(columns):
+            index += 1
+        col = 0
+        while col < columns:
             self._tab_layout.setColumnStretch(col, 1)
+            col += 1
 
     def _update_button_state(self) -> None:
         current = self.currentIndex()
-        for index, button in enumerate(self._buttons):
+        index = 0
+        while index < len(self._buttons):
+            button = self._buttons[index]
             button.setChecked(index == current)
             button.setProperty("active", index == current)
             button.style().unpolish(button)
             button.style().polish(button)
+            index += 1
 
 
 __all__ = ["PipelineTabWidget"]
