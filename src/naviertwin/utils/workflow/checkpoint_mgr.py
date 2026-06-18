@@ -39,10 +39,13 @@ class CheckpointManager:
                               reverse=(self.mode == "max"))
         keep = sorted_idx[:self.keep]
         drop = sorted_idx[self.keep:]
-        for d in drop:
+        idx = 0
+        while idx < len(drop):
+            d = drop[idx]
             p = Path(d["path"])
             if p.exists():
                 p.unlink()
+            idx += 1
         self.index = keep
 
 
