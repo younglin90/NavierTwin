@@ -333,12 +333,15 @@ def create_app() -> Any:
                 raise ValueError(
                     f"csv output requires 1D or 2D prediction, got shape {prediction.shape}"
                 )
-            header = ",".join(f"sample_{idx}" for idx in range(matrix.shape[1]))
+            header = ",".join(map(_format_sample_header, range(matrix.shape[1])))
             np.savetxt(target, matrix, delimiter=",", header=header, comments="")
         else:
             with target.open("wb") as handle:
                 np.save(handle, prediction)
         return str(target), normalized_format
+
+    def _format_sample_header(index: int) -> str:
+        return f"sample_{index}"
 
     @app.post("/twin/predict")
     def twin_predict(req: TwinPredictReq = Body(...)) -> dict[str, Any]:
@@ -398,7 +401,7 @@ def create_app() -> Any:
             "output_format": output_format,
             "parameter_contract": parameter_contract,
             "parameter_check": parameter_check,
-            "preview": [float(value) for value in preview],
+            "preview": list(map(float, preview)),
         }
         if req.return_prediction:
             payload["prediction"] = prediction.tolist()
@@ -424,10 +427,13 @@ def create_app() -> Any:
         twin = record["twin"]
         estimate = np.asarray(twin.estimate(), dtype=np.float64)
         uncertainty = np.asarray(twin.uncertainty(), dtype=np.float64)
-        history_tail = [
-            np.asarray(item, dtype=np.float64).tolist()
-            for item in list(twin.history)[-5:]
-        ]
+        history_tail = []
+        history_items = list(twin.history)[-5:]
+        history_index = 0
+        while history_index < len(history_items):
+            item = history_items[history_index]
+            history_tail.append(np.asarray(item, dtype=np.float64).tolist())
+            history_index += 1
         return {
             "status": "ok",
             "event": event,
@@ -465,22 +471,31 @@ def create_app() -> Any:
         record["observation_count"] += 1
 
     def _parse_stream_observation_line(req: TwinStreamObserveLineReq) -> list[float]:
-        tokens = [token.strip() for token in req.line.strip().split(req.delimiter)]
-        if not tokens or all(not token for token in tokens):
+        tokens = list(map(str.strip, req.line.strip().split(req.delimiter)))
+        if not tokens or not any(tokens):
             raise ValueError("line must contain observation values")
         if req.value_columns is not None:
             try:
-                tokens = [tokens[index] for index in req.value_columns]
+                selected_tokens = []
+                column_index = 0
+                while column_index < len(req.value_columns):
+                    selected_tokens.append(tokens[req.value_columns[column_index]])
+                    column_index += 1
+                tokens = selected_tokens
             except IndexError as exc:
                 raise ValueError("value_columns index out of range") from exc
         values: list[float] = []
-        for token in tokens:
+        token_index = 0
+        while token_index < len(tokens):
+            token = tokens[token_index]
             if not token:
+                token_index += 1
                 continue
             try:
                 values.append(float(token))
             except ValueError as exc:
                 raise ValueError(f"non-numeric observation token: {token}") from exc
+            token_index += 1
         if not values:
             raise ValueError("line must contain numeric observation values")
         return values
@@ -585,8 +600,10 @@ def create_app() -> Any:
             raise fastapi.HTTPException(status_code=400, detail="steps must be >= 1")
         record = _get_stream_record(req.session_id)
         try:
-            for _ in range(req.steps):
+            step_index = 0
+            while step_index < req.steps:
                 record["twin"].step()
+                step_index += 1
             record["step_count"] += req.steps
         except (RuntimeError, TypeError, ValueError) as exc:
             raise fastapi.HTTPException(status_code=400, detail=str(exc)) from exc
@@ -609,8 +626,11 @@ def create_app() -> Any:
         try:
             if not req.observations:
                 raise ValueError("observations must not be empty")
-            for observation in req.observations:
+            observation_index = 0
+            while observation_index < len(req.observations):
+                observation = req.observations[observation_index]
                 _apply_stream_observation(record, observation, advance=req.advance)
+                observation_index += 1
         except (RuntimeError, TypeError, ValueError) as exc:
             raise fastapi.HTTPException(status_code=400, detail=str(exc)) from exc
         payload = _stream_state_payload(req.session_id, record, event="observe-batch")
