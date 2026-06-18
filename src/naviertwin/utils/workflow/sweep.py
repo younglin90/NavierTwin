@@ -17,8 +17,17 @@ import numpy as np
 
 def grid_sweep(space: dict[str, list[Any]]) -> Iterator[dict[str, Any]]:
     keys = list(space.keys())
-    for combo in product(*[space[k] for k in keys]):
+    value_lists: list[list[Any]] = []
+    key_idx = 0
+    while key_idx < len(keys):
+        value_lists.append(space[keys[key_idx]])
+        key_idx += 1
+    combos = list(product(*value_lists))
+    combo_idx = 0
+    while combo_idx < len(combos):
+        combo = combos[combo_idx]
         yield dict(zip(keys, combo, strict=True))
+        combo_idx += 1
 
 
 def random_sweep(
@@ -26,8 +35,17 @@ def random_sweep(
 ) -> list[dict[str, float]]:
     rng = np.random.default_rng(seed)
     out = []
-    for _ in range(n):
-        out.append({k: float(rng.uniform(lo, hi)) for k, (lo, hi) in space.items()})
+    items = list(space.items())
+    sample_idx = 0
+    while sample_idx < n:
+        sample: dict[str, float] = {}
+        item_idx = 0
+        while item_idx < len(items):
+            k, (lo, hi) = items[item_idx]
+            sample[k] = float(rng.uniform(lo, hi))
+            item_idx += 1
+        out.append(sample)
+        sample_idx += 1
     return out
 
 
