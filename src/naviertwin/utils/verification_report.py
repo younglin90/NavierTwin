@@ -55,13 +55,34 @@ def build_report(
     layers["L1_coverage"] = coverage_skipped or (
         coverage_exit_code == 0 and coverage_pct >= 85
     )
-    layers["L2_mms"] = all(
-        abs(r["observed_p"] - r["target"]) <= 0.5 for r in mms_results
-    )
-    layers["L3_vv"] = all(r["validated"] for r in vv_results)
+    mms_pass = True
+    mms_idx = 0
+    while mms_idx < len(mms_results):
+        r = mms_results[mms_idx]
+        if abs(r["observed_p"] - r["target"]) > 0.5:
+            mms_pass = False
+            break
+        mms_idx += 1
+    layers["L2_mms"] = mms_pass
+    vv_pass = True
+    vv_idx = 0
+    while vv_idx < len(vv_results):
+        if not vv_results[vv_idx]["validated"]:
+            vv_pass = False
+            break
+        vv_idx += 1
+    layers["L3_vv"] = vv_pass
     layers["L4_drift"] = drift_score < 0.2
     layers["L5_security"] = security_findings == 0
-    overall = "PASS" if all(layers.values()) else "FAIL"
+    layer_values = list(layers.values())
+    layers_pass = True
+    layer_idx = 0
+    while layer_idx < len(layer_values):
+        if not layer_values[layer_idx]:
+            layers_pass = False
+            break
+        layer_idx += 1
+    overall = "PASS" if layers_pass else "FAIL"
     return {
         "overall": overall,
         "layers": layers,
@@ -82,8 +103,12 @@ def build_report(
 def to_markdown(report: dict) -> str:
     lines = ["# Verification Report", "", f"**Overall: {report['overall']}**", "",
              "| Layer | Status |", "| --- | --- |"]
-    for k, v in report["layers"].items():
+    items = list(report["layers"].items())
+    idx = 0
+    while idx < len(items):
+        k, v = items[idx]
         lines.append(f"| {k} | {'✅' if v else '❌'} |")
+        idx += 1
     return "\n".join(lines) + "\n"
 
 
