@@ -1,4 +1,4 @@
-"""Notification webhook — formatter for Slack-style payloads.
+"""Notification webhook — Slack-style payload formatter.
 
 Examples:
     >>> from naviertwin.utils.workflow.notify import slack_payload
