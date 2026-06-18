@@ -41,17 +41,35 @@ class StructuredLogger:
             return []
         out: list[dict[str, Any]] = []
         with self.path.open("r", encoding="utf-8") as f:
-            for line in f:
+            lines = f.readlines()
+            idx = 0
+            while idx < len(lines):
+                line = lines[idx]
                 line = line.strip()
                 if line:
                     out.append(json.loads(line))
+                idx += 1
         return out
 
     def filter(self, **match: Any) -> list[dict[str, Any]]:
-        return [
-            r for r in self.read_all()
-            if all(r.get(k) == v for k, v in match.items())
-        ]
+        records = self.read_all()
+        items = list(match.items())
+        out: list[dict[str, Any]] = []
+        record_idx = 0
+        while record_idx < len(records):
+            r = records[record_idx]
+            item_idx = 0
+            matched = True
+            while item_idx < len(items):
+                k, v = items[item_idx]
+                if r.get(k) != v:
+                    matched = False
+                    break
+                item_idx += 1
+            if matched:
+                out.append(r)
+            record_idx += 1
+        return out
 
 
 __all__ = ["StructuredLogger"]
