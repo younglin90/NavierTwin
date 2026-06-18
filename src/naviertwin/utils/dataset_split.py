@@ -21,7 +21,9 @@ def stratified_split(
     y = np.asarray(y)
     classes = np.unique(y)
     tr, va, te = [], [], []
-    for c in classes:
+    class_idx = 0
+    while class_idx < len(classes):
+        c = classes[class_idx]
         idx = np.where(y == c)[0]
         rng.shuffle(idx)
         n = len(idx)
@@ -30,6 +32,7 @@ def stratified_split(
         tr.extend(idx[:n_tr].tolist())
         va.extend(idx[n_tr:n_tr + n_va].tolist())
         te.extend(idx[n_tr + n_va:].tolist())
+        class_idx += 1
     return np.array(sorted(tr)), np.array(sorted(va)), np.array(sorted(te))
 
 
