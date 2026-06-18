@@ -66,9 +66,27 @@ _METHOD_RESULT_FIELDS: dict[str, str] = {
 }
 
 
+def _analysis_label(entry: tuple[str, str]) -> str:
+    return entry[0]
+
+
+def _format_peak_frequency(peak: dict[str, object]) -> str:
+    return f"{float(peak['frequency']):.4g} Hz"
+
+
+def _normalize_sindy_equations(equations: list[str]) -> list[str]:
+    normalized: list[str] = []
+    index = 0
+    while index < len(equations):
+        eq = equations[index]
+        normalized.append(eq if eq.startswith("dx") else f"dx{index}/dt = {eq}")
+        index += 1
+    return normalized
+
+
 def analysis_method_labels() -> list[str]:
     """Analyze 탭에 표시되는 분석 방법 이름 목록을 반환한다."""
-    return [label for label, _ in _ANALYSIS_METHODS]
+    return list(map(_analysis_label, _ANALYSIS_METHODS))
 
 
 def analysis_result_field(method: str) -> str | None:
@@ -366,17 +384,27 @@ class AnalyzePanel(QWidget):
         )
         # 속도 필드 콤보 업데이트 — 가능하면 U/velocity/u 를 기본 선택.
         velocity_priority = ("U", "velocity", "u", "Velocity")
-        for page_idx in [self._method_index("q_criterion"), self._method_index("lambda2")]:
+        page_indices = (
+            self._method_index("q_criterion"),
+            self._method_index("lambda2"),
+        )
+        page_cursor = 0
+        while page_cursor < len(page_indices):
+            page_idx = page_indices[page_cursor]
             page = self._param_stack.widget(page_idx)
             combo = page.findChild(QComboBox, "velocity_combo")
             if combo is not None:
                 combo.clear()
                 combo.addItems(dataset.field_names)
-                for name in velocity_priority:
+                name_cursor = 0
+                while name_cursor < len(velocity_priority):
+                    name = velocity_priority[name_cursor]
                     idx = combo.findText(name)
                     if idx >= 0:
                         combo.setCurrentIndex(idx)
                         break
+                    name_cursor += 1
+            page_cursor += 1
 
         # 해석해 비교 필드 콤보 업데이트
         analytic_page = self._param_stack.widget(self._method_index("analytic"))
@@ -403,9 +431,12 @@ class AnalyzePanel(QWidget):
         has_time = int(n_time_steps) > 1
         disabled_color = QBrush(QColor("#606070"))   # 흐린 회색
         enabled_color = QBrush(QColor("#E0E0E0"))    # 일반 텍스트
-        for row, (label, key) in enumerate(_ANALYSIS_METHODS):
+        row = 0
+        while row < len(_ANALYSIS_METHODS):
+            key = _ANALYSIS_METHODS[row][1]
             item: QListWidgetItem = self._method_list.item(row)
             if item is None:
+                row += 1
                 continue
             requires_time = key in _TIME_SERIES_METHODS
             font: QFont = item.font()
@@ -423,13 +454,16 @@ class AnalyzePanel(QWidget):
                 font.setItalic(False)
                 item.setFont(font)
                 item.setToolTip("")
+            row += 1
         # 비활성 항목이 현재 선택된 경우 첫 활성 항목으로 이동.
         cur = self._method_list.currentItem()
         if cur is not None and not (cur.flags() & Qt.ItemFlag.ItemIsEnabled):
-            for row in range(self._method_list.count()):
+            row = 0
+            while row < self._method_list.count():
                 if self._method_list.item(row).flags() & Qt.ItemFlag.ItemIsEnabled:
                     self._method_list.setCurrentRow(row)
                     break
+                row += 1
 
     # ──────────────────────────────────────────────────────────────────
     # 슬롯
@@ -543,7 +577,7 @@ class AnalyzePanel(QWidget):
 
                 freqs, amps = compute_fft(signal, dt)
                 peaks = find_dominant_frequencies(freqs, amps, n_peaks=3)
-                peak_text = [f"{p['frequency']:.4g} Hz" for p in peaks]
+                peak_text = list(map(_format_peak_frequency, peaks))
                 return f"Top frequencies: {peak_text}"
             return "FFT: 필드 없음"
 
@@ -685,10 +719,7 @@ class AnalyzePanel(QWidget):
         model = SINDy(poly_degree=poly_degree, threshold=threshold_value)
         model.fit(signal.reshape(-1, 1), dt=self._time_step())
         equations = model.equations()
-        normalized = [
-            eq if eq.startswith("dx") else f"dx{i}/dt = {eq}"
-            for i, eq in enumerate(equations)
-        ]
+        normalized = _normalize_sindy_equations(equations)
         return (
             "SINDy: "
             f"degree={poly_degree}, threshold={threshold_value:.4g}, "
@@ -878,7 +909,10 @@ class AnalyzePanel(QWidget):
 
     @staticmethod
     def _method_index(method: str) -> int:
-        for idx, (_, key) in enumerate(_ANALYSIS_METHODS):
+        idx = 0
+        while idx < len(_ANALYSIS_METHODS):
+            key = _ANALYSIS_METHODS[idx][1]
             if key == method:
                 return idx
+            idx += 1
         raise ValueError(f"unknown analysis method: {method}")
