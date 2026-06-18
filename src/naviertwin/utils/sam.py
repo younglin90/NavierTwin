@@ -35,23 +35,40 @@ class SAM:
     def first_step(self) -> None:
         import torch
         with torch.no_grad():
-            grad_norm = torch.sqrt(sum(p.grad.pow(2).sum() for p in self.params if p.grad is not None))
+            grad_sum = 0.0
+            idx = 0
+            while idx < len(self.params):
+                p = self.params[idx]
+                if p.grad is not None:
+                    grad_sum = grad_sum + p.grad.pow(2).sum()
+                idx += 1
+            grad_norm = torch.sqrt(grad_sum)
             scale = self.rho / (grad_norm + 1e-12)
             self._eps_state = []
-            for p in self.params:
+            idx = 0
+            while idx < len(self.params):
+                p = self.params[idx]
                 if p.grad is None:
                     self._eps_state.append(None)
+                    idx += 1
                     continue
                 e = p.grad * scale
                 p.add_(e)
                 self._eps_state.append(e)
+                idx += 1
 
     def second_step(self) -> None:
         import torch
         with torch.no_grad():
-            for p, e in zip(self.params, self._eps_state, strict=True):
+            idx = 0
+            if len(self.params) != len(self._eps_state):
+                raise ValueError("SAM state length mismatch")
+            while idx < len(self.params):
+                p = self.params[idx]
+                e = self._eps_state[idx]
                 if e is not None:
                     p.sub_(e)
+                idx += 1
         self.base.step()
 
 
