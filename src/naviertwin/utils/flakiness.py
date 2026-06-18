@@ -3,8 +3,10 @@
 Examples:
     >>> from naviertwin.utils.flakiness import FlakinessTracker
     >>> t = FlakinessTracker()
-    >>> for r in [True, False, True, True]:
-    ...     t.record('test_x', r)
+    >>> t.record('test_x', True)
+    >>> t.record('test_x', False)
+    >>> t.record('test_x', True)
+    >>> t.record('test_x', True)
     >>> 0 < t.flakiness('test_x') < 1
     True
 """
@@ -26,12 +28,25 @@ class FlakinessTracker:
         if len(h) < 2:
             return 0.0
         # transition rate (pass↔fail)
-        flips = sum(1 for i in range(len(h) - 1) if h[i] != h[i + 1])
+        flips = 0
+        idx = 0
+        last_idx = len(h) - 1
+        while idx < last_idx:
+            if h[idx] != h[idx + 1]:
+                flips += 1
+            idx += 1
         return flips / (len(h) - 1)
 
     def flaky_tests(self, *, min_flakiness: float = 0.2) -> list[str]:
-        return [n for n in self.history
-                if self.flakiness(n) >= min_flakiness]
+        names = list(self.history)
+        out: list[str] = []
+        idx = 0
+        while idx < len(names):
+            n = names[idx]
+            if self.flakiness(n) >= min_flakiness:
+                out.append(n)
+            idx += 1
+        return out
 
 
 __all__ = ["FlakinessTracker"]
