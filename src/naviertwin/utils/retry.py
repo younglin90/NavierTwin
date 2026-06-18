@@ -8,7 +8,8 @@ Examples:
     >>> @retry(max_attempts=3, delay=0.01, exceptions=(ValueError,))
     ... def flaky():
     ...     calls["n"] += 1
-    ...     if calls["n"] < 3:
+    ...     should_fail = calls["n"] < 3
+    ...     if should_fail:
     ...         raise ValueError("fail")
     ...     return "ok"
     >>> flaky()
@@ -56,7 +57,8 @@ def retry(
 
             d = float(delay)
             last: BaseException | None = None
-            for attempt in range(1, max_attempts + 1):
+            attempt = 1
+            while attempt <= max_attempts:
                 try:
                     return fn(*args, **kwargs)
                 except exceptions as exc:
@@ -66,13 +68,14 @@ def retry(
                             "%s: 최종 실패 (%d회): %s", fn.__name__, attempt, exc
                         )
                         raise
-                    sleep_for = d + (random.random() * jitter if jitter > 0 else 0.0)
+                    sleep_delay = d + (random.random() * jitter if jitter > 0 else 0.0)
                     logger.info(
                         "%s: 시도 %d/%d 실패 (%s), %.3fs 대기",
-                        fn.__name__, attempt, max_attempts, exc, sleep_for,
+                        fn.__name__, attempt, max_attempts, exc, sleep_delay,
                     )
-                    time.sleep(sleep_for)
+                    time.sleep(sleep_delay)
                     d *= backoff
+                    attempt += 1
             assert last is not None
             raise last
 
