@@ -18,7 +18,10 @@ def diff_configs(a: dict, b: dict, path: str = "") -> dict[str, dict[str, Any]]:
     changed: dict[str, tuple[Any, Any]] = {}
     added: dict[str, Any] = {}
     removed: dict[str, Any] = {}
-    for k in a.keys() | b.keys():
+    keys = list(a.keys() | b.keys())
+    idx = 0
+    while idx < len(keys):
+        k = keys[idx]
         p = f"{path}.{k}" if path else k
         if k in a and k not in b:
             removed[p] = a[k]
@@ -33,17 +36,30 @@ def diff_configs(a: dict, b: dict, path: str = "") -> dict[str, dict[str, Any]]:
                 removed.update(sub["removed"])
             elif va != vb:
                 changed[p] = (va, vb)
+        idx += 1
     return {"changed": changed, "added": added, "removed": removed}
 
 
 def format_diff(d: dict[str, dict]) -> str:
     lines: list[str] = []
-    for p, (a, b) in d["changed"].items():
+    changed_items = list(d["changed"].items())
+    idx = 0
+    while idx < len(changed_items):
+        p, (a, b) = changed_items[idx]
         lines.append(f"~ {p}: {a!r} -> {b!r}")
-    for p, v in d["added"].items():
+        idx += 1
+    added_items = list(d["added"].items())
+    idx = 0
+    while idx < len(added_items):
+        p, v = added_items[idx]
         lines.append(f"+ {p}: {v!r}")
-    for p, v in d["removed"].items():
+        idx += 1
+    removed_items = list(d["removed"].items())
+    idx = 0
+    while idx < len(removed_items):
+        p, v = removed_items[idx]
         lines.append(f"- {p}: {v!r}")
+        idx += 1
     return "\n".join(lines)
 
 
