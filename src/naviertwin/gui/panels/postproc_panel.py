@@ -32,6 +32,15 @@ from PySide6.QtWidgets import (
 from naviertwin.core.post_process_facade import PostProcessFacade
 
 
+def _set_param_widget_value(widget: QWidget, value: object) -> None:
+    if isinstance(widget, QSpinBox):
+        widget.setValue(int(value))
+    elif isinstance(widget, QDoubleSpinBox):
+        widget.setValue(float(value))
+    elif isinstance(widget, QComboBox):
+        widget.setCurrentText(str(value))
+
+
 class PostProcessPanel(QWidget):
     """후처리 도구 통합 패널 (R591-647 신규 모듈)."""
 
@@ -95,12 +104,18 @@ class PostProcessPanel(QWidget):
         cat_layout = QVBoxLayout(cat_group)
         self._category_combo = QComboBox()
         self._category_combo.addItem(self._tr("posttools.category.all"))
-        cats = sorted({
-            self._facade.describe(op)["category"]
-            for op in self._facade.list_operations()
-        })
-        for c in cats:
+        categories = set()
+        operations = self._facade.list_operations()
+        operation_index = 0
+        while operation_index < len(operations):
+            categories.add(self._facade.describe(operations[operation_index])["category"])
+            operation_index += 1
+        cats = sorted(categories)
+        cat_index = 0
+        while cat_index < len(cats):
+            c = cats[cat_index]
             self._category_combo.addItem(c)
+            cat_index += 1
         self._category_combo.currentIndexChanged.connect(
             self._refresh_op_list,
         )
@@ -251,8 +266,12 @@ class PostProcessPanel(QWidget):
         self._field_combo.addItem("(자동 선택)")
         try:
             fields = self._dataset_numeric_fields(dataset)
-            for name in fields:
+            field_names = tuple(fields)
+            field_index = 0
+            while field_index < len(field_names):
+                name = field_names[field_index]
                 self._field_combo.addItem(name)
+                field_index += 1
             self._field_combo.setEnabled(True)
         except (ValueError, AttributeError):
             self._field_combo.setEnabled(False)
@@ -317,11 +336,15 @@ class PostProcessPanel(QWidget):
         """카테고리 필터에 맞춰 op 리스트 갱신."""
         cat = self._category_combo.currentText()
         self._op_list.clear()
-        for op in self._facade.list_operations():
+        operations = self._facade.list_operations()
+        operation_index = 0
+        while operation_index < len(operations):
+            op = operations[operation_index]
             info = self._facade.describe(op)
             all_label = self._tr("posttools.category.all")
             if cat in (all_label, "전체", "All") or info["category"] == cat:
                 self._op_list.addItem(op)
+            operation_index += 1
 
     def _on_op_selected(self, op_name: str) -> None:
         if not op_name:
@@ -340,8 +363,12 @@ class PostProcessPanel(QWidget):
         self._preset_combo.blockSignals(True)
         self._preset_combo.clear()
         self._preset_combo.addItem(self._tr("posttools.preset.none"))
-        for name in self._preset_store.list_presets(op_name):
+        names = self._preset_store.list_presets(op_name)
+        name_index = 0
+        while name_index < len(names):
+            name = names[name_index]
             self._preset_combo.addItem(name)
+            name_index += 1
         self._preset_combo.blockSignals(False)
 
     def _on_preset_selected(self, name: str) -> None:
@@ -356,19 +383,20 @@ class PostProcessPanel(QWidget):
         preset = self._preset_store.get(op_name, name)
         if not preset:
             return
-        for k, v in preset.items():
+        items = tuple(preset.items())
+        item_index = 0
+        while item_index < len(items):
+            k, v = items[item_index]
             widget = self._param_widgets.get(k)
             if widget is None:
+                item_index += 1
                 continue
             try:
-                if isinstance(widget, QSpinBox):
-                    widget.setValue(int(v))
-                elif isinstance(widget, QDoubleSpinBox):
-                    widget.setValue(float(v))
-                elif isinstance(widget, QComboBox):
-                    widget.setCurrentText(str(v))
+                _set_param_widget_value(widget, v)
             except (TypeError, ValueError):
+                item_index += 1
                 continue
+            item_index += 1
 
     def add_user_preset(
         self, op_name: str, preset_name: str, params: dict[str, Any] | None = None,
@@ -401,10 +429,14 @@ class PostProcessPanel(QWidget):
             self._param_form_layout.addRow(label)
             return
 
-        for name, spec in specs.items():
+        spec_items = tuple(specs.items())
+        spec_index = 0
+        while spec_index < len(spec_items):
+            name, spec = spec_items[spec_index]
             widget = self._build_param_widget(spec)
             self._param_form_layout.addRow(f"{name}:", widget)
             self._param_widgets[name] = widget
+            spec_index += 1
 
     @staticmethod
     def _build_param_widget(spec: dict[str, Any]) -> QWidget:
@@ -425,8 +457,11 @@ class PostProcessPanel(QWidget):
         if ptype == "str":
             w = QComboBox()
             options = spec.get("options", [])
-            for opt in options:
+            option_index = 0
+            while option_index < len(options):
+                opt = options[option_index]
                 w.addItem(str(opt))
+                option_index += 1
             if default in options:
                 w.setCurrentText(str(default))
             return w
@@ -437,13 +472,17 @@ class PostProcessPanel(QWidget):
     def _read_param_values(self) -> dict[str, Any]:
         """현재 폼 위젯들의 값을 dict로 추출."""
         values: dict[str, Any] = {}
-        for name, widget in self._param_widgets.items():
+        items = tuple(self._param_widgets.items())
+        item_index = 0
+        while item_index < len(items):
+            name, widget = items[item_index]
             if isinstance(widget, QSpinBox):
                 values[name] = int(widget.value())
             elif isinstance(widget, QDoubleSpinBox):
                 values[name] = float(widget.value())
             elif isinstance(widget, QComboBox):
                 values[name] = widget.currentText()
+            item_index += 1
         return values
 
     def _on_run_clicked(self) -> None:
@@ -570,21 +609,20 @@ class PostProcessPanel(QWidget):
         self._op_list.setCurrentItem(items[0])
         # 폼 값 적용
         kwargs = e.get("kwargs_summary") or {}
-        for k, v in kwargs.items():
+        items = tuple(kwargs.items())
+        item_index = 0
+        while item_index < len(items):
+            k, v = items[item_index]
             widget = self._param_widgets.get(k)
             if widget is None:
+                item_index += 1
                 continue
             try:
-                from PySide6.QtWidgets import QComboBox, QDoubleSpinBox, QSpinBox
-
-                if isinstance(widget, QSpinBox):
-                    widget.setValue(int(v))
-                elif isinstance(widget, QDoubleSpinBox):
-                    widget.setValue(float(v))
-                elif isinstance(widget, QComboBox):
-                    widget.setCurrentText(str(v))
+                _set_param_widget_value(widget, v)
             except (TypeError, ValueError):
+                item_index += 1
                 continue
+            item_index += 1
         self._result_text.append(
             f"\n[재실행 준비] 이력 #{idx} ({op_name}) 폼 복원 완료.",
         )
@@ -647,11 +685,15 @@ class PostProcessPanel(QWidget):
 
             # 모든 op의 smoke kwargs 수집
             all_smokes: dict[str, dict[str, Any]] = {}
-            for op in self._facade.list_operations():
+            operations = self._facade.list_operations()
+            operation_index = 0
+            while operation_index < len(operations):
+                op = operations[operation_index]
                 try:
                     all_smokes[op] = self._build_smoke_kwargs(op)
                 except Exception:  # noqa: BLE001
                     pass
+                operation_index += 1
             results = run_category(self._facade, cat, smoke_kwargs=all_smokes)
             self._result_text.setPlainText(bulk_summary_markdown(results))
             self._last_result = {"bulk": results}  # type: ignore[assignment]
@@ -740,7 +782,9 @@ class PostProcessPanel(QWidget):
             return {"samples": matrix}
         if op_name == "pod_truncation":
             X = cls._snapshot_matrix(dataset, fields)
-            singular_values = np.linalg.svd(X - X.mean(axis=0, keepdims=True), compute_uv=False)
+            centered = X - X.mean(axis=0, keepdims=True)
+            eigenvalues = np.linalg.eigh(centered.T @ centered)[0]
+            singular_values = np.sqrt(np.maximum(eigenvalues, 0.0))[::-1]
             return {"singular_values": singular_values, "fraction": 0.99}
         if op_name == "quantile":
             return {"x": signal, "q": 50.0}
@@ -779,6 +823,17 @@ class PostProcessPanel(QWidget):
             f"'{op_name}' 연산은 현재 데이터셋에서 필요한 입력을 자동 구성할 수 없습니다. "
             "데이터셋 없이 Demo 실행으로 합성 입력을 확인하세요."
         )
+
+    @staticmethod
+    def _time_interp_smoke_snapshots() -> np.ndarray:
+        rows = []
+        times = np.linspace(0.0, 1.0, 6)
+        time_index = 0
+        while time_index < len(times):
+            t = times[time_index]
+            rows.append(np.array([t, t * t, np.sin(t)], dtype=np.float64))
+            time_index += 1
+        return np.stack(rows)
 
     @staticmethod
     def _build_smoke_kwargs(op_name: str) -> dict[str, Any]:
@@ -857,10 +912,7 @@ class PostProcessPanel(QWidget):
                 "dy": 0.1,
             },
             "time_interp": {
-                "snapshots": np.stack([
-                    np.array([t, t * t, np.sin(t)], dtype=np.float64)
-                    for t in np.linspace(0.0, 1.0, 6)
-                ]),
+                "snapshots": PostProcessPanel._time_interp_smoke_snapshots(),
                 "times": np.linspace(0.0, 1.0, 6),
                 "t_query": 0.45,
                 "n_uniform": 8,
@@ -1029,18 +1081,29 @@ class PostProcessPanel(QWidget):
             raise ValueError("dataset.mesh가 없습니다.")
 
         fields: dict[str, np.ndarray] = {}
-        for store_name in ("point_data", "cell_data"):
+        store_names = ("point_data", "cell_data")
+        store_index = 0
+        while store_index < len(store_names):
+            store_name = store_names[store_index]
             store = getattr(mesh, store_name, None)
             if not hasattr(store, "items"):
+                store_index += 1
                 continue
-            for name, value in store.items():
+            items = tuple(store.items())
+            item_index = 0
+            while item_index < len(items):
+                name, value = items[item_index]
                 try:
                     arr = np.asarray(value, dtype=np.float64)
                 except (TypeError, ValueError):
+                    item_index += 1
                     continue
                 if arr.size == 0:
+                    item_index += 1
                     continue
                 fields[str(name)] = np.nan_to_num(arr, copy=False)
+                item_index += 1
+            store_index += 1
 
         if not fields:
             raise ValueError("로드된 데이터셋에 숫자 필드가 없습니다.")
@@ -1049,10 +1112,14 @@ class PostProcessPanel(QWidget):
     @classmethod
     def _primary_signal(cls, fields: dict[str, np.ndarray]) -> np.ndarray:
         """첫 번째 숫자 field를 1D signal로 변환한다."""
-        for arr in fields.values():
+        values = tuple(fields.values())
+        value_index = 0
+        while value_index < len(values):
+            arr = values[value_index]
             signal = cls._to_scalar_series(arr)
             if signal.size >= 2:
                 return signal
+            value_index += 1
         raise ValueError("후처리에 사용할 1D 숫자 필드가 없습니다.")
 
     @staticmethod
@@ -1070,17 +1137,28 @@ class PostProcessPanel(QWidget):
         """여러 숫자 field를 공통 길이 행렬로 결합한다."""
         columns: list[np.ndarray] = []
         target_len: int | None = None
-        for arr in fields.values():
+        values = tuple(fields.values())
+        value_index = 0
+        while value_index < len(values):
+            arr = values[value_index]
             arr = np.asarray(arr, dtype=np.float64)
             if arr.ndim == 2 and 1 < arr.shape[1] <= 4:
-                candidate_columns = [arr[:, i].reshape(-1) for i in range(arr.shape[1])]
+                candidate_columns = []
+                column_index = 0
+                while column_index < arr.shape[1]:
+                    candidate_columns.append(arr[:, column_index].reshape(-1))
+                    column_index += 1
             else:
                 candidate_columns = [cls._to_scalar_series(arr)]
-            for col in candidate_columns:
+            candidate_index = 0
+            while candidate_index < len(candidate_columns):
+                col = candidate_columns[candidate_index]
                 if target_len is None:
                     target_len = col.size
                 if col.size == target_len:
                     columns.append(col)
+                candidate_index += 1
+            value_index += 1
         if not columns:
             raise ValueError("행렬로 결합할 숫자 필드가 없습니다.")
         return np.column_stack(columns)
@@ -1116,7 +1194,12 @@ class PostProcessPanel(QWidget):
 
     @staticmethod
     def _safe_eval_variables(fields: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-        signals = [PostProcessPanel._to_scalar_series(arr) for arr in fields.values()]
+        signals = []
+        values = tuple(fields.values())
+        value_index = 0
+        while value_index < len(values):
+            signals.append(PostProcessPanel._to_scalar_series(values[value_index]))
+            value_index += 1
         variables = {"u": signals[0]}
         if len(signals) > 1 and signals[1].shape == signals[0].shape:
             variables["v"] = signals[1]
@@ -1160,10 +1243,14 @@ class PostProcessPanel(QWidget):
 
     @classmethod
     def _vector_matrix(cls, fields: dict[str, np.ndarray], n_points: int) -> np.ndarray:
-        for arr in fields.values():
+        values = tuple(fields.values())
+        value_index = 0
+        while value_index < len(values):
+            arr = values[value_index]
             arr = np.asarray(arr, dtype=np.float64)
             if arr.ndim == 2 and arr.shape[0] == n_points and arr.shape[1] >= 3:
                 return arr[:, :3]
+            value_index += 1
         signal = cls._primary_signal(fields)
         signal = cls._field_for_points(signal, n_points)
         return np.column_stack([signal, np.zeros(n_points), np.zeros(n_points)])
@@ -1207,7 +1294,10 @@ class PostProcessPanel(QWidget):
     def _summarize_result(result: dict[str, Any]) -> str:
         """결과 dict를 사람이 읽기 쉬운 텍스트로 요약."""
         lines = []
-        for k, v in result.items():
+        items = tuple(result.items())
+        item_index = 0
+        while item_index < len(items):
+            k, v = items[item_index]
             if isinstance(v, np.ndarray):
                 if v.size <= 6:
                     lines.append(f"{k}: {v.tolist()}")
@@ -1227,6 +1317,7 @@ class PostProcessPanel(QWidget):
                 lines.append(f"{k}: dict keys={list(v.keys())[:5]}")
             else:
                 lines.append(f"{k}: {type(v).__name__}")
+            item_index += 1
         return "\n".join(lines)
 
 
