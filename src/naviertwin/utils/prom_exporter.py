@@ -40,12 +40,20 @@ class MetricsRegistry:
 
     def format(self) -> str:
         lines = []
-        for name, c in self._counters.items():
+        counters = list(self._counters.items())
+        idx = 0
+        while idx < len(counters):
+            name, c = counters[idx]
             lines.append(f"# TYPE {name} counter")
             lines.append(f"{name} {c.value}")
-        for name, g in self._gauges.items():
+            idx += 1
+        gauges = list(self._gauges.items())
+        idx = 0
+        while idx < len(gauges):
+            name, g = gauges[idx]
             lines.append(f"# TYPE {name} gauge")
             lines.append(f"{name} {g.value}")
+            idx += 1
         return "\n".join(lines) + "\n"
 
 
