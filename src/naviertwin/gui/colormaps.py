@@ -72,10 +72,7 @@ def apply_colormap(
         vmax = vmin + 1.0
     t = np.clip((v - vmin) / (vmax - vmin), 0.0, 1.0)
     stops = _MAPS[name]
-    ts = np.array([s[0] for s in stops])
-    r = np.array([s[1] for s in stops])
-    g = np.array([s[2] for s in stops])
-    b = np.array([s[3] for s in stops])
+    ts, r, g, b = np.asarray(stops, dtype=np.float64).T
     R = np.interp(t, ts, r)
     G = np.interp(t, ts, g)
     B = np.interp(t, ts, b)
