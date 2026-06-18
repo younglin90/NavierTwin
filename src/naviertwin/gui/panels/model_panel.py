@@ -40,6 +40,37 @@ if TYPE_CHECKING:
     from naviertwin.core.cfd_reader.base import CFDDataset
 
 
+def _csv_parts(raw: str) -> list[str]:
+    """쉼표 구분 텍스트에서 비어 있지 않은 항목을 반환한다."""
+    return list(filter(None, map(str.strip, raw.split(","))))
+
+
+def _param_feature_names(n_features: int) -> list[str]:
+    """param_N feature 이름을 만든다."""
+    return list(map(lambda index: f"param_{index}", range(n_features)))
+
+
+def _finite_float_values(raw: Any) -> list[float]:
+    """finite float 값만 목록으로 반환한다."""
+    values: list[float] = []
+    try:
+        iterator = iter(raw)
+    except TypeError:
+        return values
+    while True:
+        try:
+            value = next(iterator)
+        except StopIteration:
+            break
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(parsed):
+            values.append(parsed)
+    return values
+
+
 class ModelPanel(QWidget):
     """Surrogate 모델 학습 패널.
 
@@ -420,7 +451,7 @@ class ModelPanel(QWidget):
 
     def _apply_model_action_style(self) -> None:
         """모델 탭의 동등한 실행 버튼을 같은 시각 계층으로 맞춘다."""
-        for button in (
+        buttons = (
             self._train_btn,
             self._active_btn,
             self._online_update_btn,
@@ -428,7 +459,11 @@ class ModelPanel(QWidget):
             self._physics_train_btn,
             self._physics_module_btn,
             self._advanced_ai_btn,
-        ):
+        )
+        button_index = 0
+        while button_index < len(buttons):
+            button = buttons[button_index]
+            button_index += 1
             button.setObjectName("modelActionButton")
 
     def _render_capability_table(self) -> None:
@@ -472,10 +507,16 @@ class ModelPanel(QWidget):
             ),
         ]
         self._capability_table.setRowCount(len(rows))
-        for row, values in enumerate(rows):
-            for col, value in enumerate(values):
+        row = 0
+        while row < len(rows):
+            values = rows[row]
+            col = 0
+            while col < len(values):
+                value = values[col]
                 item = QTableWidgetItem(value)
                 self._capability_table.setItem(row, col, item)
+                col += 1
+            row += 1
 
     # ──────────────────────────────────────────────────────────────────
     # 공개 API
@@ -737,7 +778,7 @@ class ModelPanel(QWidget):
             explainability = self._build_explainability_metadata(X_train)
             parameter_names = metadata.get("parameter_names")
             if isinstance(parameter_names, list) and len(parameter_names) == X_train.shape[1]:
-                explainability["feature_names"] = [str(item) for item in parameter_names]
+                explainability["feature_names"] = list(map(str, parameter_names))
             explainability["output_index"] = int(self._online_output_index_spin.value())
             metadata["explainability"] = explainability
             surrogate.training_metadata = metadata
@@ -749,13 +790,18 @@ class ModelPanel(QWidget):
                 from naviertwin.core.validation.metrics import compute_all_metrics
                 Y_pred = surrogate.predict(X_test)
                 metrics = compute_all_metrics(Y_test, Y_pred)
-                validation_metrics = {
-                    k: float(v)
-                    for k, v in metrics.items()
-                    if isinstance(v, (int, float, np.floating)) and np.isfinite(float(v))
-                }
+                finite_metrics = filter(
+                    lambda item: isinstance(item[1], (int, float, np.floating))
+                    and np.isfinite(float(item[1])),
+                    metrics.items(),
+                )
+                validation_metrics = dict(map(lambda item: (item[0], float(item[1])), finite_metrics))
                 self._metrics_list.clear()
-                for k, v in metrics.items():
+                metric_items = list(metrics.items())
+                metric_index = 0
+                while metric_index < len(metric_items):
+                    k, v = metric_items[metric_index]
+                    metric_index += 1
                     self._metrics_list.addItem(f"{k}: {v:.6f}")
                 metrics_text = f"  RMSE={metrics.get('rmse', 0):.4g}, R²={metrics.get('r2', 0):.4g}"
             else:
@@ -765,7 +811,7 @@ class ModelPanel(QWidget):
             if used_direct_cfd and isinstance(direct_metadata.get("output_fields"), list):
                 self._metrics_list.addItem(
                     "direct CFD fields: "
-                    + ", ".join(str(item) for item in direct_metadata.get("field_names", []))
+                    + ", ".join(map(str, direct_metadata.get("field_names", [])))
                 )
 
             self._log(f"{model_name} 학습 완료 (n_train={n_train}){metrics_text}")
@@ -890,7 +936,7 @@ class ModelPanel(QWidget):
         return flat[:, idx]
 
     def _selected_online_output_index(self, surrogate: object) -> int:
-        """Return scalar output index selected for Online Update."""
+        """Return scalar output index used by Online Update."""
         ui_value = int(self._online_output_index_spin.value())
         if ui_value > 0:
             return ui_value
@@ -908,8 +954,8 @@ class ModelPanel(QWidget):
     def _online_update_x(self, n_params: int) -> np.ndarray:
         text = self._online_x_edit.text().strip()
         if text:
-            parts = [item for item in text.replace(",", " ").split() if item]
-            values = np.array([float(item) for item in parts], dtype=float)
+            parts = text.replace(",", " ").split()
+            values = np.array(list(map(float, parts)), dtype=float)
             if values.size != n_params:
                 raise ValueError(
                     f"New x 차원 불일치: expected={n_params}, got={values.size}"
@@ -976,7 +1022,7 @@ class ModelPanel(QWidget):
             "online_y_mean": float(np.mean(y_all)),
             "explainability": {
                 "background": background[:32].copy(),
-                "feature_names": [f"param_{i}" for i in range(n_features)],
+                "feature_names": _param_feature_names(n_features),
                 "output_index": int(self._online_output_index_spin.value()),
             },
         }
@@ -999,10 +1045,13 @@ class ModelPanel(QWidget):
             ("buffer_count", str(len(getattr(learner, "_X", []))), "OnlineKriging"),
         ]
         self._online_table.setRowCount(len(rows))
-        for row, (metric, value, note) in enumerate(rows):
+        row = 0
+        while row < len(rows):
+            metric, value, note = rows[row]
             self._online_table.setItem(row, 0, QTableWidgetItem(metric))
             self._online_table.setItem(row, 1, QTableWidgetItem(value))
             self._online_table.setItem(row, 2, QTableWidgetItem(note))
+            row += 1
 
     def _active_learning_adapter(self, surrogate: object) -> object:
         """select_next_samples가 기대하는 predict(return_std=True) adapter."""
@@ -1065,7 +1114,9 @@ class ModelPanel(QWidget):
         scores: np.ndarray,
     ) -> None:
         self._active_table.setRowCount(selected.shape[0])
-        for row, params in enumerate(selected):
+        row = 0
+        while row < selected.shape[0]:
+            params = selected[row]
             score = scores[row] if row < len(scores) else np.nan
             self._active_table.setItem(row, 0, QTableWidgetItem(str(row + 1)))
             self._active_table.setItem(
@@ -1075,9 +1126,10 @@ class ModelPanel(QWidget):
             )
             score_text = "n/a" if not np.isfinite(score) else f"{float(score):.6g}"
             self._active_table.setItem(row, 2, QTableWidgetItem(score_text))
+            row += 1
 
     def _select_surrogate_params_csv(self) -> None:
-        """Select CSV containing operating parameters for direct CFD surrogates."""
+        """Select CSV containing direct CFD surrogate operating parameters."""
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Surrogate 입력 파라미터 CSV 선택",
@@ -1093,14 +1145,17 @@ class ModelPanel(QWidget):
     def _populate_surrogate_output_fields(self, field_names: list[str]) -> None:
         """Refresh the direct CFD surrogate multi-output selector."""
         self._surrogate_field_list.clear()
-        for field_name in field_names:
+        field_index = 0
+        while field_index < len(field_names):
+            field_name = field_names[field_index]
+            field_index += 1
             self._surrogate_field_list.addItem(str(field_name))
         if self._surrogate_field_list.count() > 0:
             self._surrogate_field_list.item(0).setSelected(True)
 
     def _selected_surrogate_output_fields(self) -> list[str]:
         """Return selected direct CFD surrogate fields, defaulting to first field."""
-        selected = [item.text() for item in self._surrogate_field_list.selectedItems()]
+        selected = list(map(lambda item: item.text(), self._surrogate_field_list.selectedItems()))
         if selected:
             return selected
         if self._surrogate_field_list.count() > 0:
@@ -1112,10 +1167,10 @@ class ModelPanel(QWidget):
         raw = self._surrogate_param_columns_edit.text().strip()
         if not raw:
             return None
-        return [part.strip() for part in raw.split(",") if part.strip()]
+        return _csv_parts(raw)
 
     def _surrogate_source_mode(self) -> str:
-        """Return normalized training source mode for classical surrogates."""
+        """Return normalized training source mode used by classical surrogates."""
         text = self._surrogate_source_combo.currentText().lower()
         if text.startswith("cfd"):
             return "cfd"
@@ -1126,15 +1181,12 @@ class ModelPanel(QWidget):
         return "auto"
 
     def _load_surrogate_training_datasets(self) -> list[object]:
-        """Load Import-tab CFD cases for direct field surrogate fitting."""
+        """Load Import-tab CFD cases used by direct field surrogate fitting."""
         case_paths = self._imported_case_paths()
         if case_paths:
             from naviertwin.core.cfd_reader import ReaderFactory
 
-            return [
-                ReaderFactory.create_and_read(path)
-                for path in case_paths
-            ]
+            return list(map(ReaderFactory.create_and_read, case_paths))
         if self._dataset is None:
             return []
         return [self._dataset]
@@ -1142,7 +1194,7 @@ class ModelPanel(QWidget):
     def _build_cfd_field_surrogate_training_data(
         self,
     ) -> tuple[np.ndarray, np.ndarray, dict[str, object]]:
-        """Build X/Y arrays for direct CFD field surrogate training."""
+        """Build X/Y arrays used by direct CFD field surrogate training."""
         from naviertwin.core.physnemo.cfd_field_model import (
             count_dataset_snapshots,
             load_parameter_table,
@@ -1209,11 +1261,7 @@ class ModelPanel(QWidget):
         arr = np.asarray(values, dtype=float)
         if arr.ndim != 3:
             raise ValueError(f"field values must be 3D, got shape {arr.shape}")
-        rows = [
-            np.concatenate([arr[step, :, field] for field in range(arr.shape[2])])
-            for step in range(arr.shape[0])
-        ]
-        return np.vstack(rows)
+        return arr.transpose(0, 2, 1).reshape(arr.shape[0], -1)
 
     def _select_physics_params_csv(self) -> None:
         """Select CSV containing operating input parameters."""
@@ -1232,14 +1280,17 @@ class ModelPanel(QWidget):
     def _populate_physics_output_fields(self, field_names: list[str]) -> None:
         """Refresh the multi-output field selector."""
         self._physics_field_list.clear()
-        for field_name in field_names:
+        field_index = 0
+        while field_index < len(field_names):
+            field_name = field_names[field_index]
+            field_index += 1
             self._physics_field_list.addItem(str(field_name))
         if self._physics_field_list.count() > 0:
             self._physics_field_list.item(0).setSelected(True)
 
     def _selected_physics_output_fields(self) -> list[str]:
         """Return selected output fields, defaulting to the first field."""
-        selected = [item.text() for item in self._physics_field_list.selectedItems()]
+        selected = list(map(lambda item: item.text(), self._physics_field_list.selectedItems()))
         if selected:
             return selected
         if self._physics_field_list.count() > 0:
@@ -1251,7 +1302,7 @@ class ModelPanel(QWidget):
         raw = self._physics_param_columns_edit.text().strip()
         if not raw:
             return None
-        return [part.strip() for part in raw.split(",") if part.strip()]
+        return _csv_parts(raw)
 
     def _imported_case_paths(self) -> list[Path]:
         """Return multi-case paths provided by the Import tab."""
@@ -1261,7 +1312,8 @@ class ModelPanel(QWidget):
         raw_paths = metadata.get("case_paths") if isinstance(metadata, Mapping) else None
         if not isinstance(raw_paths, list):
             return []
-        paths = [Path(str(path)) for path in raw_paths if str(path).strip()]
+        clean_paths = filter(lambda path: str(path).strip(), raw_paths)
+        paths = list(map(lambda path: Path(str(path)), clean_paths))
         return paths
 
     def _load_physics_training_datasets(self) -> list[object]:
@@ -1270,10 +1322,7 @@ class ModelPanel(QWidget):
         if case_paths:
             from naviertwin.core.cfd_reader import ReaderFactory
 
-            return [
-                ReaderFactory.create_and_read(path)
-                for path in case_paths
-            ]
+            return list(map(ReaderFactory.create_and_read, case_paths))
         if self._dataset is None:
             return []
         return [self._dataset]
@@ -1316,7 +1365,11 @@ class ModelPanel(QWidget):
             metadata = getattr(model, "training_metadata", {})
             metrics = metadata.get("validation_metrics", {})
             if isinstance(metrics, Mapping):
-                for key, value in metrics.items():
+                metric_items = list(metrics.items())
+                metric_index = 0
+                while metric_index < len(metric_items):
+                    key, value = metric_items[metric_index]
+                    metric_index += 1
                     self._metrics_list.addItem(f"{key}: {float(value):.6g}")
             self._metrics_list.addItem(
                 f"locations: {metadata.get('n_locations', 'unknown')}"
@@ -1392,22 +1445,12 @@ class ModelPanel(QWidget):
         if raw is None:
             subs = getattr(model, "_subs", None)
             if isinstance(subs, list):
-                raw = [
-                    loss
-                    for sub in subs
-                    for loss in getattr(sub, "train_losses_", [])
-                ]
+                from itertools import chain
+
+                raw = list(chain.from_iterable(map(lambda sub: getattr(sub, "train_losses_", []), subs)))
         if raw is None:
             return []
-        losses: list[float] = []
-        for value in raw:
-            try:
-                parsed = float(value)
-            except (TypeError, ValueError):
-                continue
-            if np.isfinite(parsed):
-                losses.append(parsed)
-        return losses
+        return _finite_float_values(raw)
 
     def _save_physicsnemo_module(self) -> None:
         """Wrap the latest PyTorch/Physics model as PhysicsNeMo Module."""
@@ -1440,7 +1483,11 @@ class ModelPanel(QWidget):
         import torch
 
         candidates = [source]
-        for attr in ("_model", "model", "module", "net", "network"):
+        attrs = ("_model", "model", "module", "net", "network")
+        attr_index = 0
+        while attr_index < len(attrs):
+            attr = attrs[attr_index]
+            attr_index += 1
             value = getattr(source, attr, None)
             if value is not None:
                 candidates.append(value)
@@ -1450,7 +1497,10 @@ class ModelPanel(QWidget):
             inner = getattr(pinn, "_model", None)
             if inner is not None:
                 candidates.append(inner)
-        for candidate in candidates:
+        candidate_index = 0
+        while candidate_index < len(candidates):
+            candidate = candidates[candidate_index]
+            candidate_index += 1
             if isinstance(candidate, torch.nn.Module):
                 return candidate
         raise RuntimeError("PyTorch nn.Module을 찾을 수 없습니다.")
@@ -1566,7 +1616,7 @@ class ModelPanel(QWidget):
             self._log(f"[ERROR] {op_type} 학습 실패: {exc}")
 
     def _run_advanced_ai(self) -> None:
-        """Run GUI-accessible smoke checks for heavier AI families."""
+        """Run GUI-accessible smoke checks covering heavier AI families."""
         mapping = {
             "GNN Surrogate": "gnn.surrogate",
             "LSTM + KNO": "timeseries.koopman",
@@ -1602,7 +1652,7 @@ class ModelPanel(QWidget):
         n_features = X_arr.shape[1] if X_arr.ndim == 2 else 0
         return {
             "background": X_arr[:n_background].copy(),
-            "feature_names": [f"param_{i}" for i in range(n_features)],
+            "feature_names": _param_feature_names(n_features),
             "output_index": 0,
         }
 
@@ -1620,14 +1670,7 @@ class ModelPanel(QWidget):
         raw_losses = getattr(model, "train_losses_", None)
         if raw_losses is None:
             return
-        try:
-            losses = [
-                float(value)
-                for value in raw_losses
-                if np.isfinite(float(value))
-            ]
-        except (TypeError, ValueError):
-            return
+        losses = _finite_float_values(raw_losses)
         if not losses:
             return
         self._loss_series[label] = losses
@@ -1661,7 +1704,7 @@ class ModelPanel(QWidget):
         if isinstance(value, Path):
             return str(value)
         if isinstance(value, Mapping):
-            return {str(k): self._json_safe(v) for k, v in value.items()}
+            return dict(map(lambda item: (str(item[0]), self._json_safe(item[1])), value.items()))
         if isinstance(value, (list, tuple)):
-            return [self._json_safe(v) for v in value]
+            return list(map(self._json_safe, value))
         return value
