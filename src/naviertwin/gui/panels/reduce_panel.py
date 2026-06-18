@@ -29,6 +29,12 @@ if TYPE_CHECKING:
     from naviertwin.core.cfd_reader.base import CFDDataset
 
 
+def _format_energy_line(entry: tuple[int, float]) -> str:
+    index, energy = entry
+    bar = "█" * int(energy * 20)
+    return f"Mode {index:2d}: {bar:<20} {energy * 100:.1f}%"
+
+
 class ReducePanel(QWidget):
     """차원 축소 탭 패널.
 
@@ -674,11 +680,8 @@ class ReducePanel(QWidget):
 
     def _update_energy_plot(self, energy: np.ndarray) -> None:
         """에너지 누적 곡선을 텍스트로 표시한다."""
-        lines = []
-        for i, e in enumerate(energy[:10], 1):
-            bar = "█" * int(e * 20)
-            lines.append(f"Mode {i:2d}: {bar:<20} {e*100:.1f}%")
-        self._energy_plot_label.setText("\n".join(lines))
+        entries = enumerate(energy[:10], 1)
+        self._energy_plot_label.setText("\n".join(map(_format_energy_line, entries)))
         self._energy_plot_label.setAlignment(
             __import__("PySide6.QtCore", fromlist=["Qt"]).Qt.AlignmentFlag.AlignLeft
             | __import__("PySide6.QtCore", fromlist=["Qt"]).Qt.AlignmentFlag.AlignTop
