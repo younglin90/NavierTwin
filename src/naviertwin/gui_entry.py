@@ -1,4 +1,4 @@
-"""Minimal PyInstaller entry point for the Windows desktop app.
+"""Minimal PyInstaller entry point used by the Windows desktop app.
 
 This module intentionally avoids importing :mod:`naviertwin.main`.  The CLI
 module contains many command handlers whose optional dependencies are not
@@ -11,9 +11,19 @@ from __future__ import annotations
 import os
 import signal
 import sys
+from collections import deque
 from pathlib import Path
 
 from naviertwin import __version__
+
+
+def _rebind_console_stream(spec: tuple[str, str, str]) -> None:
+    fd_name, mode, target = spec
+    try:
+        handle = open(target, mode, buffering=1)
+        setattr(sys, fd_name, handle)
+    except Exception:
+        pass
 
 
 def _setup_qt_runtime_defaults() -> None:
@@ -49,18 +59,12 @@ def _attach_visible_console(title: str) -> bool:
         except Exception:
             pass
         # stdout/stderr/stdin 을 새 콘솔 핸들로 리바인드.
-        import os  # noqa: PLC0415
-
-        for fd_name, mode, flag in (
-            ("stdin", "r", os.O_RDONLY),
-            ("stdout", "w", os.O_WRONLY),
-            ("stderr", "w", os.O_WRONLY),
-        ):
-            try:
-                handle = open("CONOUT$" if fd_name != "stdin" else "CONIN$", mode, buffering=1)
-                setattr(sys, fd_name, handle)
-            except Exception:
-                pass
+        stream_specs = (
+            ("stdin", "r", "CONIN$"),
+            ("stdout", "w", "CONOUT$"),
+            ("stderr", "w", "CONOUT$"),
+        )
+        deque(map(_rebind_console_stream, stream_specs), maxlen=0)
         # UTF-8 출력 (한국어 메시지 보존).
         try:
             kernel32.SetConsoleOutputCP(65001)
