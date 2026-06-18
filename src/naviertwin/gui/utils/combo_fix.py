@@ -182,13 +182,14 @@ def apply_to_widget_tree(root: QWidget) -> int:
     Returns:
         보정한 콤보 개수.
     """
-    combos = root.findChildren(QComboBox)
-    count = 0
-    for combo in combos:
-        if not getattr(combo, "_naviertwin_close_fix", False):
-            apply_combo_close_fix(combo)
-            count += 1
-    return count
+    return sum(map(_apply_combo_close_fix_if_needed, root.findChildren(QComboBox)))
+
+
+def _apply_combo_close_fix_if_needed(combo: QComboBox) -> int:
+    if getattr(combo, "_naviertwin_close_fix", False):
+        return 0
+    apply_combo_close_fix(combo)
+    return 1
 
 
 class _ComboCloseFilter(QObject):
