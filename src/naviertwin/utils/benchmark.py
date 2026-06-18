@@ -17,13 +17,17 @@ from typing import Callable
 def benchmark(
     fn: Callable, *, n: int = 20, warmup: int = 3,
 ) -> dict[str, float]:
-    for _ in range(warmup):
+    warmup_idx = 0
+    while warmup_idx < warmup:
         fn()
+        warmup_idx += 1
     times = []
-    for _ in range(n):
+    sample_idx = 0
+    while sample_idx < n:
         t0 = time.perf_counter()
         fn()
         times.append((time.perf_counter() - t0) * 1000.0)
+        sample_idx += 1
     return {
         "n": int(n),
         "mean_ms": float(statistics.mean(times)),
@@ -37,7 +41,14 @@ def benchmark(
 def compare(
     cases: dict[str, Callable], *, n: int = 10, warmup: int = 2,
 ) -> dict[str, dict[str, float]]:
-    return {name: benchmark(fn, n=n, warmup=warmup) for name, fn in cases.items()}
+    results: dict[str, dict[str, float]] = {}
+    items = list(cases.items())
+    idx = 0
+    while idx < len(items):
+        name, fn = items[idx]
+        results[name] = benchmark(fn, n=n, warmup=warmup)
+        idx += 1
+    return results
 
 
 __all__ = ["benchmark", "compare"]
