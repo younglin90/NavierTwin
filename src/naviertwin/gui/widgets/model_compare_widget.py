@@ -12,6 +12,10 @@ Usage:
 
 from __future__ import annotations
 
+from collections import deque
+from functools import partial
+from typing import Any
+
 from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
@@ -20,6 +24,21 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+
+def _metric_value(results: dict[str, dict[str, float]], key: str, name: str) -> float:
+    return results[name].get(key, 0.0)
+
+
+def _set_metric_row(table: QTableWidget, row_data: tuple[int, str, float, float]) -> None:
+    row, name, rmse, r2 = row_data
+    table.setItem(row, 0, QTableWidgetItem(name))
+    table.setItem(row, 1, QTableWidgetItem(f"{rmse:.6g}"))
+    table.setItem(row, 2, QTableWidgetItem(f"{r2:.6g}"))
+
+
+def _rotate_tick_label(label: Any) -> None:
+    label.set_rotation(30)
 
 
 class ModelCompareWidget(QWidget):
@@ -60,15 +79,13 @@ class ModelCompareWidget(QWidget):
     def update(self, results: dict[str, dict[str, float]]) -> None:
         """모델 → 메트릭 dict 를 받아 대시보드 업데이트."""
         names = list(results.keys())
-        rmses = [results[n].get("rmse", 0.0) for n in names]
-        r2s = [results[n].get("r2", 0.0) for n in names]
+        rmses = list(map(partial(_metric_value, results, "rmse"), names))
+        r2s = list(map(partial(_metric_value, results, "r2"), names))
 
         # 테이블
         self._table.setRowCount(len(names))
-        for i, n in enumerate(names):
-            self._table.setItem(i, 0, QTableWidgetItem(n))
-            self._table.setItem(i, 1, QTableWidgetItem(f"{rmses[i]:.6g}"))
-            self._table.setItem(i, 2, QTableWidgetItem(f"{r2s[i]:.6g}"))
+        rows = zip(range(len(names)), names, rmses, r2s)
+        deque(map(partial(_set_metric_row, self._table), rows), maxlen=0)
 
         # 차트
         if not self._mpl or self._figure is None:
@@ -79,13 +96,11 @@ class ModelCompareWidget(QWidget):
         ax1.bar(names, rmses, color="tab:red")
         ax1.set_title("RMSE ↓")
         ax1.set_ylabel("RMSE")
-        for label in ax1.get_xticklabels():
-            label.set_rotation(30)
+        deque(map(_rotate_tick_label, ax1.get_xticklabels()), maxlen=0)
         ax2.bar(names, r2s, color="tab:green")
         ax2.set_title("R² ↑")
         ax2.set_ylim(0, 1)
-        for label in ax2.get_xticklabels():
-            label.set_rotation(30)
+        deque(map(_rotate_tick_label, ax2.get_xticklabels()), maxlen=0)
         if self._canvas is not None:
             self._canvas.draw_idle()
 
