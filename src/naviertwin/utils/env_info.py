@@ -33,11 +33,17 @@ def collect_env() -> dict[str, Any]:
         "machine": platform.machine(),
         "processor": platform.processor(),
     }
-    for pkg in ("numpy", "scipy", "pandas", "sklearn", "torch", "h5py",
-                "pyvista", "PySide6", "matplotlib"):
+    packages = (
+        "numpy", "scipy", "pandas", "sklearn", "torch", "h5py",
+        "pyvista", "PySide6", "matplotlib",
+    )
+    pkg_idx = 0
+    while pkg_idx < len(packages):
+        pkg = packages[pkg_idx]
         v = _pkg_version(pkg)
         if v:
             info[pkg] = v
+        pkg_idx += 1
 
     # GPU 감지
     info["cuda_available"] = False
@@ -48,10 +54,13 @@ def collect_env() -> dict[str, Any]:
         if torch.cuda.is_available():
             info["cuda_available"] = True
             info["cuda_version"] = str(torch.version.cuda)
-            info["cuda_devices"] = [
-                torch.cuda.get_device_name(i)
-                for i in range(torch.cuda.device_count())
-            ]
+            devices: list[str] = []
+            device_idx = 0
+            device_count = torch.cuda.device_count()
+            while device_idx < device_count:
+                devices.append(torch.cuda.get_device_name(device_idx))
+                device_idx += 1
+            info["cuda_devices"] = devices
     except ImportError:
         pass
     return info
@@ -59,8 +68,12 @@ def collect_env() -> dict[str, Any]:
 
 def format_env(info: dict[str, Any]) -> str:
     lines = []
-    for k, v in info.items():
+    items = list(info.items())
+    idx = 0
+    while idx < len(items):
+        k, v = items[idx]
         lines.append(f"{k:20s}: {v}")
+        idx += 1
     return "\n".join(lines)
 
 
