@@ -103,6 +103,16 @@ def _build_parser() -> argparse.ArgumentParser:
     p_serv.add_argument("--host", default="127.0.0.1")
     p_serv.add_argument("--port", type=int, default=8000)
 
+    # web
+    p_web = sub.add_parser("web", help="trame 기반 웹 GUI 실행 (브라우저)")
+    p_web.add_argument("--host", default="127.0.0.1")
+    p_web.add_argument("--port", type=int, default=8080)
+    p_web.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="시작 시 기본 브라우저 자동 열기 비활성화",
+    )
+
     # pipeline
     p_pipe = sub.add_parser("pipeline", help="합성 end-to-end 파이프라인 실행")
     p_pipe.add_argument("--n-modes", type=int, default=5)
@@ -548,6 +558,8 @@ def main() -> None:
         sys.exit(_run_benchmark(args.kind))
     elif args.command == "server":
         sys.exit(_run_server(args.host, args.port))
+    elif args.command == "web":
+        sys.exit(_run_web_gui(args.host, args.port, not args.no_browser))
     elif args.command == "pipeline":
         sys.exit(_run_pipeline(args.reducer, args.n_modes, args.surrogate))
     elif args.command == "pipeline-demo":
@@ -762,6 +774,20 @@ def _run_server(host: str, port: int) -> int:
         return 1
     uvicorn.run(app, host=host, port=port)
     return 0
+
+
+def _run_web_gui(host: str, port: int, open_browser: bool) -> int:
+    """trame 기반 웹 GUI 실행 (브라우저)."""
+    try:
+        from naviertwin.web.app import run_web
+    except ImportError as e:
+        print(
+            "오류: trame 설치 필요: pip install naviertwin[web]\n"
+            f"  {e}",
+            file=sys.stderr,
+        )
+        return 1
+    return run_web(host=host, port=port, open_browser=open_browser)
 
 
 def _run_pipeline(reducer: str, n_modes: int, surrogate: str) -> int:

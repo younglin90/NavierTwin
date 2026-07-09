@@ -46,3 +46,10 @@ htmlcov/
 verify_artifacts/
 autoresearch-results/
 tmp/
+
+# Electron desktop shell
+electron/node_modules/
+electron/dist/
+electron/server.log
+electron/smoke.png
+electron/boot.log

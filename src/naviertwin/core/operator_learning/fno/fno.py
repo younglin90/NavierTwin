@@ -19,7 +19,7 @@ Examples:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable, Optional
 
 import numpy as np
 
@@ -111,6 +111,7 @@ class FNO1D(BaseOperator):
         lr: float = 1e-3,
         device: str = "auto",
         seed: int | None = 0,
+        epoch_callback: Optional[Callable[[int, float], None]] = None,
     ) -> None:
         super().__init__(device=device)
         self.in_channels = in_channels
@@ -122,6 +123,8 @@ class FNO1D(BaseOperator):
         self.batch_size = batch_size
         self.lr = lr
         self.seed = seed
+        # epoch(1-index), loss 를 받는 선택적 콜백 (라이브 진행 스트리밍).
+        self.epoch_callback = epoch_callback
 
         self._model: Any = None
         self._device: Any = None
@@ -221,6 +224,8 @@ class FNO1D(BaseOperator):
             epoch_loss /= max(len(X), 1)
             self.train_losses_.append(epoch_loss)
             epoch_idx += 1
+            if self.epoch_callback is not None:
+                self.epoch_callback(epoch_idx, epoch_loss)
 
         self.n_epochs = self.max_epochs
         self.is_fitted = True
@@ -261,6 +266,7 @@ class FNO2D(BaseOperator):
         lr: float = 1e-3,
         device: str = "auto",
         seed: int | None = 0,
+        epoch_callback: Optional[Callable[[int, float], None]] = None,
     ) -> None:
         super().__init__(device=device)
         self.in_channels = in_channels
@@ -273,6 +279,7 @@ class FNO2D(BaseOperator):
         self.batch_size = batch_size
         self.lr = lr
         self.seed = seed
+        self.epoch_callback = epoch_callback
 
         self._model: Any = None
         self._device: Any = None
@@ -373,6 +380,8 @@ class FNO2D(BaseOperator):
             epoch_loss /= max(len(X), 1)
             self.train_losses_.append(epoch_loss)
             epoch_idx += 1
+            if self.epoch_callback is not None:
+                self.epoch_callback(epoch_idx, epoch_loss)
 
         self.n_epochs = self.max_epochs
         self.is_fitted = True

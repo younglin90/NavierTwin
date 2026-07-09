@@ -1,0 +1,18 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "naviertwin-web",
+      "runtimeExecutable": "wsl",
+      "runtimeArgs": [
+        "-d",
+        "ubuntu",
+        "--",
+        "bash",
+        "-lc",
+        "cd ~/work/claude_code/NavierTwin && QT_QPA_PLATFORM=offscreen PYVISTA_OFF_SCREEN=true PYTHONPATH=src exec python3 -m naviertwin.main web --host 0.0.0.0 --port 8890 --no-browser"
+      ],
+      "port": 8890
+    }
+  ]
+}
