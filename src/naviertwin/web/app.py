@@ -1246,12 +1246,17 @@ class NavierTwinWebApp:
                 scalars=scalar,
                 cmap=self.state.nt_cmap,
                 nan_color="#8b949e",
-                # 좁은 뷰포트에서 컬러바 라벨이 겹치지 않도록 라벨 수/포맷 제한.
+                # 넓은 뷰포트의 우측 여백을 세로 컬러바로 채워 화면 균형을 맞춘다.
                 scalar_bar_args={
+                    "vertical": True,
+                    "position_x": 0.88,
+                    "position_y": 0.2,
+                    "height": 0.6,
+                    "width": 0.05,
                     "fmt": "%.3g",
-                    "n_labels": 3,
-                    "title_font_size": 14,
-                    "label_font_size": 11,
+                    "n_labels": 5,
+                    "title_font_size": 15,
+                    "label_font_size": 12,
                 },
             )
         else:
@@ -1266,9 +1271,15 @@ class NavierTwinWebApp:
             try:
                 if render.mesh_is_flat(mesh):
                     self.plotter.view_xy()
+                    self.plotter.reset_camera()
+                    # 2D 필드는 뷰포트 세로를 채우도록 확대해 여백을 줄인다.
+                    try:
+                        self.plotter.camera.zoom(1.35)
+                    except Exception:  # noqa: BLE001
+                        pass
                 else:
                     self.plotter.view_isometric()
-                self.plotter.reset_camera()
+                    self.plotter.reset_camera()
             except Exception:  # noqa: BLE001
                 pass
         else:
