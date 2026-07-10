@@ -1,9 +1,11 @@
 #include <cmath>
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -20,6 +22,57 @@ using ArrayD = py::array_t<double, py::array::c_style | py::array::forcecast>;
 using ArrayI = py::array_t<long long, py::array::c_style | py::array::forcecast>;
 
 using ArrayB = py::array_t<bool, py::array::c_style | py::array::forcecast>;
+
+static int native_thread_count(py::ssize_t n) {
+    if (n < 8192) {
+        return 1;
+    }
+
+    unsigned int hw = std::thread::hardware_concurrency();
+    if (hw == 0) {
+        hw = 4;
+    }
+
+    int requested = 0;
+    if (const char* env = std::getenv("NAVIERTWIN_NATIVE_THREADS")) {
+        char* end = nullptr;
+        const long parsed = std::strtol(env, &end, 10);
+        if (end != env && parsed > 0) {
+            requested = static_cast<int>(std::min<long>(parsed, 64));
+        }
+    }
+
+    const int hardware_limit = static_cast<int>(std::min<unsigned int>(hw, 32));
+    const int chunk_limit = static_cast<int>(std::max<py::ssize_t>(1, (n + 8191) / 8192));
+    if (requested > 0) {
+        return std::max(1, std::min(requested, chunk_limit));
+    }
+    return std::max(1, std::min(hardware_limit, chunk_limit));
+}
+
+template <typename Fn>
+static void parallel_for(py::ssize_t n, Fn&& fn) {
+    const int threads = native_thread_count(n);
+    if (threads <= 1) {
+        fn(0, n);
+        return;
+    }
+
+    std::vector<std::thread> workers;
+    workers.reserve(static_cast<std::size_t>(threads));
+    const py::ssize_t chunk = (n + threads - 1) / threads;
+    for (int t = 0; t < threads; ++t) {
+        const py::ssize_t begin = t * chunk;
+        const py::ssize_t end = std::min(n, begin + chunk);
+        if (begin >= end) {
+            break;
+        }
+        workers.emplace_back([begin, end, &fn]() { fn(begin, end); });
+    }
+    for (auto& worker : workers) {
+        worker.join();
+    }
+}
 
 static void check_same_2d(const Array2D& u, const Array2D& v) {
     if (u.ndim() != 2 || v.ndim() != 2) {
@@ -67,8 +120,11 @@ static py::array_t<double> field_j_2d(Array2D u, Array2D v, double dx, double dy
     const double* vp = v.data();
     double* op = out.mutable_data();
 
-    for (py::ssize_t i = 0; i < ny; ++i) {
-        for (py::ssize_t j = 0; j < nx; ++j) {
+    {
+        py::gil_scoped_release release;
+        for (py::ssize_t idx = 0; idx < ny * nx; ++idx) {
+            const py::ssize_t i = idx / nx;
+            const py::ssize_t j = idx - i * nx;
             const auto base = (((i * nx + j) * 2) * 2);
             op[base + 0] = grad_x(up, ny, nx, i, j, dx);
             op[base + 1] = grad_y(up, ny, nx, i, j, dy);
@@ -92,8 +148,11 @@ static py::array_t<double> lambda2_2d(Array2D u, Array2D v, double dx, double dy
     const double* vp = v.data();
     double* op = out.mutable_data();
 
-    for (py::ssize_t i = 0; i < ny; ++i) {
-        for (py::ssize_t j = 0; j < nx; ++j) {
+    {
+        py::gil_scoped_release release;
+        for (py::ssize_t idx = 0; idx < ny * nx; ++idx) {
+            const py::ssize_t i = idx / nx;
+            const py::ssize_t j = idx - i * nx;
             const double du_dx = grad_x(up, ny, nx, i, j, dx);
             const double du_dy = grad_y(up, ny, nx, i, j, dy);
             const double dv_dx = grad_x(vp, ny, nx, i, j, dx);
@@ -128,8 +187,11 @@ static py::array_t<double> vorticity_2d_native(Array2D u, Array2D v, double dx, 
     const double* vp = v.data();
     double* op = out.mutable_data();
 
-    for (py::ssize_t i = 0; i < ny; ++i) {
-        for (py::ssize_t j = 0; j < nx; ++j) {
+    {
+        py::gil_scoped_release release;
+        for (py::ssize_t idx = 0; idx < ny * nx; ++idx) {
+            const py::ssize_t i = idx / nx;
+            const py::ssize_t j = idx - i * nx;
             op[i * nx + j] = grad_x(vp, ny, nx, i, j, dx) - grad_y(up, ny, nx, i, j, dy);
         }
     }
@@ -149,8 +211,11 @@ static py::array_t<double> q_criterion_2d_native(Array2D u, Array2D v, double dx
     const double* vp = v.data();
     double* op = out.mutable_data();
 
-    for (py::ssize_t i = 0; i < ny; ++i) {
-        for (py::ssize_t j = 0; j < nx; ++j) {
+    {
+        py::gil_scoped_release release;
+        for (py::ssize_t idx = 0; idx < ny * nx; ++idx) {
+            const py::ssize_t i = idx / nx;
+            const py::ssize_t j = idx - i * nx;
             const double du_dx = grad_x(up, ny, nx, i, j, dx);
             const double du_dy = grad_y(up, ny, nx, i, j, dy);
             const double dv_dx = grad_x(vp, ny, nx, i, j, dx);
@@ -402,67 +467,129 @@ static std::array<double, 3> sorted_symmetric_eigenvalues(double a00, double a01
     return eig;
 }
 
+static inline double middle3(double a, double b, double c) {
+    const double lo = std::min(a, std::min(b, c));
+    const double hi = std::max(a, std::max(b, c));
+    return a + b + c - lo - hi;
+}
+
+static double middle_symmetric_eigenvalue(double a00, double a01, double a02, double a11, double a12, double a22) {
+    const double p1 = a01 * a01 + a02 * a02 + a12 * a12;
+    if (p1 == 0.0) {
+        return middle3(a00, a11, a22);
+    }
+
+    const double q = (a00 + a11 + a22) / 3.0;
+    const double b00 = a00 - q;
+    const double b11 = a11 - q;
+    const double b22 = a22 - q;
+    const double p2 = b00 * b00 + b11 * b11 + b22 * b22 + 2.0 * p1;
+    const double p = std::sqrt(p2 / 6.0);
+    if (p == 0.0) {
+        return q;
+    }
+
+    const double c00 = b00 / p;
+    const double c01 = a01 / p;
+    const double c02 = a02 / p;
+    const double c11 = b11 / p;
+    const double c12 = a12 / p;
+    const double c22 = b22 / p;
+    const double det_c =
+        c00 * (c11 * c22 - c12 * c12) -
+        c01 * (c01 * c22 - c12 * c02) +
+        c02 * (c01 * c12 - c11 * c02);
+    double r = 0.5 * det_c;
+    r = std::max(-1.0, std::min(1.0, r));
+
+    constexpr double pi = 3.141592653589793238462643383279502884;
+    const double phi = std::acos(r) / 3.0;
+    const double eig1 = q + 2.0 * p * std::cos(phi);
+    const double eig3 = q + 2.0 * p * std::cos(phi + (2.0 * pi / 3.0));
+    const double eig2 = 3.0 * q - eig1 - eig3;
+    return middle3(eig1, eig2, eig3);
+}
+
 static py::tuple q_criterion_from_grad_3d(ArrayD grad) {
     const py::ssize_t n = grad_count(grad);
-    const bool flat9 = grad.ndim() == 2;
     auto q = py::array_t<double>({n});
     auto vort = py::array_t<double>({n, static_cast<py::ssize_t>(3)});
     const double* gp = grad.data();
     double* qp = q.mutable_data();
     double* vp = vort.mutable_data();
 
-    for (py::ssize_t idx = 0; idx < n; ++idx) {
-        double j[3][3];
-        load_grad_3x3(gp, n, idx, flat9, j);
-        double s_norm = 0.0;
-        double o_norm = 0.0;
-        double omega[3][3];
-        for (int r = 0; r < 3; ++r) {
-            for (int c = 0; c < 3; ++c) {
-                const double s = 0.5 * (j[r][c] + j[c][r]);
-                const double o = 0.5 * (j[r][c] - j[c][r]);
-                omega[r][c] = o;
-                s_norm += s * s;
-                o_norm += o * o;
-            }
+    {
+        py::gil_scoped_release release;
+        for (py::ssize_t idx = 0; idx < n; ++idx) {
+            const double* row = gp + idx * 9;
+            const double j00 = row[0];
+            const double j01 = row[1];
+            const double j02 = row[2];
+            const double j10 = row[3];
+            const double j11 = row[4];
+            const double j12 = row[5];
+            const double j20 = row[6];
+            const double j21 = row[7];
+            const double j22 = row[8];
+
+            const double s01 = 0.5 * (j01 + j10);
+            const double s02 = 0.5 * (j02 + j20);
+            const double s12 = 0.5 * (j12 + j21);
+            const double o01 = 0.5 * (j01 - j10);
+            const double o02 = 0.5 * (j02 - j20);
+            const double o12 = 0.5 * (j12 - j21);
+
+            const double s_norm =
+                j00 * j00 + j11 * j11 + j22 * j22 +
+                2.0 * (s01 * s01 + s02 * s02 + s12 * s12);
+            const double o_norm = 2.0 * (o01 * o01 + o02 * o02 + o12 * o12);
+            qp[idx] = 0.5 * (o_norm - s_norm);
+            vp[idx * 3 + 0] = j21 - j12;
+            vp[idx * 3 + 1] = j02 - j20;
+            vp[idx * 3 + 2] = j10 - j01;
         }
-        qp[idx] = 0.5 * (o_norm - s_norm);
-        vp[idx * 3 + 0] = omega[2][1] - omega[1][2];
-        vp[idx * 3 + 1] = omega[0][2] - omega[2][0];
-        vp[idx * 3 + 2] = omega[1][0] - omega[0][1];
     }
     return py::make_tuple(q, vort);
 }
 
 static py::array_t<double> lambda2_from_grad_3d(ArrayD grad) {
     const py::ssize_t n = grad_count(grad);
-    const bool flat9 = grad.ndim() == 2;
     auto out = py::array_t<double>({n});
     const double* gp = grad.data();
     double* op = out.mutable_data();
 
-    for (py::ssize_t idx = 0; idx < n; ++idx) {
-        double j[3][3];
-        double s[3][3];
-        double o[3][3];
-        load_grad_3x3(gp, n, idx, flat9, j);
-        for (int r = 0; r < 3; ++r) {
-            for (int c = 0; c < 3; ++c) {
-                s[r][c] = 0.5 * (j[r][c] + j[c][r]);
-                o[r][c] = 0.5 * (j[r][c] - j[c][r]);
-            }
-        }
+    {
+        py::gil_scoped_release release;
+        parallel_for(n, [&](py::ssize_t begin, py::ssize_t end) {
+            for (py::ssize_t idx = begin; idx < end; ++idx) {
+                const double* row = gp + idx * 9;
+                const double j00 = row[0];
+                const double j01 = row[1];
+                const double j02 = row[2];
+                const double j10 = row[3];
+                const double j11 = row[4];
+                const double j12 = row[5];
+                const double j20 = row[6];
+                const double j21 = row[7];
+                const double j22 = row[8];
 
-        double m[3][3] = {};
-        for (int r = 0; r < 3; ++r) {
-            for (int c = 0; c < 3; ++c) {
-                for (int k = 0; k < 3; ++k) {
-                    m[r][c] += s[r][k] * s[k][c] + o[r][k] * o[k][c];
-                }
+                const double s01 = 0.5 * (j01 + j10);
+                const double s02 = 0.5 * (j02 + j20);
+                const double s12 = 0.5 * (j12 + j21);
+                const double o01 = 0.5 * (j01 - j10);
+                const double o02 = 0.5 * (j02 - j20);
+                const double o12 = 0.5 * (j12 - j21);
+
+                const double m00 = j00 * j00 + s01 * s01 + s02 * s02 - o01 * o01 - o02 * o02;
+                const double m11 = s01 * s01 + j11 * j11 + s12 * s12 - o01 * o01 - o12 * o12;
+                const double m22 = s02 * s02 + s12 * s12 + j22 * j22 - o02 * o02 - o12 * o12;
+                const double m01 = j00 * s01 + s01 * j11 + s02 * s12 - o02 * o12;
+                const double m02 = j00 * s02 + s01 * s12 + s02 * j22 + o01 * o12;
+                const double m12 = s01 * s02 + j11 * s12 + s12 * j22 - o01 * o02;
+
+                op[idx] = middle_symmetric_eigenvalue(m00, m01, m02, m11, m12, m22);
             }
-        }
-        const auto eig = sorted_symmetric_eigenvalues(m[0][0], m[0][1], m[0][2], m[1][1], m[1][2], m[2][2]);
-        op[idx] = eig[1];
+        });
     }
     return out;
 }

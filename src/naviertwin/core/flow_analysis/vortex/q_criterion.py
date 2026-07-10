@@ -189,9 +189,7 @@ def _compute_q_from_gradient_numpy(grad: Any) -> tuple[Any, Any]:
     """NumPy fallback computing Q-criterion and vorticity from gradients."""
     import numpy as np
 
-    grad = np.asarray(grad)
-    if grad.ndim == 2 and grad.shape[1] == 9:
-        grad = grad.reshape(-1, 3, 3)
+    grad = _coerce_gradient_3d(grad)
     S = (grad + grad.transpose(0, 2, 1)) / 2.0
     Omega = (grad - grad.transpose(0, 2, 1)) / 2.0
     q_vals = 0.5 * (np.sum(Omega**2, axis=(1, 2)) - np.sum(S**2, axis=(1, 2)))
@@ -208,17 +206,26 @@ def _compute_q_from_gradient_numpy(grad: Any) -> tuple[Any, Any]:
 
 def _compute_lambda2_from_gradient_numpy(grad: Any) -> Any:
     """NumPy fallback computing λ₂ from gradients."""
-    import numpy as np
     from numpy.linalg import eigvalsh as _eigvalsh
 
-    grad = np.asarray(grad)
-    if grad.ndim == 2 and grad.shape[1] == 9:
-        grad = grad.reshape(-1, 3, 3)
+    grad = _coerce_gradient_3d(grad)
     S = (grad + grad.transpose(0, 2, 1)) / 2.0
     Omega = (grad - grad.transpose(0, 2, 1)) / 2.0
     M = S @ S + Omega @ Omega
     eigenvalues = _eigvalsh(M)
     return eigenvalues[:, 1]
+
+
+def _coerce_gradient_3d(grad: Any) -> Any:
+    """Return a gradient array with shape ``(N, 3, 3)``."""
+    import numpy as np
+
+    grad = np.asarray(grad, dtype=np.float64)
+    if grad.ndim == 2 and grad.shape[1] == 9:
+        return grad.reshape(-1, 3, 3)
+    if grad.ndim == 3 and grad.shape[1:] == (3, 3):
+        return grad
+    raise ValueError("gradient must have shape (N, 9) or (N, 3, 3)")
 
 
 def _get_velocity_gradient(

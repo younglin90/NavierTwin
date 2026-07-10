@@ -45,3 +45,40 @@ class TestQLambda:
         l2 = np.asarray(out.point_data["lambda2"])
         # rotation core → λ₂ negative
         assert (l2 < 0).any()
+
+    def test_gradient_numpy_helpers_match_native(self) -> None:
+        from naviertwin._native import HAS_NATIVE_KERNELS, _kernels
+        from naviertwin.core.flow_analysis.vortex.q_criterion import (
+            _compute_lambda2_from_gradient_numpy,
+            _compute_q_from_gradient_numpy,
+        )
+
+        rng = np.random.default_rng(8)
+        grad = rng.standard_normal((18, 3, 3)).astype(np.float32)[::2]
+        flat_grad = np.ascontiguousarray(grad).reshape(-1, 9)
+
+        q_tensor, vort_tensor = _compute_q_from_gradient_numpy(grad)
+        q_flat, vort_flat = _compute_q_from_gradient_numpy(flat_grad)
+        l2_tensor = _compute_lambda2_from_gradient_numpy(grad)
+        l2_flat = _compute_lambda2_from_gradient_numpy(flat_grad)
+        np.testing.assert_allclose(q_tensor, q_flat)
+        np.testing.assert_allclose(vort_tensor, vort_flat)
+        np.testing.assert_allclose(l2_tensor, l2_flat)
+
+        if HAS_NATIVE_KERNELS:
+            native_q, native_vort = _kernels.q_criterion_from_grad_3d(grad)
+            native_l2 = _kernels.lambda2_from_grad_3d(grad)
+            np.testing.assert_allclose(native_q, q_tensor, rtol=1e-10, atol=1e-10)
+            np.testing.assert_allclose(native_vort, vort_tensor, rtol=1e-10, atol=1e-10)
+            np.testing.assert_allclose(native_l2, l2_tensor, rtol=1e-10, atol=1e-10)
+
+    def test_gradient_numpy_helpers_reject_bad_shape(self) -> None:
+        from naviertwin.core.flow_analysis.vortex.q_criterion import (
+            _compute_lambda2_from_gradient_numpy,
+            _compute_q_from_gradient_numpy,
+        )
+
+        with pytest.raises(ValueError, match="gradient must have shape"):
+            _compute_q_from_gradient_numpy(np.zeros((4, 8)))
+        with pytest.raises(ValueError, match="gradient must have shape"):
+            _compute_lambda2_from_gradient_numpy(np.zeros((4, 3, 2)))
