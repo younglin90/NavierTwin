@@ -19,23 +19,23 @@ from typing import Any, Iterator
 from naviertwin.web.fonts import FONT_CSS
 
 # ──────────────────────────────────────────────────────────────────────
-# 팔레트 — 심연 네이비 + 포스포 시안(주) + 앰버(보조)
+# 팔레트 — 강철 주광(steel daylight) 슬레이트 네이비 + 포스포 시안(주) + 앰버
 # ──────────────────────────────────────────────────────────────────────
-BACKGROUND = "#060b14"   # 심연 잉크
-SURFACE = "#0b1322"      # 계기함
-PANEL = "#101a2e"        # 패널
-BORDER = "#1d2a41"       # 케이싱 라인
-PRIMARY = "#00e5ff"      # 포스포 시안 (스코프 트레이스)
-SECONDARY = "#5df0a8"    # 성공(유량 정상)
-WARNING = "#ffb454"      # 앰버 계기
-ERROR = "#ff5d6c"        # 경보
-INFO = "#7ad7ff"         # 보조 시안
-TEXT = "#d9e6f2"
-MUTED = "#66788f"
+BACKGROUND = "#1b2739"   # 슬레이트 네이비 (밝은 계기실)
+SURFACE = "#243449"      # 계기함
+PANEL = "#2c3e58"        # 패널
+BORDER = "#43597b"       # 케이싱 라인
+PRIMARY = "#12d6f2"      # 포스포 시안 (스코프 트레이스)
+SECONDARY = "#4fe89b"    # 성공(유량 정상)
+WARNING = "#ffbe5c"      # 앰버 계기
+ERROR = "#ff6f7d"        # 경보
+INFO = "#8fdcff"         # 보조 시안
+TEXT = "#eef4fb"
+MUTED = "#a4b7d0"
 
 # 3D 뷰어 배경 그라데이션 (아래→위)
-VIEWER_BG_BOTTOM = "#060b14"
-VIEWER_BG_TOP = "#12203a"
+VIEWER_BG_BOTTOM = "#1b2739"
+VIEWER_BG_TOP = "#324667"
 
 DISPLAY_FONT = "'Chakra Petch', 'Malgun Gothic', sans-serif"
 MONO_FONT = "'Spline Sans Mono', ui-monospace, monospace"
@@ -83,11 +83,11 @@ CUSTOM_CSS = FONT_CSS + f"""
   --nt-mono: {MONO_FONT};
 }}
 
-/* ── 배경: 잉크 그라데이션 + 청사진 측정 격자(느린 드리프트) ───────── */
+/* ── 배경: 슬레이트 그라데이션 + 청사진 측정 격자(느린 드리프트) ───── */
 .v-application, .v-application__wrap {{
   background:
-    radial-gradient(140% 90% at 85% -10%, #12203a 0%, transparent 55%),
-    radial-gradient(120% 80% at -10% 110%, #0d1b31 0%, transparent 50%),
+    radial-gradient(140% 90% at 85% -10%, #33496c 0%, transparent 55%),
+    radial-gradient(120% 80% at -10% 110%, #263752 0%, transparent 50%),
     var(--nt-bg) !important;
 }}
 .v-main {{
@@ -98,10 +98,10 @@ CUSTOM_CSS = FONT_CSS + f"""
   position: absolute; inset: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(rgba(0, 229, 255, 0.045) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0, 229, 255, 0.045) 1px, transparent 1px),
-    linear-gradient(rgba(0, 229, 255, 0.018) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0, 229, 255, 0.018) 1px, transparent 1px);
+    linear-gradient(rgba(18, 214, 242, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(18, 214, 242, 0.06) 1px, transparent 1px),
+    linear-gradient(rgba(18, 214, 242, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(18, 214, 242, 0.025) 1px, transparent 1px);
   background-size: 140px 140px, 140px 140px, 28px 28px, 28px 28px;
   animation: ntGridDrift 60s linear infinite;
 }}
@@ -129,14 +129,14 @@ CUSTOM_CSS = FONT_CSS + f"""
   font-family: var(--nt-display) !important;
   font-weight: 700; letter-spacing: 0.14em;
   color: var(--nt-primary);
-  text-shadow: 0 0 14px rgba(0, 229, 255, 0.55);
+  text-shadow: 0 0 14px rgba(18, 214, 242, 0.5);
   position: relative;
 }}
 .nt-brand::after {{
-  content: ""; position: absolute; left: 0; right: 0; bottom: -3px; height: 1px;
+  content: ""; position: absolute; left: 0; right: 0; bottom: -3px; height: 2px;
   background: linear-gradient(90deg, transparent, var(--nt-primary), transparent);
   animation: ntSweep 3.2s ease-in-out infinite;
-  opacity: 0.8;
+  opacity: 0.85;
 }}
 @keyframes ntSweep {{
   0%, 100% {{ transform: translateX(-30%); opacity: 0.15; }}
@@ -145,9 +145,9 @@ CUSTOM_CSS = FONT_CSS + f"""
 
 /* ── 크롬(툴바/드로어/푸터) ────────────────────────────────────────── */
 .v-toolbar.v-app-bar {{
-  background: linear-gradient(180deg, #0e1930 0%, var(--nt-surface) 100%) !important;
+  background: linear-gradient(180deg, #2c405d 0%, var(--nt-surface) 100%) !important;
   border-bottom: 1px solid var(--nt-border);
-  box-shadow: 0 1px 0 rgba(0, 229, 255, 0.12) !important;
+  box-shadow: 0 1px 0 rgba(18, 214, 242, 0.18) !important;
 }}
 .nt-drawer, .v-navigation-drawer {{
   background: var(--nt-surface) !important;
@@ -187,8 +187,8 @@ CUSTOM_CSS = FONT_CSS + f"""
   transition: border-color 0.25s ease, box-shadow 0.25s ease;
 }}
 .nt-drawer .v-expansion-panel--active {{
-  border-color: rgba(0, 229, 255, 0.45);
-  box-shadow: inset 3px 0 0 var(--nt-primary), 0 4px 18px rgba(0, 0, 0, 0.45);
+  border-color: rgba(18, 214, 242, 0.5);
+  box-shadow: inset 3px 0 0 var(--nt-primary), 0 4px 18px rgba(0, 0, 0, 0.3);
 }}
 .v-expansion-panel-text__wrapper {{ animation: ntFade 0.3s ease; }}
 @keyframes ntFade {{
@@ -196,17 +196,17 @@ CUSTOM_CSS = FONT_CSS + f"""
   to   {{ opacity: 1; transform: translateY(0); }}
 }}
 .nt-drawer .v-card {{
-  background: rgba(6, 11, 20, 0.55) !important;
+  background: rgba(255, 255, 255, 0.04) !important;
   border: 1px solid var(--nt-border);
   transition: border-color 0.2s ease;
 }}
-.nt-drawer .v-card:hover {{ border-color: rgba(0, 229, 255, 0.35); }}
+.nt-drawer .v-card:hover {{ border-color: rgba(18, 214, 242, 0.4); }}
 
 /* ── 버튼: 주 액션 발광 ────────────────────────────────────────────── */
 .v-btn--variant-elevated.bg-primary, .v-btn.bg-primary {{
-  box-shadow: 0 0 16px rgba(0, 229, 255, 0.28) !important;
+  box-shadow: 0 0 16px rgba(18, 214, 242, 0.32) !important;
 }}
-.v-btn.bg-primary:hover {{ box-shadow: 0 0 26px rgba(0, 229, 255, 0.5) !important; }}
+.v-btn.bg-primary:hover {{ box-shadow: 0 0 26px rgba(18, 214, 242, 0.55) !important; }}
 
 /* ── 파이프라인 칩 ─────────────────────────────────────────────────── */
 .v-chip {{ font-size: 0.66rem !important; letter-spacing: 0.04em; }}
@@ -219,18 +219,18 @@ CUSTOM_CSS = FONT_CSS + f"""
 /* ── 진행바/스크롤바/다이얼로그 ────────────────────────────────────── */
 .v-progress-linear {{ border-radius: 2px; }}
 .v-progress-linear__determinate {{
-  box-shadow: 0 0 10px rgba(0, 229, 255, 0.6);
+  box-shadow: 0 0 10px rgba(18, 214, 242, 0.65);
 }}
 ::-webkit-scrollbar {{ width: 9px; height: 9px; }}
 ::-webkit-scrollbar-track {{ background: var(--nt-bg); }}
 ::-webkit-scrollbar-thumb {{
-  background: #22314d; border-radius: 5px; border: 2px solid var(--nt-bg);
+  background: #3a4d6b; border-radius: 5px; border: 2px solid var(--nt-bg);
 }}
-::-webkit-scrollbar-thumb:hover {{ background: #2e415f; }}
+::-webkit-scrollbar-thumb:hover {{ background: #4a6088; }}
 .v-dialog .v-card {{
   background: var(--nt-panel) !important;
-  border: 1px solid rgba(0, 229, 255, 0.25);
-  box-shadow: 0 0 40px rgba(0, 0, 0, 0.7), 0 0 22px rgba(0, 229, 255, 0.12) !important;
+  border: 1px solid rgba(18, 214, 242, 0.3);
+  box-shadow: 0 0 40px rgba(0, 0, 0, 0.45), 0 0 22px rgba(18, 214, 242, 0.15) !important;
 }}
 .v-snackbar__wrapper {{ font-family: var(--nt-display); }}
 """

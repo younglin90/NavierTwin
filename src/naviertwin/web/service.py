@@ -60,6 +60,43 @@ def load_dataset(path: str | Path) -> CFDDataset:
     return ReaderFactory().create_and_read(target)
 
 
+def list_directory(path: str | Path | None = None) -> dict[str, Any]:
+    """파일 브라우저용 — 디렉토리를 나열한다 (하위 디렉토리 + 로드 가능 파일).
+
+    로드 가능 파일 = ReaderFactory 등록 확장자 + OpenFOAM(.foam) + ``.ntwin``.
+    숨김 항목은 제외. 경로가 없거나 없으면 홈으로 폴백.
+
+    Returns:
+        ``cwd``, ``parent``(없으면 None), ``entries``(name/path/is_dir 정렬 목록),
+        ``home`` 을 담은 dict.
+    """
+    from naviertwin.core.cfd_reader import ReaderFactory
+
+    exts = set(ReaderFactory.registered_extensions()) | {".foam", ".openfoam", ".ntwin"}
+    home = Path.home()
+    base = Path(path).expanduser() if path else home
+    if base.is_file():
+        base = base.parent
+    if not base.is_dir():
+        base = home
+
+    entries: list[dict[str, Any]] = []
+    try:
+        children = sorted(base.iterdir(), key=lambda q: (not q.is_dir(), q.name.lower()))
+    except (PermissionError, OSError):
+        children = []
+    for child in children:
+        if child.name.startswith("."):
+            continue
+        is_dir = child.is_dir()
+        if not is_dir and child.suffix.lower() not in exts:
+            continue
+        entries.append({"name": child.name, "path": str(child), "is_dir": is_dir})
+
+    parent = str(base.parent) if base.parent != base else None
+    return {"cwd": str(base), "parent": parent, "entries": entries, "home": str(home)}
+
+
 def load_project(path: str | Path) -> tuple[CFDDataset, Any | None]:
     """``.ntwin`` 프로젝트를 로드한다 (+ 같은 폴더의 ``.engine.pkl`` 트윈 복원).
 
@@ -99,24 +136,38 @@ def make_demo_dataset(
     nx: int = 48,
     ny: int = 48,
     n_steps: int = 12,
+    kind: str = "advecting",
     nu: float = 0.05,
     oscillation_hz: float = 1.5,
     oscillation_amp: float = 0.25,
+    drift_cycles_x: float = 1.5,
+    drift_cycles_y: float = 0.5,
 ) -> CFDDataset:
-    """Taylor–Green 감쇠 와류 합성 데이터셋을 생성한다.
+    """합성 시계열 데모 데이터셋을 생성한다 (파이프라인 즉시 체험용).
 
-    파일 없이 전체 파이프라인(Analyze/Reduce/Twin)을 즉시 체험할 수 있는
-    데모용 데이터셋이다. 2D 정형 격자 위에 시간에 따라 감쇠하는 속도장 ``U``
-    와 압력장 ``p`` 를 시계열로 담는다.
+    ``kind`` 로 난이도가 다른 두 종류를 만든다:
+
+    - ``"advecting"``: 이류 Taylor–Green 와류 — 부드럽고(연속) 공간 주기적.
+      진폭이 시간 진동(FFT 검출용)하고 셀이 대각선으로 흐른다. POD/FNO 가
+      쉽게 학습(빠른 특이값 감쇠). 단위 테스트가 쓰는 기본값.
+    - ``"filament"``: **소용돌이(차등 회전) 유동이 날카로운 불연속 스칼라
+      덩어리(슬롯 원반·사각형·바)를 나선 필라멘트로 감아올린다.** 경계가
+      뚜렷한 불연속 + 국소적(비주기) + 필라멘트화로 POD 특이값이 느리게
+      감쇠 → 학습이 어렵다. 데모 버튼(:meth:`load_demo`)이 쓰는 값.
 
     Args:
-        nx: x 방향 격자점 수.
-        ny: y 방향 격자점 수.
+        nx/ny: 격자점 수.
         n_steps: 타임스텝 수.
-        nu: 동점성계수 (감쇠율 제어).
+        kind: ``"advecting"`` | ``"filament"``.
+        nu: 감쇠율(advecting).
+        oscillation_hz/oscillation_amp: 진폭 진동(advecting, FFT 검출용).
+        drift_cycles_x/drift_cycles_y: 이류 주기 수(advecting).
 
     Returns:
         시계열 ``U``/``p`` 를 metadata 에 담은 ``CFDDataset``.
+
+    Raises:
+        ValueError: 지원하지 않는 ``kind``.
     """
     import pyvista as pv
 
@@ -142,24 +193,57 @@ def make_demo_dataset(
         origin=(0.0, 0.0, 0.0),
     )
 
+    if kind not in {"advecting", "filament"}:
+        raise ValueError(f"지원하지 않는 demo kind: {kind}. 지원: ['advecting', 'filament']")
+
     times = np.linspace(0.0, 2.0, n_steps)
+    t_span = float(times[-1]) if times[-1] > 0 else 1.0
     velocity = np.zeros((n_steps, n_points, 3), dtype=np.float64)
     pressure = np.zeros((n_steps, n_points), dtype=np.float64)
-    step = 0
-    while step < n_steps:
-        t = float(times[step])
-        # 단조 감쇠 포락선에 약한 시간 진동을 더해 FFT/PSD 가 검출할 주파수를 만든다.
-        # (공간 와류 구조는 유지된다.)
-        envelope = np.exp(-2.0 * nu * t) * (
-            1.0 + oscillation_amp * np.sin(2.0 * np.pi * oscillation_hz * t)
-        )
-        decay = envelope
-        u = np.cos(x_flat) * np.sin(y_flat) * decay
-        v = -np.sin(x_flat) * np.cos(y_flat) * decay
-        velocity[step, :, 0] = u
-        velocity[step, :, 1] = v
-        pressure[step] = -0.25 * (np.cos(2.0 * x_flat) + np.cos(2.0 * y_flat)) * (decay ** 2)
-        step += 1
+
+    if kind == "advecting":
+        step = 0
+        while step < n_steps:
+            t = float(times[step])
+            # 단조 감쇠 포락선 + 약한 시간 진동(FFT/PSD 가 검출할 주파수).
+            envelope = np.exp(-2.0 * nu * t) * (
+                1.0 + oscillation_amp * np.sin(2.0 * np.pi * oscillation_hz * t)
+            )
+            # 이류: 정규화 시간 s 만큼 공간 위상을 이동 → 셀이 대각선으로 흐른다.
+            s = t / t_span
+            px = x_flat - two_pi * drift_cycles_x * s
+            py = y_flat - two_pi * drift_cycles_y * s
+            velocity[step, :, 0] = np.cos(px) * np.sin(py) * envelope
+            velocity[step, :, 1] = -np.sin(px) * np.cos(py) * envelope
+            pressure[step] = -0.25 * (np.cos(2.0 * px) + np.cos(2.0 * py)) * (envelope ** 2)
+            step += 1
+        source = "demo_taylor_green"
+        description = "Advecting Taylor–Green vortex (smooth, periodic)"
+    else:  # "filament" — 소용돌이 유동이 불연속 스칼라를 나선으로 감아올림
+        # 좌표를 [0,1] 로 정규화 (도메인은 경계가 있는 비주기 사각형).
+        xn = x_flat / two_pi
+        yn = y_flat / two_pi
+        dx0 = xn - 0.5
+        dy0 = yn - 0.5
+        r = np.sqrt(dx0 * dx0 + dy0 * dy0)
+        phi = np.arctan2(dy0, dx0)
+        # 차등 회전: 전체 구간 동안 감는 각(중심 빠름 → 나선). 반경 불변.
+        winding = 5.5 * np.exp(-r / 0.30)
+        ang_speed = winding / t_span  # 정상 유동(시간 불변 속도) — p 는 감기며 진화.
+        u = -ang_speed * dy0
+        v = ang_speed * dx0
+        step = 0
+        while step < n_steps:
+            s = float(times[step]) / t_span
+            phi0 = phi - winding * s  # 역추적 각 (경계 날카로움 보존)
+            x0 = 0.5 + r * np.cos(phi0)
+            y0 = 0.5 + r * np.sin(phi0)
+            pressure[step] = _demo_sharp_blobs(x0, y0)
+            velocity[step, :, 0] = u
+            velocity[step, :, 1] = v
+            step += 1
+        source = "demo_swirl_filament"
+        description = "Swirling advection of sharp scalar blobs (discontinuous, non-periodic)"
 
     image.point_data["U"] = velocity[0]
     image.point_data["p"] = pressure[0]
@@ -169,12 +253,28 @@ def make_demo_dataset(
         time_steps=list(map(float, times)),
         field_names=["U", "p"],
         metadata={
-            "source": "demo_taylor_green",
-            "description": "Taylor–Green decaying vortex (synthetic demo)",
+            "source": source,
+            "description": description,
             "time_series_fields": {"U": velocity, "p": pressure},
             "time_series_locations": {"U": "point", "p": "point"},
         },
     )
+
+
+def _demo_sharp_blobs(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """[0,1]² 위 날카로운 불연속 스칼라 초기장 (슬롯 원반 + 사각형 + 바)."""
+    val = np.zeros_like(x)
+    # Zalesak 슬롯 원반 (비볼록 → 어려움)
+    disk = np.sqrt((x - 0.34) ** 2 + (y - 0.64) ** 2) < 0.17
+    slot = (np.abs(x - 0.34) < 0.035) & (y < 0.66)
+    val[disk & ~slot] = 1.0
+    # 사각형 패치
+    square = (x > 0.56) & (x < 0.80) & (y > 0.20) & (y < 0.44)
+    val[square] = 0.65
+    # 얇은 고대비 바
+    bar = (x > 0.18) & (x < 0.72) & (np.abs(y - 0.28) < 0.018)
+    val[bar] = -0.55
+    return val
 
 
 def dataset_info(dataset: CFDDataset) -> dict[str, Any]:

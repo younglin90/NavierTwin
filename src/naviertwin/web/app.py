@@ -90,7 +90,7 @@ class NavierTwinWebApp:
     def _init_state(self) -> None:
         st = self.state
         st.nt_version = __version__
-        st.nt_status = "데모 데이터를 로드하거나 CFD 파일 경로를 입력하세요."
+        st.nt_status = "데모 데이터를 로드하거나 '경로에서 로드'로 파일을 선택하세요."
         st.nt_busy = False
         st.nt_error = ""
         # 진행률: -1 = 비결정형(스피너), 0~100 = 결정형(라이브 학습/비교)
@@ -105,6 +105,12 @@ class NavierTwinWebApp:
 
         # Import
         st.nt_path = ""
+        # 파일 브라우저 모달
+        st.nt_fb_dialog = False
+        st.nt_fb_cwd = ""
+        st.nt_fb_parent = None
+        st.nt_fb_entries = []
+        st.nt_fb_home = ""
         st.nt_has_dataset = False
         st.nt_info_points = 0
         st.nt_info_cells = 0
@@ -219,6 +225,11 @@ class NavierTwinWebApp:
         ctrl.nt_load_demo = A(self.load_demo, "데모 데이터 로드 중…", render_after=True)
         ctrl.nt_load_path = A(self.load_path, "CFD 데이터 로드 중…", render_after=True)
         ctrl.nt_load_project = A(self.load_project, ".ntwin 프로젝트 로드 중…", render_after=True)
+        # 파일 브라우저 (모달 열기/이동/선택은 즉시 반응 — 동기)
+        ctrl.nt_fb_open = self.fb_open
+        ctrl.nt_fb_navigate = self.fb_navigate
+        ctrl.nt_fb_pick = self.fb_pick
+        ctrl.nt_fb_load_cwd = self.fb_load_cwd
         ctrl.nt_run_analysis = A(self.run_analysis, "와류 식별 계산 중…", render_after=True)
         ctrl.nt_run_fft = A(self.run_fft, "FFT/PSD 계산 중…")
         ctrl.nt_run_pod = A(self.run_pod, "POD 계산 중…")
@@ -306,10 +317,13 @@ class NavierTwinWebApp:
     # ------------------------------------------------------------------
 
     def load_demo(self) -> None:
-        """Taylor–Green 합성 데모 데이터셋을 로드한다."""
+        """불연속·비주기 소용돌이 필라멘트 데모 데이터셋을 로드한다."""
         try:
-            dataset = service.make_demo_dataset()
-            self._set_dataset(dataset, status="데모 데이터셋 로드 완료 (Taylor–Green vortex).")
+            dataset = service.make_demo_dataset(kind="filament")
+            self._set_dataset(
+                dataset,
+                status="데모 데이터셋 로드 완료 (소용돌이 필라멘트 — 불연속·비주기).",
+            )
         except Exception as exc:  # noqa: BLE001
             self._fail("데모 로드 실패", exc)
 
@@ -341,6 +355,55 @@ class NavierTwinWebApp:
                 self._restore_engine(engine)
         except Exception as exc:  # noqa: BLE001
             self._fail("프로젝트 로드 실패", exc)
+
+    # ------------------------------------------------------------------
+    # 파일 브라우저 (서버측 탐색기 모달)
+    # ------------------------------------------------------------------
+
+    def _fb_refresh(self, path: str | None = None) -> None:
+        """디렉토리 목록을 갱신해 모달 상태에 반영한다."""
+        listing = service.list_directory(path)
+        st = self.state
+        st.nt_fb_cwd = listing["cwd"]
+        st.nt_fb_parent = listing["parent"]
+        st.nt_fb_entries = listing["entries"]
+        st.nt_fb_home = listing["home"]
+
+    def fb_open(self) -> None:
+        """파일 브라우저 모달을 연다 (마지막 위치 또는 홈)."""
+        self._fb_refresh((self.state.nt_fb_cwd or "").strip() or None)
+        self.state.nt_fb_dialog = True
+
+    def fb_navigate(self, path: str) -> None:
+        """모달 내에서 디렉토리를 이동한다."""
+        self._fb_refresh(path)
+
+    def _fb_dispatch_load(self, path: str) -> None:
+        """모달을 닫고 경로 로드를 비동기로 트리거한다 (없으면 동기 폴백)."""
+        import asyncio
+
+        self.state.nt_path = path
+        self.state.nt_fb_dialog = False
+        is_proj = path.lower().endswith(".ntwin")
+        msg = ".ntwin 프로젝트 로드 중…" if is_proj else "CFD 데이터 로드 중…"
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None:
+            loop.create_task(self._run_async(self.load_path, msg, render_after=True))
+        else:  # 테스트 등 루프 밖 컨텍스트
+            self.load_path()
+
+    def fb_pick(self, path: str) -> None:
+        """브라우저에서 파일을 선택 → 확장자에 따라 로드한다."""
+        self._fb_dispatch_load(path)
+
+    def fb_load_cwd(self) -> None:
+        """현재 폴더 자체를 로드한다 (OpenFOAM case 디렉토리 등)."""
+        cwd = (self.state.nt_fb_cwd or "").strip()
+        if cwd:
+            self._fb_dispatch_load(cwd)
 
     def _restore_engine(self, engine: Any) -> None:
         """로드된 TwinEngine 으로 Model/Twin 상태를 복원한다.
@@ -1380,6 +1443,59 @@ class NavierTwinWebApp:
                         v3.VSpacer()
                         v3.VBtn("닫기", click="nt_compare_dialog = false", variant="text")
 
+            # 파일 브라우저 모달 (서버측 탐색기)
+            with v3.VDialog(v_model=("nt_fb_dialog",), max_width="640"):
+                with v3.VCard():
+                    with v3.VCardTitle(classes="text-subtitle-1 d-flex align-center"):
+                        v3.VIcon("mdi-folder-open", classes="mr-2", color="primary")
+                        html.Span("파일 · 폴더 열기")
+                    with v3.VCardSubtitle(classes="text-caption text-truncate pb-2"):
+                        html.Span("{{ nt_fb_cwd }}")
+                    v3.VDivider()
+                    with v3.VCardText(
+                        classes="pa-0",
+                        style="max-height:52vh; overflow-y:auto;",
+                    ):
+                        with v3.VList(density="compact", nav=True):
+                            v3.VListItem(
+                                v_if="nt_fb_parent",
+                                title="..",
+                                prepend_icon="mdi-arrow-up-left",
+                                click=(self.ctrl.nt_fb_navigate, "[nt_fb_parent]"),
+                            )
+                            with html.Template(
+                                v_for="entry in nt_fb_entries",
+                                key="entry.path",
+                            ):
+                                v3.VListItem(
+                                    v_if="entry.is_dir",
+                                    title=("entry.name",),
+                                    prepend_icon="mdi-folder",
+                                    click=(self.ctrl.nt_fb_navigate, "[entry.path]"),
+                                )
+                                v3.VListItem(
+                                    v_if="!entry.is_dir",
+                                    title=("entry.name",),
+                                    prepend_icon="mdi-file-outline",
+                                    click=(self.ctrl.nt_fb_pick, "[entry.path]"),
+                                )
+                        html.Div(
+                            "(이 폴더에는 하위 폴더나 로드 가능한 파일이 없습니다)",
+                            v_if="nt_fb_entries.length === 0",
+                            classes="text-caption text-disabled pa-4 text-center",
+                        )
+                    v3.VDivider()
+                    with v3.VCardActions():
+                        v3.VBtn(
+                            "현재 폴더 로드",
+                            click=self.ctrl.nt_fb_load_cwd,
+                            variant="tonal",
+                            color="primary",
+                            prepend_icon="mdi-folder-download-outline",
+                        )
+                        v3.VSpacer()
+                        v3.VBtn("닫기", click="nt_fb_dialog = false", variant="text")
+
             # 토스트 (완료/오류 알림)
             with v3.VSnackbar(
                 v_model=("nt_toast_show",),
@@ -1433,31 +1549,19 @@ class NavierTwinWebApp:
                         disabled=("nt_busy",),
                         prepend_icon="mdi-flask-outline",
                     )
-                    v3.VTextField(
-                        v_model=("nt_path",),
-                        label="CFD 파일/디렉토리 경로",
-                        density="compact",
-                        classes="mt-3",
-                        clearable=True,
-                        placeholder="*.vtk, *.vtu, OpenFOAM case, ...",
-                    )
                     v3.VBtn(
                         "경로에서 로드",
-                        click=self.ctrl.nt_load_path,
+                        click=self.ctrl.nt_fb_open,
                         variant="tonal",
                         block=True,
-                        classes="mt-2",
+                        classes="mt-3",
                         disabled=("nt_busy",),
-                        prepend_icon="mdi-folder-open-outline",
+                        prepend_icon="mdi-folder-search-outline",
                     )
-                    v3.VBtn(
-                        "프로젝트 열기 (.ntwin)",
-                        click=self.ctrl.nt_load_project,
-                        variant="tonal",
-                        block=True,
-                        classes="mt-2",
-                        disabled=("nt_busy",),
-                        prepend_icon="mdi-folder-zip-outline",
+                    html.Div(
+                        "탐색기에서 CFD 파일(*.vtk, *.vtu, ...), OpenFOAM 폴더, "
+                        "또는 .ntwin 프로젝트를 선택합니다.",
+                        classes="text-caption text-disabled mt-1",
                     )
                     html.Div(
                         "같은 폴더의 <name>.engine.pkl 이 있으면 트윈도 함께 복원합니다. "

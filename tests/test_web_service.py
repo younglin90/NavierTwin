@@ -38,6 +38,23 @@ def test_make_demo_dataset_shapes(demo) -> None:
     assert series["p"].shape == (8, 400)
 
 
+def test_make_demo_dataset_filament_is_discontinuous_and_evolving() -> None:
+    ds = service.make_demo_dataset(nx=40, ny=40, n_steps=8, kind="filament")
+    assert service.dataset_info(ds)["source"] == "demo_swirl_filament"
+    p = np.asarray(ds.metadata["time_series_fields"]["p"]).reshape(8, 40, 40)
+    # 불연속: 인접 셀 점프가 필드 범위에 육박(부드러운 데이터면 훨씬 작음).
+    field_range = float(p.max() - p.min())
+    max_jump = float(np.abs(np.diff(p[0], axis=1)).max())
+    assert max_jump > 0.5 * field_range
+    # 시간 진화: 첫/중간 스냅샷이 확연히 다름.
+    assert not np.allclose(p[0], p[4])
+
+
+def test_make_demo_dataset_rejects_unknown_kind() -> None:
+    with pytest.raises(ValueError):
+        service.make_demo_dataset(kind="bogus")
+
+
 def test_sync_timestep_to_mesh_updates_base_fields(demo) -> None:
     service.sync_timestep_to_mesh(demo, 0)
     u0 = np.asarray(demo.mesh.point_data["U"]).copy()
@@ -397,3 +414,42 @@ def test_prepare_render_mesh_scalar_field(demo) -> None:
     mesh, scalar = render.prepare_render_mesh(demo, "p", timestep=0)
     assert scalar == "p"
     assert scalar in mesh.point_data
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 파일 브라우저 — list_directory
+# ──────────────────────────────────────────────────────────────────────
+
+
+def test_list_directory_lists_dirs_and_loadable_files(tmp_path) -> None:
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "case.vtk").write_text("x")
+    (tmp_path / "proj.ntwin").write_bytes(b"x")
+    (tmp_path / "notes.txt").write_text("skip me")  # 로드 불가 확장자
+    (tmp_path / ".hidden").write_text("skip")  # 숨김
+
+    result = service.list_directory(tmp_path)
+    names = {e["name"] for e in result["entries"]}
+    assert "sub" in names
+    assert "case.vtk" in names
+    assert "proj.ntwin" in names
+    assert "notes.txt" not in names
+    assert ".hidden" not in names
+    # 디렉토리가 파일보다 먼저 정렬된다.
+    assert result["entries"][0]["is_dir"] is True
+    assert result["parent"] == str(tmp_path.parent)
+    assert result["cwd"] == str(tmp_path)
+
+
+def test_list_directory_file_path_falls_back_to_parent(tmp_path) -> None:
+    f = tmp_path / "case.vtu"
+    f.write_text("x")
+    result = service.list_directory(f)
+    assert result["cwd"] == str(tmp_path)
+
+
+def test_list_directory_missing_path_falls_back_home(tmp_path) -> None:
+    result = service.list_directory(tmp_path / "does-not-exist")
+    from pathlib import Path
+
+    assert result["cwd"] == str(Path.home())
