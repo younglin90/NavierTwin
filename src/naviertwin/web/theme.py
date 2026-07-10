@@ -1,8 +1,14 @@
-"""NavierTwin 웹 GUI 디자인 시스템 — 다크 엔지니어링 테마 단일 출처.
+"""NavierTwin 웹 GUI 디자인 시스템 — "풍동 계측실(Wind-Tunnel Instrument)" 테마.
 
-vuetify3 커스텀 다크 테마, 커스텀 CSS(폰트/애니메이션/스크롤바), matplotlib 다크
-스타일, PyVista 뷰어 배경을 한 곳에서 정의한다. 팔레트는 기존 차트 색상
-(`#2f81f7`/`#3fb950`/`#f0883e`)과 일치시켜 3D 뷰어·차트·UI 전반의 색을 통일한다.
+방향: 심연 잉크 네이비 위 **포스포 시안 단일 강렬 악센트**(오실로스코프
+트레이스), 앰버 보조 계기색. 배경은 단색이 아니라 청사진 측정 격자 +
+레이어드 글로우가 느리게 드리프트한다. 타이포는 Chakra Petch(각진 HUD
+디스플레이체, 제목/버튼/브랜드)와 Spline Sans Mono(계측 수치) — woff2 를
+base64 내장(:mod:`naviertwin.web.fonts`)해 오프라인 Electron 에서도 동일하다.
+한글 본문은 시스템 폰트 폴백.
+
+모든 색은 CSS 변수(``--nt-*``)와 이 모듈 상수의 단일 출처를 공유한다 —
+vuetify 테마, 3D 뷰어 배경, matplotlib 차트가 같은 팔레트를 쓴다.
 """
 
 from __future__ import annotations
@@ -10,33 +16,38 @@ from __future__ import annotations
 import contextlib
 from typing import Any, Iterator
 
+from naviertwin.web.fonts import FONT_CSS
+
 # ──────────────────────────────────────────────────────────────────────
-# 팔레트 (GitHub dark 계열 — 차트 색과 통일)
+# 팔레트 — 심연 네이비 + 포스포 시안(주) + 앰버(보조)
 # ──────────────────────────────────────────────────────────────────────
-BACKGROUND = "#0d1117"
-SURFACE = "#161b22"
-PANEL = "#1c2128"
-BORDER = "#30363d"
-PRIMARY = "#2f81f7"
-SECONDARY = "#3fb950"  # success/green
-WARNING = "#f0883e"
-ERROR = "#f85149"
-INFO = "#22d3ee"
-TEXT = "#e6edf3"
-MUTED = "#8b949e"
+BACKGROUND = "#060b14"   # 심연 잉크
+SURFACE = "#0b1322"      # 계기함
+PANEL = "#101a2e"        # 패널
+BORDER = "#1d2a41"       # 케이싱 라인
+PRIMARY = "#00e5ff"      # 포스포 시안 (스코프 트레이스)
+SECONDARY = "#5df0a8"    # 성공(유량 정상)
+WARNING = "#ffb454"      # 앰버 계기
+ERROR = "#ff5d6c"        # 경보
+INFO = "#7ad7ff"         # 보조 시안
+TEXT = "#d9e6f2"
+MUTED = "#66788f"
 
 # 3D 뷰어 배경 그라데이션 (아래→위)
-VIEWER_BG_BOTTOM = "#0d1117"
-VIEWER_BG_TOP = "#1b2735"
+VIEWER_BG_BOTTOM = "#060b14"
+VIEWER_BG_TOP = "#12203a"
+
+DISPLAY_FONT = "'Chakra Petch', 'Malgun Gothic', sans-serif"
+MONO_FONT = "'Spline Sans Mono', ui-monospace, monospace"
 
 
 def vuetify_config() -> dict[str, Any]:
     """``VAppLayout(vuetify_config=...)`` 로 주입할 커스텀 다크 테마 설정."""
     return {
         "theme": {
-            "defaultTheme": "navierDark",
+            "defaultTheme": "windTunnel",
             "themes": {
-                "navierDark": {
+                "windTunnel": {
                     "dark": True,
                     "colors": {
                         "background": BACKGROUND,
@@ -49,6 +60,8 @@ def vuetify_config() -> dict[str, Any]:
                         "info": INFO,
                         "on-background": TEXT,
                         "on-surface": TEXT,
+                        "on-primary": "#04121a",
+                        "on-success": "#04160c",
                     },
                 },
             },
@@ -56,82 +69,176 @@ def vuetify_config() -> dict[str, Any]:
     }
 
 
-# 커스텀 CSS — 폰트, 스크롤바, 카드 hover, 브랜드 타이틀, 패널 페이드, busy pulse.
-CUSTOM_CSS = f"""
+CUSTOM_CSS = FONT_CSS + f"""
 :root {{
   --nt-bg: {BACKGROUND};
   --nt-surface: {SURFACE};
   --nt-panel: {PANEL};
   --nt-border: {BORDER};
   --nt-primary: {PRIMARY};
+  --nt-amber: {WARNING};
+  --nt-text: {TEXT};
   --nt-muted: {MUTED};
+  --nt-display: {DISPLAY_FONT};
+  --nt-mono: {MONO_FONT};
 }}
 
+/* ── 배경: 잉크 그라데이션 + 청사진 측정 격자(느린 드리프트) ───────── */
 .v-application, .v-application__wrap {{
-  background: var(--nt-bg) !important;
+  background:
+    radial-gradient(140% 90% at 85% -10%, #12203a 0%, transparent 55%),
+    radial-gradient(120% 80% at -10% 110%, #0d1b31 0%, transparent 50%),
+    var(--nt-bg) !important;
+}}
+.v-main {{
+  position: relative;
+}}
+.v-main::before {{
+  content: "";
+  position: absolute; inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(0, 229, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 229, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(rgba(0, 229, 255, 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 229, 255, 0.018) 1px, transparent 1px);
+  background-size: 140px 140px, 140px 140px, 28px 28px, 28px 28px;
+  animation: ntGridDrift 60s linear infinite;
+}}
+@keyframes ntGridDrift {{
+  from {{ background-position: 0 0, 0 0, 0 0, 0 0; }}
+  to   {{ background-position: 140px 140px, 140px 140px, 28px 28px, 28px 28px; }}
 }}
 
-/* 다크 스크롤바 */
-::-webkit-scrollbar {{ width: 10px; height: 10px; }}
-::-webkit-scrollbar-track {{ background: var(--nt-bg); }}
-::-webkit-scrollbar-thumb {{
-  background: #2d333b; border-radius: 6px; border: 2px solid var(--nt-bg);
+/* ── 타이포 ────────────────────────────────────────────────────────── */
+.v-application {{
+  color: var(--nt-text);
 }}
-::-webkit-scrollbar-thumb:hover {{ background: #3d444d; }}
+.v-toolbar-title, .v-expansion-panel-title, .v-btn, .v-card-title,
+.v-chip, .v-tab, .v-label {{
+  font-family: var(--nt-display) !important;
+}}
+.v-btn {{ letter-spacing: 0.06em; }}
+.nt-mono, .v-slider-thumb__label, .v-progress-linear__content {{
+  font-family: var(--nt-mono) !important;
+  font-size: 0.8rem;
+}}
 
-/* 브랜드 타이틀 그라데이션 */
+/* 브랜드 — 시안 발광 + 스코프 스윕 */
 .nt-brand {{
-  font-weight: 700; letter-spacing: 0.5px;
-  background: linear-gradient(90deg, {PRIMARY} 0%, {INFO} 60%, {SECONDARY} 100%);
-  -webkit-background-clip: text; background-clip: text;
-  -webkit-text-fill-color: transparent;
+  font-family: var(--nt-display) !important;
+  font-weight: 700; letter-spacing: 0.14em;
+  color: var(--nt-primary);
+  text-shadow: 0 0 14px rgba(0, 229, 255, 0.55);
+  position: relative;
+}}
+.nt-brand::after {{
+  content: ""; position: absolute; left: 0; right: 0; bottom: -3px; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--nt-primary), transparent);
+  animation: ntSweep 3.2s ease-in-out infinite;
+  opacity: 0.8;
+}}
+@keyframes ntSweep {{
+  0%, 100% {{ transform: translateX(-30%); opacity: 0.15; }}
+  50% {{ transform: translateX(30%); opacity: 0.9; }}
 }}
 
-/* 드로어 패널 카드 hover — 살짝 떠오르는 느낌 */
-.nt-drawer .v-card {{
-  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.12s ease;
+/* ── 크롬(툴바/드로어/푸터) ────────────────────────────────────────── */
+.v-toolbar.v-app-bar {{
+  background: linear-gradient(180deg, #0e1930 0%, var(--nt-surface) 100%) !important;
+  border-bottom: 1px solid var(--nt-border);
+  box-shadow: 0 1px 0 rgba(0, 229, 255, 0.12) !important;
+}}
+.nt-drawer, .v-navigation-drawer {{
+  background: var(--nt-surface) !important;
+  border-right: 1px solid var(--nt-border) !important;
+}}
+.v-footer {{
+  background: var(--nt-surface) !important;
+  border-top: 1px solid var(--nt-border);
+  font-family: var(--nt-mono);
+  font-size: 0.72rem !important;
+}}
+
+/* ── 드로어 로딩 캐스케이드 (첫 페인트 시 위→아래 순차 등장) ───────── */
+.nt-drawer .v-expansion-panel, .nt-drawer .v-sheet {{
+  animation: ntRise 0.5s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}}
+.nt-drawer .v-sheet {{ animation-delay: 0.05s; }}
+.nt-drawer .v-expansion-panel:nth-child(1) {{ animation-delay: 0.10s; }}
+.nt-drawer .v-expansion-panel:nth-child(2) {{ animation-delay: 0.16s; }}
+.nt-drawer .v-expansion-panel:nth-child(3) {{ animation-delay: 0.22s; }}
+.nt-drawer .v-expansion-panel:nth-child(4) {{ animation-delay: 0.28s; }}
+.nt-drawer .v-expansion-panel:nth-child(5) {{ animation-delay: 0.34s; }}
+.nt-drawer .v-expansion-panel:nth-child(6) {{ animation-delay: 0.40s; }}
+.nt-drawer .v-expansion-panel:nth-child(7) {{ animation-delay: 0.46s; }}
+.nt-drawer .v-expansion-panel:nth-child(8) {{ animation-delay: 0.52s; }}
+@keyframes ntRise {{
+  from {{ opacity: 0; transform: translateY(14px); }}
+  to   {{ opacity: 1; transform: translateY(0); }}
+}}
+
+/* ── 확장 패널: 계기 모듈 카드 ─────────────────────────────────────── */
+.nt-drawer .v-expansion-panel {{
+  background: var(--nt-panel) !important;
   border: 1px solid var(--nt-border);
+  border-radius: 10px !important;
+  margin-bottom: 6px;
+  transition: border-color 0.25s ease, box-shadow 0.25s ease;
 }}
-.nt-drawer .v-card:hover {{
-  border-color: {PRIMARY}66;
-  box-shadow: 0 2px 12px #0008;
+.nt-drawer .v-expansion-panel--active {{
+  border-color: rgba(0, 229, 255, 0.45);
+  box-shadow: inset 3px 0 0 var(--nt-primary), 0 4px 18px rgba(0, 0, 0, 0.45);
 }}
-
-/* 확장 패널 본문 등장 애니메이션 */
-.v-expansion-panel-text__wrapper {{ animation: ntFade 0.28s ease; }}
+.v-expansion-panel-text__wrapper {{ animation: ntFade 0.3s ease; }}
 @keyframes ntFade {{
   from {{ opacity: 0; transform: translateY(-6px); }}
   to   {{ opacity: 1; transform: translateY(0); }}
 }}
+.nt-drawer .v-card {{
+  background: rgba(6, 11, 20, 0.55) !important;
+  border: 1px solid var(--nt-border);
+  transition: border-color 0.2s ease;
+}}
+.nt-drawer .v-card:hover {{ border-color: rgba(0, 229, 255, 0.35); }}
 
-/* 작업 중 파이프라인 칩 pulse */
+/* ── 버튼: 주 액션 발광 ────────────────────────────────────────────── */
+.v-btn--variant-elevated.bg-primary, .v-btn.bg-primary {{
+  box-shadow: 0 0 16px rgba(0, 229, 255, 0.28) !important;
+}}
+.v-btn.bg-primary:hover {{ box-shadow: 0 0 26px rgba(0, 229, 255, 0.5) !important; }}
+
+/* ── 파이프라인 칩 ─────────────────────────────────────────────────── */
+.v-chip {{ font-size: 0.66rem !important; letter-spacing: 0.04em; }}
 .nt-chip-active {{ animation: ntPulse 1.3s ease-in-out infinite; }}
 @keyframes ntPulse {{
   0%, 100% {{ opacity: 1; }}
-  50%      {{ opacity: 0.45; }}
+  50% {{ opacity: 0.4; }}
 }}
 
-/* 숫자/지표 monospace */
-.nt-mono {{
-  font-family: "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, monospace;
-  font-size: 0.82rem;
+/* ── 진행바/스크롤바/다이얼로그 ────────────────────────────────────── */
+.v-progress-linear {{ border-radius: 2px; }}
+.v-progress-linear__determinate {{
+  box-shadow: 0 0 10px rgba(0, 229, 255, 0.6);
 }}
-
-/* 진행바 라운드 */
-.v-progress-linear {{ border-radius: 3px; }}
-
-/* 드로어/툴바 배경 톤 */
-.nt-drawer, .v-navigation-drawer {{ background: var(--nt-surface) !important; }}
-.v-toolbar.v-app-bar {{
-  background: linear-gradient(180deg, #1c2431 0%, {SURFACE} 100%) !important;
-  border-bottom: 1px solid var(--nt-border);
+::-webkit-scrollbar {{ width: 9px; height: 9px; }}
+::-webkit-scrollbar-track {{ background: var(--nt-bg); }}
+::-webkit-scrollbar-thumb {{
+  background: #22314d; border-radius: 5px; border: 2px solid var(--nt-bg);
 }}
+::-webkit-scrollbar-thumb:hover {{ background: #2e415f; }}
+.v-dialog .v-card {{
+  background: var(--nt-panel) !important;
+  border: 1px solid rgba(0, 229, 255, 0.25);
+  box-shadow: 0 0 40px rgba(0, 0, 0, 0.7), 0 0 22px rgba(0, 229, 255, 0.12) !important;
+}}
+.v-snackbar__wrapper {{ font-family: var(--nt-display); }}
 """
 
 
 @contextlib.contextmanager
 def mpl_dark() -> Iterator[None]:
-    """matplotlib 다크 스타일 컨텍스트 (facecolor 를 surface 색으로 통일)."""
+    """matplotlib 다크 스타일 컨텍스트 — 계기 팔레트로 통일."""
     import matplotlib as mpl
     import matplotlib.pyplot as plt
 
@@ -140,12 +247,13 @@ def mpl_dark() -> Iterator[None]:
         "axes.facecolor": PANEL,
         "savefig.facecolor": SURFACE,
         "axes.edgecolor": BORDER,
-        "grid.color": "#2d333b",
+        "grid.color": "#1a2740",
         "text.color": TEXT,
         "axes.labelcolor": TEXT,
         "xtick.color": MUTED,
         "ytick.color": MUTED,
         "axes.titlecolor": TEXT,
+        "font.family": "monospace",
     }
     with plt.style.context("dark_background"), mpl.rc_context(overrides):
         yield
@@ -155,8 +263,10 @@ __all__ = [
     "BACKGROUND",
     "BORDER",
     "CUSTOM_CSS",
+    "DISPLAY_FONT",
     "ERROR",
     "INFO",
+    "MONO_FONT",
     "MUTED",
     "PANEL",
     "PRIMARY",
