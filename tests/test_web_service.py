@@ -46,8 +46,12 @@ def test_make_demo_dataset_filament_is_discontinuous_and_evolving() -> None:
     field_range = float(p.max() - p.min())
     max_jump = float(np.abs(np.diff(p[0], axis=1)).max())
     assert max_jump > 0.5 * field_range
-    # 시간 진화: 첫/중간 스냅샷이 확연히 다름.
+    # 시간 진화: 첫/중간 스냅샷이 확연히 다름 (p).
     assert not np.allclose(p[0], p[4])
+    # 비정상 유동: 속도장 U 도 시간에 따라 변한다(가속 소용돌이).
+    u = np.asarray(ds.metadata["time_series_fields"]["U"])
+    assert not np.allclose(u[0], u[4])
+    assert not np.allclose(u[4], u[7])
 
 
 def test_make_demo_dataset_rejects_unknown_kind() -> None:

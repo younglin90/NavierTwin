@@ -229,18 +229,25 @@ def make_demo_dataset(
         phi = np.arctan2(dy0, dx0)
         # 차등 회전: 전체 구간 동안 감는 각(중심 빠름 → 나선). 반경 불변.
         winding = 5.5 * np.exp(-r / 0.30)
-        ang_speed = winding / t_span  # 정상 유동(시간 불변 속도) — p 는 감기며 진화.
-        u = -ang_speed * dy0
-        v = ang_speed * dx0
+        base_ang = winding / t_span
+        # 비정상 유동: 각속도가 시간에 따라 진화 → U 의 크기뿐 아니라 공간 패턴도 변한다.
+        #   방위류(순수 회전)라 유체 입자의 반경은 보존되고 각만 이동 → 역추적이 정확.
+        #   순간 배율   R(s,r) = 0.35 + 1.3 s + 0.8 s·G(r)
+        #   누적 배율   W(s,r) = ∫R ds = 0.35 s + 0.65 s² + 0.4 s²·G(r)   (R 의 정확한 적분)
+        #   G(r) = exp(-((r-0.25)/0.12)²): r≈0.25 에 시간이 지날수록 커지는 '빠른 회전 링'.
+        g_ring = np.exp(-((r - 0.25) / 0.12) ** 2)
         step = 0
         while step < n_steps:
             s = float(times[step]) / t_span
-            phi0 = phi - winding * s  # 역추적 각 (경계 날카로움 보존)
+            rate = 0.35 + 1.3 * s + 0.8 * s * g_ring
+            wound = 0.35 * s + 0.65 * s * s + 0.4 * s * s * g_ring
+            ang_speed = base_ang * rate  # 시간·반경 가변 각속도
+            phi0 = phi - winding * wound  # 역추적 각 (경계 날카로움 보존)
             x0 = 0.5 + r * np.cos(phi0)
             y0 = 0.5 + r * np.sin(phi0)
             pressure[step] = _demo_sharp_blobs(x0, y0)
-            velocity[step, :, 0] = u
-            velocity[step, :, 1] = v
+            velocity[step, :, 0] = -ang_speed * dy0
+            velocity[step, :, 1] = ang_speed * dx0
             step += 1
         source = "demo_swirl_filament"
         description = "Swirling advection of sharp scalar blobs (discontinuous, non-periodic)"
