@@ -111,6 +111,31 @@ def test_model_panel_reducer_surrogate_and_pod_mode() -> None:
     assert "kriging" in st.nt_model_summary
 
 
+def test_build_twin_dispatches_to_physicsnemo_when_selected() -> None:
+    """surrogate='physicsnemo' 선택 시 build_twin() 이 POD 없이 직접 예측 모델을 학습한다."""
+    app = _make_app("nt-test-physicsnemo")
+    st = app.server.state
+    app.load_demo()
+
+    st.nt_surrogate = "physicsnemo"
+    app.build_twin()
+    assert st.nt_error == ""
+    assert st.nt_model_ready is True
+    assert st.nt_physics_ready is True
+    assert st.nt_twin_ready is True
+    assert "PhysicsNeMo" in st.nt_model_summary
+
+    st.nt_twin_param = 0.5 * (st.nt_twin_min + st.nt_twin_max)
+    app.predict()
+    assert st.nt_error == ""
+    assert "twin_prediction" in st.nt_fields
+
+    # 고전 reducer+surrogate 로 다시 학습하면 physics_ready 플래그가 꺼진다.
+    st.nt_surrogate = "rbf"
+    app.build_twin()
+    assert st.nt_physics_ready is False
+
+
 def test_export_callbacks_write_files(tmp_path) -> None:
     import os
 

@@ -161,15 +161,19 @@ class NavierTwinWebApp:
         st.nt_surrogate_choices = [
             {"title": "RBF", "value": "rbf"},
             {"title": "Kriging (GP)", "value": "kriging"},
+            {"title": "PhysicsNeMo (직접 예측, reducer 불필요)", "value": "physicsnemo"},
         ]
         st.nt_model_ready = False
         st.nt_model_summary = ""
-
-        # Model — Physics AI (NVIDIA PhysicsNeMo, POD 없이 좌표+시간 → 필드 직접 예측)
+        # surrogate="physicsnemo" 로 학습된 엔진인지 — ⑥Export 의 "PhysicsNeMo
+        # Module" 버튼(실제 physicsnemo 패키지로 감싸기)은 이때만 의미가 있다.
+        st.nt_physics_ready = False
+        # Model — Physics AI (NVIDIA PhysicsNeMo) 학습 파라미터. POD reducer 없이
+        # 좌표+시간 → 필드를 직접 매핑하는 PyTorch MLP (surrogate 선택이
+        # "physicsnemo" 일 때만 쓰임 — Reducer 는 이때 숨겨진다).
         st.nt_physics_epochs = 150
         st.nt_physics_hidden = 32
         st.nt_physics_max_samples = 20_000
-        st.nt_physics_summary = ""
 
         # Twin
         st.nt_twin_ready = False
@@ -240,9 +244,8 @@ class NavierTwinWebApp:
         ctrl.nt_run_fft = A(self.run_fft, "FFT/PSD 계산 중…")
         ctrl.nt_run_pod = A(self.run_pod, "POD 계산 중…")
         ctrl.nt_view_pod_mode = A(self.view_pod_mode, "POD 모드 렌더 중…", render_after=True)
-        ctrl.nt_model_train = A(self.build_twin, "트윈 학습 중…")
+        ctrl.nt_model_train = A(self.build_twin, "모델 학습 중…")
         ctrl.nt_build_twin = ctrl.nt_model_train  # 하위 호환 alias (비동기)
-        ctrl.nt_build_physics_twin = A(self.build_physics_twin, "PhysicsNeMo 학습 중…")
         # 비교/학습은 라이브 진행 전용 async(모니터 큐 push)로 — 진행바/스파크라인 스트리밍.
         ctrl.nt_run_compare = self._run_compare_async
         ctrl.nt_predict = A(self.predict, "예측 계산 중…", render_after=True)
@@ -697,13 +700,21 @@ class NavierTwinWebApp:
         return self._figure_to_uri(fig)
 
     def build_twin(self) -> None:
-        """④Model — 선택한 reducer/surrogate 로 (시간→필드) 트윈을 학습한다."""
+        """④Model — 선택한 방식으로 (시간→필드) 트윈을 학습한다.
+
+        surrogate="physicsnemo" 이면 POD reducer 없이 좌표+시간을 필드로 직접
+        매핑하는 PhysicsNeMo 스타일 모델을 학습한다(:meth:`_build_physics_twin`
+        로 위임). 그 외에는 고전 POD reducer + surrogate(rbf/kriging) 파이프라인.
+        """
         if self.dataset is None:
             self._fail("데이터 없음", RuntimeError("먼저 데이터를 로드하세요."))
             return
+        surrogate = self.state.nt_surrogate or "rbf"
+        if surrogate == "physicsnemo":
+            self._build_physics_twin()
+            return
         field = self._base_field()
         reducer = self.state.nt_reducer or "pod"
-        surrogate = self.state.nt_surrogate or "rbf"
         try:
             result = service.build_twin(
                 self.dataset,
@@ -721,6 +732,7 @@ class NavierTwinWebApp:
             with self.state:
                 self.state.nt_model_ready = True
                 self.state.nt_model_summary = summary
+                self.state.nt_physics_ready = False
                 self.state.nt_twin_ready = True
                 self.state.nt_twin_min = pmin
                 self.state.nt_twin_max = pmax
@@ -731,16 +743,13 @@ class NavierTwinWebApp:
         except Exception as exc:  # noqa: BLE001
             self._fail("모델 학습 실패", exc)
 
-    def build_physics_twin(self) -> None:
+    def _build_physics_twin(self) -> None:
         """④Model — NVIDIA PhysicsNeMo 스타일 직접 필드 예측 모델을 학습한다.
 
         POD reducer 없이 (좌표+시간) → 필드를 곧장 학습하는 PyTorch MLP.
         결과 엔진은 ``predict()``만 노출하는 TwinEngine 과 같은 계약이라
         ⑤Twin/⑥Export 는 수정 없이 그대로 재사용된다.
         """
-        if self.dataset is None:
-            self._fail("데이터 없음", RuntimeError("먼저 데이터를 로드하세요."))
-            return
         field = self._base_field()
         try:
             result = service.build_physics_ai_twin(
@@ -761,7 +770,7 @@ class NavierTwinWebApp:
             with self.state:
                 self.state.nt_model_ready = True
                 self.state.nt_model_summary = summary
-                self.state.nt_physics_summary = summary
+                self.state.nt_physics_ready = True
                 self.state.nt_twin_ready = True
                 self.state.nt_twin_min = pmin
                 self.state.nt_twin_max = pmax
@@ -1205,7 +1214,7 @@ class NavierTwinWebApp:
             self.state.nt_pod_max_mode = 0
             self.state.nt_model_ready = False
             self.state.nt_model_summary = ""
-            self.state.nt_physics_summary = ""
+            self.state.nt_physics_ready = False
             self.state.nt_twin_ready = False
             self.state.nt_twin_summary = ""
             self.state.nt_fft_summary = ""
@@ -1807,11 +1816,14 @@ class NavierTwinWebApp:
             # 4) Model
             with v3.VExpansionPanel(title="④ Model (트윈 학습)"):
                 with v3.VExpansionPanelText():
+                    # PhysicsNeMo 는 POD reducer 를 쓰지 않는 직접 예측 방식이라
+                    # 이때는 Reducer 선택을 숨긴다 (surrogate 하나로 방식을 고른다).
                     v3.VSelect(
                         v_model=("nt_reducer",),
                         items=("nt_reducer_choices",),
                         label="Reducer",
                         density="compact",
+                        v_show=("nt_surrogate !== 'physicsnemo'",),
                     )
                     v3.VSelect(
                         v_model=("nt_surrogate",),
@@ -1820,6 +1832,34 @@ class NavierTwinWebApp:
                         density="compact",
                         classes="mt-2",
                     )
+                    with html.Div(v_show=("nt_surrogate === 'physicsnemo'",)):
+                        html.Div(
+                            "POD reducer 없이 좌표+시간을 필드로 직접 매핑하는 신경망을 "
+                            "학습합니다 (torch 만으로 학습 — physicsnemo 패키지는 ⑥Export "
+                            "모듈 저장에만 필요).",
+                            classes="text-caption text-disabled mt-2 mb-1",
+                        )
+                        v3.VTextField(
+                            v_model=("nt_physics_epochs",),
+                            label="Epochs",
+                            type="number",
+                            density="compact",
+                            classes="mt-1",
+                        )
+                        v3.VTextField(
+                            v_model=("nt_physics_hidden",),
+                            label="Hidden width",
+                            type="number",
+                            density="compact",
+                            classes="mt-2",
+                        )
+                        v3.VTextField(
+                            v_model=("nt_physics_max_samples",),
+                            label="Max train samples",
+                            type="number",
+                            density="compact",
+                            classes="mt-2",
+                        )
                     v3.VBtn(
                         "모델 학습 (시간→필드)",
                         click=self.ctrl.nt_model_train,
@@ -1836,53 +1876,6 @@ class NavierTwinWebApp:
                     with v3.VCard(variant="tonal", classes="mt-3", v_show=("nt_model_ready",)):
                         with v3.VCardText(classes="text-caption"):
                             html.Div("학습 완료 — {{ nt_model_summary }}")
-
-                    v3.VDivider(classes="my-4")
-                    html.Div(
-                        "Physics AI — NVIDIA PhysicsNeMo",
-                        classes="text-caption text-disabled mb-2",
-                    )
-                    html.Div(
-                        "POD reducer 없이 좌표+시간을 필드로 직접 매핑하는 신경망을 "
-                        "학습합니다 (torch 만으로 학습 — physicsnemo 패키지는 ⑥Export "
-                        "모듈 저장에만 필요).",
-                        classes="text-caption text-disabled mb-2",
-                    )
-                    v3.VTextField(
-                        v_model=("nt_physics_epochs",),
-                        label="Epochs",
-                        type="number",
-                        density="compact",
-                    )
-                    v3.VTextField(
-                        v_model=("nt_physics_hidden",),
-                        label="Hidden width",
-                        type="number",
-                        density="compact",
-                        classes="mt-2",
-                    )
-                    v3.VTextField(
-                        v_model=("nt_physics_max_samples",),
-                        label="Max train samples",
-                        type="number",
-                        density="compact",
-                        classes="mt-2",
-                    )
-                    v3.VBtn(
-                        "PhysicsNeMo 학습 (좌표+시간→필드)",
-                        click=self.ctrl.nt_build_physics_twin,
-                        variant="tonal",
-                        color="secondary",
-                        block=True,
-                        classes="mt-2",
-                        disabled=("!nt_has_timesteps || nt_busy",),
-                        prepend_icon="mdi-atom-variant",
-                    )
-                    with v3.VCard(
-                        variant="tonal", classes="mt-3", v_show=("nt_physics_summary",)
-                    ):
-                        with v3.VCardText(classes="text-caption"):
-                            html.Div("{{ nt_physics_summary }}")
 
             # 5) Twin
             with v3.VExpansionPanel(title="⑤ Twin (시간→필드 예측)"):
@@ -1988,7 +1981,7 @@ class NavierTwinWebApp:
                                 variant="tonal",
                                 block=True,
                                 size="small",
-                                disabled=("!nt_physics_summary",),
+                                disabled=("!nt_physics_ready",),
                             )
                     with v3.VCard(variant="tonal", classes="mt-3", v_show=("nt_export_last",)):
                         with v3.VCardText(classes="text-caption"):
