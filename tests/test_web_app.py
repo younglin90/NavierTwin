@@ -702,6 +702,87 @@ def test_coarsen_reduces_dataset_and_resets_model() -> None:
     assert st.nt_model_ready is True
 
 
+def test_coarsen_preview_tracks_slider_and_predicts_the_result() -> None:
+    """해상도를 고르는 동안 결과 크기가 미리 보이고, 그 예고가 실제와 맞는다."""
+    from naviertwin.web import service
+
+    app = _make_app("nt-test-coarsen-preview")
+    st = app.server.state
+    # 데이터가 없으면 미리 볼 것도 없다.
+    assert st.nt_coarsen_preview == ""
+
+    app.load_demo()
+    assert st.nt_coarsen_preview != ""  # 로드 직후 기본 해상도로 예고
+
+    # 슬라이더를 움직이면 미리보기가 따라온다.
+    st.nt_coarsen_resolution = 16
+    app._update_coarsen_preview()
+    coarse_preview = st.nt_coarsen_preview
+    st.nt_coarsen_resolution = 64
+    app._update_coarsen_preview()
+    assert st.nt_coarsen_preview != coarse_preview
+
+    # 예고한 점 수가 실제 적용 결과와 같아야 미리보기에 의미가 있다.
+    st.nt_coarsen_resolution = 20
+    app._update_coarsen_preview()
+    predicted = service.estimate_coarsen(app.dataset, 20)["points_after"]
+    app.coarsen_current()
+    assert st.nt_error == ""
+    assert int(st.nt_info_points) == predicted
+
+
+def test_coarsen_preview_warns_when_resolution_would_add_points() -> None:
+    """해상도가 원본보다 촘촘하면 '낮추기'가 아니므로 경고로 알린다.
+
+    데모(48×48)에 기본값 48을 그대로 쓰면 점이 되레 늘어난다 — 사용자가 이걸
+    모르고 적용하면 메모리를 아끼려다 늘리게 된다.
+    """
+    app = _make_app("nt-test-coarsen-warn")
+    st = app.server.state
+    app.load_demo()
+
+    st.nt_coarsen_resolution = 8  # 확실히 성기게
+    app._update_coarsen_preview()
+    assert st.nt_coarsen_increases is False
+    assert "축소" in st.nt_coarsen_preview
+
+    st.nt_coarsen_resolution = 128  # 원본보다 촘촘하게
+    app._update_coarsen_preview()
+    assert st.nt_coarsen_increases is True
+    assert "증가" in st.nt_coarsen_preview
+    assert "축소" not in st.nt_coarsen_preview
+
+
+def test_coarsen_preview_hidden_for_case_sets(tmp_path) -> None:
+    """케이스 세트는 로드 시 이미 재샘플되므로 미리보기가 뜨면 안 된다."""
+    _make_case_set(tmp_path / "sweep")
+    app = _make_app("nt-test-coarsen-preview-caseset")
+    st = app.server.state
+    st.nt_path = str(tmp_path / "sweep")
+    app.load_case_set()
+    assert st.nt_coarsen_preview == ""
+
+
+def test_case_set_resolution_is_user_selectable(tmp_path) -> None:
+    """형상 가변 케이스 세트의 공통 격자 해상도를 사용자가 정할 수 있다."""
+    app = _make_app("nt-test-case-resolution")
+    st = app.server.state
+    # 형상이 다른 데모(shapes)는 메쉬가 달라 공통 격자로 재샘플된다.
+    st.nt_demo_kind = "shapes"
+    st.nt_case_resolution = 12
+    app.load_demo()
+    assert st.nt_error == ""
+    coarse_points = int(st.nt_info_points)
+    assert st.nt_case_resampled is True
+
+    st.nt_case_resolution = 28
+    app.load_demo()
+    assert st.nt_error == ""
+    # 해상도를 올리면 실제로 격자가 촘촘해진다 — 값이 배선돼 있다는 증거.
+    assert int(st.nt_info_points) > coarse_points
+    assert "28" in st.nt_case_grid_summary or "29" in st.nt_case_grid_summary
+
+
 def test_coarsen_rejected_for_case_sets(tmp_path) -> None:
     _make_case_set(tmp_path / "sweep")
     app = _make_app("nt-test-coarsen-caseset")

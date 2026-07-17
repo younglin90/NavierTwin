@@ -152,6 +152,13 @@ class NavierTwinWebApp:
         # 줄이는 것이 유일하게 효과적이다.
         st.nt_coarsen_resolution = 48
         st.nt_coarsen_summary = ""
+        # 적용 전 미리보기 — 사용자가 해상도를 고르려면 "이 값이면 몇 점"인지
+        # 먼저 보여야 한다. 슬라이더를 움직일 때마다 갱신된다.
+        st.nt_coarsen_preview = ""
+        st.nt_coarsen_increases = False
+        # 케이스 세트의 공통 격자 해상도 — 메쉬가 서로 다를 때(형상 가변) 로드
+        # 시점에 재샘플되므로, 로드 전에 정해야 한다.
+        st.nt_case_resolution = 32
 
         # Viewer
         st.nt_fields = []
@@ -355,6 +362,8 @@ class NavierTwinWebApp:
         )
         # 케이스 슬라이더 — 시간축이 없는 케이스 세트의 "타임스텝" 역할.
         self.state.change("nt_case_index")(self.select_case)
+        # 해상도를 고르는 동안 결과 크기를 계속 보여준다.
+        self.state.change("nt_coarsen_resolution")(self._update_coarsen_preview)
 
     def _get_executor(self) -> Any:
         if self._executor is None:
@@ -429,7 +438,9 @@ class NavierTwinWebApp:
         )
         try:
             if kind in service.DEMO_CASE_SET_KINDS:
-                result = service.make_demo_case_set(kind)
+                result = service.make_demo_case_set(
+                    kind, resolution=int(self.state.nt_case_resolution or 32)
+                )
                 self._set_case_set(result, f"데모 — {title}")
                 return
             dataset = service.make_demo_dataset(kind=kind)
@@ -503,7 +514,11 @@ class NavierTwinWebApp:
             self._fail("경로 필요", ValueError("케이스 폴더를 선택하세요."))
             return
         try:
-            result = service.load_case_set(path)
+            # 메쉬가 서로 다르면 이 해상도의 공통 격자로 재샘플된다. 동일 메쉬면
+            # 재샘플 자체가 생략되므로 이 값은 쓰이지 않는다.
+            result = service.load_case_set(
+                path, resolution=int(self.state.nt_case_resolution or 32)
+            )
             self._set_case_set(result, path)
         except Exception as exc:  # noqa: BLE001
             self._fail("케이스 세트 로드 실패", exc)
@@ -553,6 +568,9 @@ class NavierTwinWebApp:
                 f"스냅샷이 적으면 ROM 이 안정적입니다.{shape_note}"
             )
         self._set_twin_param_ranges(names, mins, maxs)
+        # _set_dataset 은 케이스 모드를 켜기 전에 돌았으므로 단일 데이터셋 기준
+        # 미리보기를 남긴다 — 케이스 세트에는 해당 없으니 지운다.
+        self._update_coarsen_preview()
 
     def select_case(self, **_kwargs: Any) -> None:
         """케이스 세트에서 볼 케이스를 바꾼다 — 뷰어만 교체하고 학습 상태는 보존.
@@ -1847,8 +1865,35 @@ class NavierTwinWebApp:
             self.state.nt_compare_summary = ""
         self._pod_result = None
         self._refresh_fields()
+        self._update_coarsen_preview()
         self._render(reset_camera=True)
         self._set_status(status)
+
+    def _update_coarsen_preview(self, **_kwargs: Any) -> None:
+        """현재 해상도 값이면 결과가 몇 점이 되는지 미리 보여준다.
+
+        재샘플은 되돌릴 수 없으므로(원본 교체) 적용 전에 대가를 보여야 한다.
+        격자 치수만 계산하는 저렴한 추정이라 슬라이더를 움직일 때마다 호출해도
+        된다.
+        """
+        if self.dataset is None or self.state.nt_case_mode:
+            with self.state:
+                self.state.nt_coarsen_preview = ""
+                self.state.nt_coarsen_increases = False
+            return
+        increases = False
+        try:
+            estimate = service.estimate_coarsen(
+                self.dataset, int(self.state.nt_coarsen_resolution or 48)
+            )
+            preview = f"→ {estimate['summary']}"
+            # 원본보다 촘촘해지면 "낮추기"가 아니라 오히려 손해다 — 경고색으로.
+            increases = float(estimate["ratio"]) < 1.0
+        except Exception:  # noqa: BLE001 — 미리보기는 부가 정보, UI 를 막지 않는다
+            preview = ""
+        with self.state:
+            self.state.nt_coarsen_preview = preview
+            self.state.nt_coarsen_increases = increases
 
     def _refresh_fields(self, prefer: str = "") -> None:
         names = render.available_fields(self.dataset) if self.dataset is not None else []
@@ -2208,6 +2253,27 @@ class NavierTwinWebApp:
                         v_if="nt_fb_mode === 'caseset'",
                         classes="text-caption text-info px-4 pb-2",
                     )
+                    # 공통 격자 해상도는 로드 시점에 정해진다 — 케이스 메쉬가 서로
+                    # 다르면(형상 가변) 여기서 정한 격자로 재샘플되기 때문이다.
+                    with html.Div(v_if="nt_fb_mode === 'caseset'", classes="px-4 pb-2"):
+                        html.Div(
+                            "공통 격자 해상도: 긴 축 {{ nt_case_resolution }}분할",
+                            classes="text-caption text-disabled",
+                        )
+                        v3.VSlider(
+                            v_model=("nt_case_resolution",),
+                            min=8,
+                            max=96,
+                            step=4,
+                            thumb_label=True,
+                            density="compact",
+                            hide_details=True,
+                        )
+                        html.Div(
+                            "케이스 메쉬가 서로 다를 때만 쓰입니다 — 모두 같은 "
+                            "메쉬면 재샘플 없이 원본 그대로 씁니다.",
+                            classes="text-caption text-disabled",
+                        )
                     html.Div(
                         "예측 결과를 올릴 메쉬 파일을 클릭하세요 — 그 격자의 "
                         "좌표에서 트윈을 평가합니다.",
@@ -2418,24 +2484,39 @@ class NavierTwinWebApp:
                                 "해상도 낮추기 (대용량 대응)",
                                 classes="text-caption text-disabled mb-1",
                             )
-                            with v3.VRow(dense=True, classes="align-center"):
-                                with v3.VCol(cols=5):
-                                    v3.VTextField(
-                                        v_model=("nt_coarsen_resolution",),
-                                        label="격자 분할",
-                                        type="number",
-                                        density="compact",
-                                        hide_details=True,
-                                    )
-                                with v3.VCol(cols=7):
-                                    v3.VBtn(
-                                        "적용",
-                                        click=self.ctrl.nt_coarsen,
-                                        variant="tonal",
-                                        block=True,
-                                        disabled=("nt_busy",),
-                                        prepend_icon="mdi-grid-off",
-                                    )
+                            html.Div(
+                                "긴 축 기준 {{ nt_coarsen_resolution }}분할",
+                                classes="text-caption mb-1",
+                            )
+                            v3.VSlider(
+                                v_model=("nt_coarsen_resolution",),
+                                min=8,
+                                max=128,
+                                step=4,
+                                thumb_label=True,
+                                density="compact",
+                                hide_details=True,
+                                disabled=("nt_busy",),
+                            )
+                            # 재샘플은 원본을 교체하므로, 적용 전에 대가를 보여준다.
+                            html.Div(
+                                "{{ nt_coarsen_preview }}",
+                                v_show=("nt_coarsen_preview",),
+                                classes=(
+                                    "nt_coarsen_increases "
+                                    "? 'text-caption text-warning mt-1' "
+                                    ": 'text-caption text-info mt-1'",
+                                ),
+                            )
+                            v3.VBtn(
+                                "적용",
+                                click=self.ctrl.nt_coarsen,
+                                variant="tonal",
+                                block=True,
+                                classes="mt-2",
+                                disabled=("nt_busy",),
+                                prepend_icon="mdi-grid-off",
+                            )
                             html.Div(
                                 "성긴 균일 격자로 보간 재샘플합니다 — 학습/POD 는 "
                                 "(점 수 × 스텝 수) 행렬을 통째로 메모리에 올리므로 "

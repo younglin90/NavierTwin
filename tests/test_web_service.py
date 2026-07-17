@@ -1002,6 +1002,38 @@ def test_coarsen_dataset_reduces_points_and_preserves_series() -> None:
     assert ds.n_points == result["points_before"]
 
 
+def test_estimate_coarsen_matches_actual_coarsen() -> None:
+    """미리보기는 실제 재샘플 결과와 정확히 일치해야 한다.
+
+    사용자는 이 숫자를 보고 해상도를 고르므로, 추정이 실제와 다르면 미리보기가
+    있으나 마나다. 여러 해상도에서 점 수가 정확히 같은지 확인한다.
+    """
+    ds = service.make_demo_dataset(nx=60, ny=60, n_steps=4, kind="advecting")
+    for resolution in (12, 24, 48):
+        estimate = service.estimate_coarsen(ds, resolution)
+        actual = service.coarsen_dataset(ds, resolution=resolution)
+        assert estimate["points_after"] == actual["points_after"]
+        assert estimate["points_before"] == actual["points_before"]
+        assert estimate["ratio"] == pytest.approx(actual["ratio"])
+
+
+def test_estimate_coarsen_is_monotonic_and_reports_memory() -> None:
+    """해상도를 올리면 점이 늘고, 스냅샷 행렬 추정은 실제 바이트와 맞는다."""
+    ds = service.make_demo_dataset(nx=60, ny=60, n_steps=5, kind="advecting")
+    low = service.estimate_coarsen(ds, 16)
+    high = service.estimate_coarsen(ds, 64)
+
+    assert low["points_after"] < high["points_after"]
+    assert low["ratio"] > high["ratio"]  # 성길수록 더 많이 줄어든다
+    assert low["bytes_after"] < low["bytes_before"]
+    # 요약은 사람이 읽을 형태 — 치수·축소비·메모리가 모두 들어간다.
+    assert "×" in low["summary"] and "점" in low["summary"]
+    assert "→" in low["summary"]
+    # 메모리 추정이 실제 스냅샷 행렬과 일치한다 (점 × 스텝 × float64).
+    coarse = service.coarsen_dataset(ds, resolution=16)["dataset"]
+    assert low["bytes_after"] == coarse.extract_field_snapshots("p").nbytes
+
+
 def test_coarsen_dataset_rejects_when_no_base_fields() -> None:
     import pyvista as pv
 

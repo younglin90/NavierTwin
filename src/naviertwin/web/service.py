@@ -308,6 +308,60 @@ def _uniform_grid_over(bounds: Sequence[float], resolution: int) -> Any:
     )
 
 
+def estimate_coarsen(dataset: CFDDataset, resolution: int = 48) -> dict[str, Any]:
+    """재샘플을 실제로 하기 전에 결과 크기를 미리 계산한다 (저렴 — 격자만 만듦).
+
+    사용자가 해상도를 고르려면 "이 숫자를 넣으면 몇 점이 되는지"를 먼저 봐야
+    한다. 실제 보간(:func:`coarsen_dataset`)은 타임스텝마다 샘플링해 비싸므로,
+    여기서는 바운딩 박스로 격자 치수만 계산한다.
+
+    Returns:
+        ``points_before``/``points_after``, ``ratio``, ``dims``,
+        ``bytes_after``(스냅샷 행렬 추정), ``summary`` 를 담은 dict.
+
+    Raises:
+        ValueError: 격자를 만들 수 없는 경우.
+    """
+    grid = _uniform_grid_over(dataset.mesh.bounds, resolution)
+    dims = [int(d) for d in grid.dimensions]
+    points_before = int(getattr(dataset, "n_points", 0))
+    points_after = int(grid.n_points)
+    n_steps = max(1, int(getattr(dataset, "n_time_steps", 1)))
+    ratio = (points_before / points_after) if points_after else float("nan")
+    # 스냅샷 행렬(= 학습/POD 가 메모리에 올리는 것) 추정: 점 × 스텝 × float64.
+    bytes_after = points_after * n_steps * 8
+    bytes_before = points_before * n_steps * 8
+    # 목표 격자가 원본보다 촘촘할 수도 있다 — 그때 "축소"라고 하면 거짓말이다.
+    if ratio >= 1:
+        change = f"{ratio:.1f}× 축소"
+    else:
+        change = f"{1 / ratio:.1f}× 증가 — 원본보다 촘촘"
+    summary = (
+        f"{'×'.join(str(d) for d in dims)} = {points_after:,}점 "
+        f"({change}) · 스냅샷 행렬 "
+        f"{_format_bytes(bytes_before)} → {_format_bytes(bytes_after)}"
+    )
+    return {
+        "points_before": points_before,
+        "points_after": points_after,
+        "ratio": float(ratio),
+        "dims": dims,
+        "bytes_before": int(bytes_before),
+        "bytes_after": int(bytes_after),
+        "summary": summary,
+    }
+
+
+def _format_bytes(size: float) -> str:
+    """사람이 읽을 크기 문자열 (스냅샷 행렬 추정 표시용)."""
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            return f"{value:.1f}{unit}" if unit != "B" else f"{int(value)}B"
+        value /= 1024
+    return f"{value:.1f}GB"
+
+
 def coarsen_dataset(
     dataset: CFDDataset,
     *,
