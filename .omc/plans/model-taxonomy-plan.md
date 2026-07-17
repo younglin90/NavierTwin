@@ -157,3 +157,102 @@ n_steps < 50 (단일 시계열)         → Ⓐ 권장
   마이그레이션하는 shim 필요 (직전 커밋에서 도입한 값이라 부담 적음).
 - Ⓒ의 비정형 메쉬 재보간은 품질 함정 — Phase 3에서 명시적 경고 UI 필수.
 - GP 불확실성 밴드는 ⑤Twin 렌더 변경(±σ 필드) 수반 — Phase 2에서 범위 결정.
+
+---
+
+# v2 — 딥리서치 재검증 및 패널 개편 계획 (2026-07-17)
+
+웹서치 기반 딥리서치 2건(2022–2026 리뷰 논문 / 오픈소스 생태계) 반영.
+
+## 6. 문헌 재검증 결과 — 4계열 골격은 유효, 축 2개와 계열 2개 보강
+
+최신 리뷰들은 단일 평면 분류가 아니라 **직교 축 여러 개**로 분류한다:
+- "무엇을 배우나"(mapping) 축 — 우리 Ⓐ~Ⓓ와 일치 (Azizzadenesheli et al.
+  Nat. Rev. Phys. 2024 가 함수 근사(PINN) vs 연산자 학습을 명확히 구분 —
+  Ⓑ/Ⓒ 분리 타당성 확인)
+- **침습(intrusive) vs 비침습** 축 — ROM 커뮤니티 지배 축 (Kramer, Peherstorfer
+  & Willcox, Annu. Rev. Fluid Mech. 2024). 우리 Ⓐ는 "비침습 투영 ROM".
+  Operator Inference(OpInf)가 Ⓐ와 Ⓓ 사이의 명명된 선택지로 부상.
+- **물리 주입 방식** 축 — 순수 데이터 / 물리 손실(PINN) / 하이브리드 클로저
+- **결정론 vs 확률론** 축 — 디지털 트윈 문헌(Kapteyn & Willcox)에서는 UQ 가
+  옵션이 아니라 정의 요소.
+
+### 보강된 분류 (v2)
+| 계열 | v1 대비 변경 |
+|---|---|
+| Ⓐ ROM (축소+보간) | EZyRB 식 Reduction(POD/AE) × Approximation(RBF/Kriging/GPR/ANN) 매트릭스로 세분. OpInf 를 "축소 동역학" 옵션으로 명명 (Ⓐ↔Ⓓ 교량) |
+| Ⓑ 뉴럴 필드 (직접 회귀) | 학습 전략 태그 분리: supervised vs physics-informed (PINA 의 Problem/Model/Solver 구조 차용) |
+| Ⓒ 신경 연산자 | **하위 분기 필수**: 균일 격자(FNO 계) vs **기하 인지(GNN/MeshGraphNet, GINO, Transolver)** — 후자가 산업 채택 1위 트렌드 (자동차 공력: 8천 형상 DrivAerNet++, GNN 600× 가속 벤치마크) |
+| Ⓓ 동역학 예보 | DMD/Koopman/SINDy + OpInf-time |
+| (신규, 문서만) Ⓔ 생성형 서로게이트 | diffusion 기반 (PDE-Refiner, GenCFD) — 연구 단계, 채택 최하위 |
+| (신규, 문서만) Ⓕ PDE 파운데이션 모델 | Poseidon/DPOT/MPP 파인튜닝 — 소표본에서 from-scratch 연산자 대비 10× 표본 효율. 급부상 중이나 아직 연구 등급 |
+| 교차 태그 | UQ(GP/앙상블/베이지안) · 물리주입(없음/loss/구조) · 다중충실도 |
+
+### 데이터 규모 → 방식 결정표 (문헌 앵커 반영)
+| 데이터 규모 | 고정 형상 (파라미터 스윕) | 가변 3D 형상 |
+|---|---|---|
+| 스냅샷 10–100 | **Ⓐ POD+GP/Kriging (UQ 포함)**, 시계열이면 Ⓓ | Ⓕ 파인튜닝 or Ⓐ |
+| 100–1,000 | Ⓐ or OpInf; 메쉬프리 질의 필요시 Ⓑ | GNN/GINO 가시권, 다중충실도 GP |
+| 1,000+ | Ⓒ (FNO/DeepONet) | Ⓒ 기하 인지 (GINO/Transolver) — 벤치마크 검증 영역 |
+
+(임계값은 문헌 데이터포인트 기반 추론이며 상수 아님. GP 는 O(N³) 스케일 한계.)
+
+## 7. 오픈소스 생태계 정렬 포인트
+
+| 계열 | 사실상 표준 | 우리가 차용할 것 |
+|---|---|---|
+| ROM | pyMOR(346★), **EZyRB**(mathLab) | EZyRB 의  분해 = 우리 Ⓐ와 동일 → "EZyRB 호환 워크플로우" 표기 가능 |
+| 서로게이트/UQ | SMT 2.x(897★), GPyTorch/BoTorch | SMT 식 능력 매트릭스 표(모델×정상/과도·메쉬·데이터규모) |
+| 신경 연산자 | **neuraloperator**(3.8k★), **PhysicsNeMo**(3.1k★) | "Model Zoo" 명칭, 해상도 불변 태그. PhysicsNeMo v2 는 Solver/Constraint 추상화 통합 |
+| PINN | DeepXDE(4.3k★), **PINA**(mathLab) | PINA 의 Problem/Model/Solver 축 — 아키텍처와 학습전략 분리 |
+| 동역학 | PyDMD(1.2k★)/PySINDy(1.9k★)/PyKoopman | 이미 래핑함 — GUI 노출만 남음 |
+| 벤치마크 | **The Well**(4.1k★, 15TB) > PDEBench(1.2k★, 인용 표준) > CFDBench | ⑧을 PDEBench 지표(nRMSE) + The Well 데이터셋 정렬 |
+| 트윈 배포 | FMPy/PythonFMU, **ONNX→FMU**(DNV MLFMU 선례) | 웹 ⑥Export 에 ONNX/FMU 추가 (core 에 이미 구현됨) — 표준 트윈 배포 스토리 |
+
+**경쟁 구도**: 오픈소스 다계열 CFD→트윈 GUI 는 사실상 공백 (CFDTwin 은
+Fluent 종속 단일 기법). NavierTwin 의 포지셔닝 포인트.
+
+## 8. 패널 존재 유무 판단 — ⑦Compare vs ⑧Bench 및 전체 구조
+
+### 진단
+| 패널 | 실체 | 판단 |
+|---|---|---|
+| ⑦ Compare | **로드한 내 데이터**에서 reducer×surrogate 전 조합 학습→RMSE/R²/지연 순위 | = "모델 선정(model selection)" 단계. ④Model 의 부속 기능이 맞음 |
+| ⑧ AI Bench | 내 데이터와 무관한 **표준 벤치마크 문제**(Burgers/heat/cavity) 생성→FNO 학습 | = "연산자 실험실". 데이터 생성(→①의 일), 학습(→④의 일), 평가(→비교의 일)가 한 패널에 뭉침 |
+
+**결론**: 둘은 목적이 달라 "그대로 합치면" 오히려 혼란. 올바른 통합은
+해체·재배치다 — ⑦은 ④로 흡수, ⑧은 ①(데이터)+④(학습)로 분해 후 은퇴.
+
+### 목표 패널 구조 (8 → 6)
+
+```
+① Import   (파일/데모 + 내장 벤치마크 데이터셋 로드)   ← ⑧의 데이터 생성 흡수
+② Analyze  (와류/FFT — 후처리 진단. 그대로)
+③ Reduce   (POD 진단: 에너지/모드 → ④의 모드 수 결정 지원. 캡션으로 역할 명시)
+④ Model    (방식 선택 + 학습 + 자동 비교 리더보드)     ← ⑦ 흡수, ⑧의 학습 흡수
+⑤ Twin     (예측 · UQ 밴드 · [향후] Ⓓ 예보 외삽)
+⑥ Export   (+ ONNX / FMU — 표준 트윈 배포 경로)
+```
+
+### 단계 계획 (v2)
+- **P2 (다음 단계, 소규모)** — 패널 정리 1차:
+  - ⑦Compare 를 ④Model 하단 "자동 비교 (리더보드)" 섹션으로 이동
+    (기존 콜백·다이얼로그·라이브 진행 재사용, 칩 스트립 7개로)
+  - 비교 리더보드에 Physics AI(Ⓑ) 행 추가
+  - ⑧ 명칭 "연산자 랩 (Benchmark Lab)" + nRMSE 용어 정렬 + "내 데이터와
+    무관한 표준 문제 실험실" 캡션
+  - ④ Ⓒ 카드에 "균일 격자(FNO) / 기하 인지(GNN — 예정)" 하위 표기
+- **P3** — ROM 강화: Reduction×Approximation 매트릭스(AE·GPR 추가),
+  GP 불확실성 → ⑤Twin ±σ 표시
+- **P4** — 연산자 직학습: 균일격자→FNO2D, 내장 벤치마크 데이터를 ①Import
+  소스로 이동, 리더보드에 연산자 포함, ⑧ 은퇴 (8→6 완성)
+- **P5** — Ⓓ 동역학: DMD/Koopman 예보(외삽 구간 경고색), OpInf 옵션
+- **P6** — 배포: 웹 ⑥Export 에 ONNX/FMU 버튼 (core 구현 재사용)
+
+### 참고문헌 (v2 추가분)
+Kramer/Peherstorfer/Willcox ARFM 2024 (OpInf) · Azizzadenesheli et al. Nat.
+Rev. Phys. 2024 · Kovachki et al. JMLR 2023 · Vinuesa & Brunton Nat. Comput.
+Sci. 2022 · Wang et al. arXiv:2408.12171 (ML-for-CFD 서베이) · Li et al. GINO
+NeurIPS 2023 · Herde et al. Poseidon NeurIPS 2024 · Elrefaie et al.
+DrivAerNet++ NeurIPS 2024 · Kapteyn & Willcox Nat. Comput. Sci. 2021 ·
+arXiv:2504.06699 (산업 공력 CNN vs GNN 벤치마크)
