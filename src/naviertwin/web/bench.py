@@ -271,10 +271,17 @@ def dataset_summary(dataset: dict[str, Any]) -> str:
 # ──────────────────────────────────────────────────────────────────────
 
 
+# FNO 구현 백엔드 — 같은 fit/predict 계약이라 같은 벤치에서 직접 비교된다.
+#   builtin  : 이 저장소 자체 구현 (naviertwin.core.operator_learning.fno.fno)
+#   neuralop : neuraloperator 레퍼런스 구현 (FNO 논문 저자 유지, PyTorch Ecosystem)
+OPERATOR_BACKENDS = ("builtin", "neuralop")
+
+
 def train_operator(
     dataset: dict[str, Any],
     *,
     operator: str = "auto",
+    backend: str = "builtin",
     modes: int = 12,
     width: int = 32,
     epochs: int = 60,
@@ -292,18 +299,20 @@ def train_operator(
     Args:
         dataset: :func:`generate_operator_dataset` / :func:`load_pdebench_hdf5` 결과.
         operator: ``"auto"`` | ``"fno1d"`` | ``"fno2d"``.
+        backend: FNO 구현 — ``"builtin"``(자체) | ``"neuralop"``(레퍼런스).
+            둘은 같은 계약이라 동일 벤치·동일 하이퍼파라미터로 비교할 수 있다.
         modes/width/epochs/lr/batch_size: FNO 하이퍼파라미터.
         test_fraction: 홀드아웃 비율.
         seed: 셔플/모델 시드.
 
     Returns:
-        ``model``, ``operator``, ``losses``(epoch별), ``final_loss``,
+        ``model``, ``operator``, ``backend``, ``losses``(epoch별), ``final_loss``,
         ``test_rmse``, ``test_rel_l2``, ``latency_ms``(단일 예측),
         ``train_time_s``, ``n_train``/``n_test``, ``test_indices``.
 
     Raises:
-        ValueError: 지원하지 않는 operator, 차원 불일치, 샘플 부족.
-        ImportError: torch 미설치.
+        ValueError: 지원하지 않는 operator/backend, 차원 불일치, 샘플 부족.
+        ImportError: torch 미설치, 또는 backend="neuralop" 인데 neuraloperator 미설치.
     """
     from time import perf_counter
 
@@ -312,6 +321,10 @@ def train_operator(
     if operator not in {"auto", "fno1d", "fno2d"}:
         raise ValueError(
             f"지원하지 않는 operator: {operator}. 지원: ['auto', 'fno1d', 'fno2d']"
+        )
+    if backend not in OPERATOR_BACKENDS:
+        raise ValueError(
+            f"지원하지 않는 backend: {backend}. 지원: {list(OPERATOR_BACKENDS)}"
         )
 
     X = np.asarray(dataset["inputs"], dtype=np.float64)
@@ -343,16 +356,39 @@ def train_operator(
             progress_cb(int(epoch), total_epochs, float(loss))
 
     channels = int(X.shape[-1])
+    # 모드 수는 나이퀴스트 한계를 넘을 수 없다 (백엔드 공통).
     if resolved == "fno1d":
+        safe_modes = min(int(modes), int(X.shape[1]) // 2)
+        n_dim, safe_batch = 1, max(1, int(batch_size))
+    else:
+        safe_modes = min(int(modes), int(X.shape[1]) // 2, int(X.shape[2]) // 2)
+        n_dim, safe_batch = 2, max(1, min(int(batch_size), 8))
+
+    if backend == "neuralop":
+        from naviertwin.core.operator_learning.fno.neuralop_fno import NeuralOpFNO
+
+        model = NeuralOpFNO(
+            in_channels=channels,
+            out_channels=int(Y.shape[-1]),
+            modes=safe_modes,
+            width=int(width),
+            n_dim=n_dim,
+            max_epochs=total_epochs,
+            batch_size=safe_batch,
+            lr=float(lr),
+            seed=seed,
+            epoch_callback=epoch_cb,
+        )
+    elif resolved == "fno1d":
         from naviertwin.core.operator_learning.fno.fno import FNO1D
 
         model = FNO1D(
             in_channels=channels,
             out_channels=int(Y.shape[-1]),
-            modes=min(int(modes), int(X.shape[1]) // 2),
+            modes=safe_modes,
             width=int(width),
             max_epochs=total_epochs,
-            batch_size=max(1, int(batch_size)),
+            batch_size=safe_batch,
             lr=float(lr),
             seed=seed,
             epoch_callback=epoch_cb,
@@ -360,7 +396,6 @@ def train_operator(
     else:
         from naviertwin.core.operator_learning.fno.fno import FNO2D
 
-        safe_modes = min(int(modes), int(X.shape[1]) // 2, int(X.shape[2]) // 2)
         model = FNO2D(
             in_channels=channels,
             out_channels=int(Y.shape[-1]),
@@ -368,7 +403,7 @@ def train_operator(
             modes2=safe_modes,
             width=int(width),
             max_epochs=total_epochs,
-            batch_size=max(1, min(int(batch_size), 8)),
+            batch_size=safe_batch,
             lr=float(lr),
             seed=seed,
             epoch_callback=epoch_cb,
@@ -395,12 +430,13 @@ def train_operator(
 
     losses = [float(v) for v in getattr(model, "train_losses_", [])]
     logger.info(
-        "연산자 학습 완료: %s — final_loss=%.4g, test_rmse=%.4g, latency=%.2fms",
-        resolved, losses[-1] if losses else float("nan"), test_rmse, latency_ms,
+        "연산자 학습 완료: %s(%s) — final_loss=%.4g, test_rmse=%.4g, latency=%.2fms",
+        resolved, backend, losses[-1] if losses else float("nan"), test_rmse, latency_ms,
     )
     return {
         "model": model,
         "operator": resolved,
+        "backend": backend,
         "losses": losses,
         "final_loss": losses[-1] if losses else float("nan"),
         "test_rmse": test_rmse,

@@ -267,6 +267,13 @@ class NavierTwinWebApp:
         st.nt_bench_epochs = 60
         st.nt_bench_modes = 12
         st.nt_bench_width = 32
+        # FNO 구현 백엔드 — 같은 계약이라 동일 벤치에서 직접 비교된다.
+        # neuralop = FNO 논문 저자들이 유지하는 레퍼런스 구현(생태계 표준).
+        st.nt_bench_backend = "neuralop"
+        st.nt_bench_backend_choices = [
+            {"title": "neuraloperator (레퍼런스)", "value": "neuralop"},
+            {"title": "자체 구현 (builtin)", "value": "builtin"},
+        ]
         st.nt_bench_trained = False
         st.nt_bench_train_summary = ""
         st.nt_bench_sample = 0
@@ -1312,6 +1319,7 @@ class NavierTwinWebApp:
         """FNO 학습을 실행하고 결과를 반환한다 (동기 워커 — 상태 미변경)."""
         return bench.train_operator(
             self._bench_dataset,
+            backend=self.state.nt_bench_backend or "neuralop",
             epochs=int(self.state.nt_bench_epochs or 60),
             modes=int(self.state.nt_bench_modes or 12),
             width=int(self.state.nt_bench_width or 32),
@@ -1322,7 +1330,8 @@ class NavierTwinWebApp:
         """학습 결과를 상태/차트에 반영한다 (loop 스레드에서만 호출)."""
         self._bench_result = result
         summary = (
-            f"{result['operator'].upper()} · {result['n_train']}train/{result['n_test']}test · "
+            f"{result['operator'].upper()} [{result.get('backend', 'builtin')}] · "
+            f"{result['n_train']}train/{result['n_test']}test · "
             f"loss {result['final_loss']:.3g} · test RMSE {result['test_rmse']:.3g} "
             f"(nRMSE {result['test_rel_l2']:.3g}) · "
             f"학습 {result['train_time_s']:.1f}s · 추론 {result['latency_ms']:.2f}ms"
@@ -2976,6 +2985,21 @@ class NavierTwinWebApp:
                             html.Div("{{ nt_bench_summary }}")
                     # B) 연산자 학습
                     v3.VDivider(classes="my-3")
+                    # FNO 구현 선택 — 같은 계약이라 동일 조건으로 직접 비교된다.
+                    v3.VSelect(
+                        v_model=("nt_bench_backend",),
+                        items=("nt_bench_backend_choices",),
+                        label="FNO 구현",
+                        density="compact",
+                        hide_details=True,
+                        classes="mb-2",
+                    )
+                    html.Div(
+                        "neuraloperator 는 FNO 논문 저자들이 유지하는 레퍼런스 "
+                        "구현입니다. 같은 벤치·하이퍼파라미터로 자체 구현과 "
+                        "바꿔가며 비교할 수 있습니다.",
+                        classes="text-caption text-disabled mb-2",
+                    )
                     with v3.VRow(dense=True):
                         with v3.VCol(cols=4):
                             v3.VTextField(

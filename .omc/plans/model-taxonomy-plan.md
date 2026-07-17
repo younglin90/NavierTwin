@@ -622,7 +622,49 @@ DMD 는 데이터가 안 맞아도 **조용히** 크게 틀린다(경고 없음)
 ### 우선순위 제안
 1. **M4b 를 neuraloperator 의 GINO 로** — 기하 인지 연산자를 직접 구현하지 말 것.
    torch_geometric 기반 `gnn/meshgraphnets.py` 도 이미 있다.
-2. **⑥연산자 랩의 FNO 를 neuraloperator 로 교체/병기** — 레퍼런스 구현이 설치돼
-   있는데 직접 구현을 쓰는 상태다. 생태계 표준(v2 §7)과도 정렬된다.
+2. ~~**⑥연산자 랩의 FNO 를 neuraloperator 로 교체/병기**~~ → **완료, §22 참조.**
 3. **GP 불확실성(UQ)** — gpytorch 로 ③Twin 에 ±σ (v2 P3, 디지털 트윈 문헌에서
    UQ 는 정의 요소).
+
+## 22. 구현 기록 — neuraloperator 백엔드 병기 (2026-07-17)
+
+§21 의 2번. "레퍼런스가 설치돼 있는데 자체 구현을 쓰는" 상태를 해소했다.
+**교체가 아니라 병기** — 같은 계약으로 꽂아 같은 벤치에서 비교 가능하게 했다.
+
+M4b(GINO)를 먼저 하지 않은 이유: GINO 는 비정형 형상 + 수백~수천 샘플이 전제인데
+우리 벤치는 균일 격자(Burgers/heat/cavity)이고 형상 케이스는 5개뿐이라, 지금
+붙이면 동작하지 않는 장난감이 된다. 반면 이 작업은 지금 데이터로 즉시 검증된다.
+
+### 추가
+- core `operator_learning/fno/neuralop_fno.py::NeuralOpFNO` — neuralop 의 `FNO`
+  를 `BaseOperator` 의 fit/predict 계약으로 감싼다. 두 가지를 흡수한다:
+  - **레이아웃**: neuralop 은 채널 우선 `(B, C, ...)`, 우리 데이터셋은 채널
+    마지막 `(B, ..., C)` → 래퍼가 왕복 transpose.
+  - **학습 루프**: neuralop 의 FNO 는 순수 `nn.Module`(fit 없음) → 자체 FNO 와
+    동일한 Adam+MSE 루프와 `epoch_callback`(라이브 진행) 을 래퍼가 제공.
+  - 1D/2D 를 `n_dim` 하나로 처리 (neuralop 은 `n_modes` 튜플 길이로 차원 결정).
+- `bench.train_operator(backend="builtin"|"neuralop")`, 결과에 `backend` 기록.
+- ⑥연산자 랩에 "FNO 구현" 선택 (기본 **neuralop** — OSS 우선 지침).
+
+### 함정 (테스트가 잡음)
+`bench.evaluate_sample` 은 단일 샘플을 **배치 차원 없이** `predict({"x": X[idx]})`
+로 넘긴다. 자체 FNO 는 이를 관용하지만 레퍼런스는 거부한다("inputs must have
+same number of dimensions"). → 래퍼가 배치 유무를 모두 받아 입력과 같은 형태로
+돌려주도록 맞췄다(기존 앱 계약 보존).
+
+### 실측 비교 (Burgers 64샘플 × N=64, 동일 하이퍼파라미터·시드)
+| epochs | backend | test nRMSE | 학습 | 추론 |
+|---|---|---|---|---|
+| 60 (기본) | builtin | 0.0765 | 4.6s | 2.45ms |
+| 60 (기본) | **neuralop** | **0.0660** | 5.5s | 4.04ms |
+| 20 | **builtin** | **0.111** | **0.5s** | 2.04ms |
+| 20 | neuralop | 0.137 | 6.6s | 3.82ms |
+
+**정직한 결론**: 레퍼런스가 항상 우월한 게 아니다. 기본 epoch(60)에선 neuralop
+이 정확하지만(−14% nRMSE), 짧은 학습에선 자체 구현이 더 빠르고 정확하다 —
+neuralop 은 채널 MLP·lifting/projection 등 기계가 더 많아 수렴이 느리고 무겁다.
+그래서 **교체가 아니라 선택지**로 두고 기본만 레퍼런스로 잡았다.
+
+검증: 백엔드별 계약 일치(1D/2D), 레이아웃 왕복, 배치 유무 관용, 잘못된 backend
+거부. 브라우저에서 두 백엔드로 학습해 요약에 `[neuralop]`/`[builtin]` 이 정확히
+찍히는 것 확인. 테스트 145개 통과.

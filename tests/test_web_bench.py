@@ -256,3 +256,75 @@ def test_app_bench_guards() -> None:
     st.nt_error = ""
     app.bench_load_h5()
     assert st.nt_error  # 경로 없음
+
+
+# ──────────────────────────────────────────────────────────────────────
+# FNO 백엔드 — neuraloperator(레퍼런스) vs 자체 구현
+# ──────────────────────────────────────────────────────────────────────
+
+
+def test_train_operator_rejects_unknown_backend() -> None:
+    ds = bench.generate_operator_dataset(kind="heat", n_samples=8, n_x=16, seed=0)
+    with pytest.raises(ValueError, match="지원하지 않는 backend"):
+        bench.train_operator(ds, backend="bogus", epochs=1)
+
+
+@pytest.mark.parametrize("backend", ["builtin", "neuralop"])
+def test_train_operator_backends_share_contract_1d(backend) -> None:
+    """두 백엔드가 같은 계약(결과 키/shape)을 만족해야 비교가 성립한다."""
+    pytest.importorskip("neuralop")
+    ds = bench.generate_operator_dataset(kind="heat", n_samples=10, n_x=32, seed=0)
+    result = bench.train_operator(
+        ds, backend=backend, epochs=2, modes=6, width=12, seed=0
+    )
+    assert result["backend"] == backend
+    assert result["operator"] == "fno1d"
+    assert len(result["losses"]) == 2
+    assert np.isfinite(result["test_rmse"])
+    # 단일 샘플 평가(배치 차원 없이 predict) 도 두 백엔드 모두 동작해야 한다.
+    ev = bench.evaluate_sample(result["model"], ds, index=0)
+    assert np.isfinite(ev["rmse"])
+    assert len(ev["pred"]) == 32
+
+
+def test_neuralop_backend_2d_contract() -> None:
+    """2D 경로도 백엔드 교체가 성립한다 (채널 우선 ↔ 마지막 변환 포함)."""
+    pytest.importorskip("neuralop")
+    ds = bench.generate_operator_dataset(kind="cavity2d", n_samples=6, n_x=16, seed=0)
+    result = bench.train_operator(
+        ds, backend="neuralop", epochs=2, modes=4, width=12, seed=0
+    )
+    assert result["operator"] == "fno2d"
+    assert result["backend"] == "neuralop"
+    ev = bench.evaluate_sample(result["model"], ds, index=0)
+    assert ev["is_2d"] is True
+    assert np.isfinite(ev["rmse"])
+
+
+def test_neuralop_wrapper_preserves_channel_last_layout() -> None:
+    """neuralop 은 채널 우선이라 래퍼가 레이아웃을 왕복 변환해야 한다."""
+    pytest.importorskip("neuralop")
+    from naviertwin.core.operator_learning.fno.neuralop_fno import NeuralOpFNO
+
+    X = np.random.default_rng(0).random((6, 32, 2))
+    Y = np.random.default_rng(1).random((6, 32, 1))
+    op = NeuralOpFNO(
+        in_channels=2, out_channels=1, modes=4, width=8, n_dim=1, max_epochs=1
+    )
+    op.fit({"inputs": X, "outputs": Y})
+    # 배치 있는 입력 → 배치 있는 (B, N, C_out)
+    assert op.predict({"x": X}).shape == (6, 32, 1)
+    # 배치 없는 입력 → 배치 없는 (N, C_out) — 자체 FNO 와 같은 관용성
+    assert op.predict({"x": X[0]}).shape == (32, 1)
+
+
+def test_neuralop_wrapper_validates_shapes() -> None:
+    pytest.importorskip("neuralop")
+    from naviertwin.core.operator_learning.fno.neuralop_fno import NeuralOpFNO
+
+    with pytest.raises(ValueError, match="n_dim"):
+        NeuralOpFNO(n_dim=3)
+    op = NeuralOpFNO(in_channels=1, out_channels=1, modes=4, width=8, n_dim=1,
+                     max_epochs=1)
+    with pytest.raises(ValueError, match="3D"):
+        op.fit({"inputs": np.zeros((4, 16)), "outputs": np.zeros((4, 16))})
