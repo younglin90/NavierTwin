@@ -116,6 +116,10 @@ async function waitForServer(port, timeoutMs) {
 }
 
 // ── 창 ──────────────────────────────────────────────────────────────
+// naviertwin/web/theme.py 의 BACKGROUND 와 동일 (단일 팔레트 출처 — 색을 바꾸면
+// 양쪽 다 갱신할 것). 창 배경이 다르면 페이지 로드 전/후 플래시가 어긋나 보인다.
+const THEME_BACKGROUND = "#1b2739";
+
 function createSplash() {
   splashWindow = new BrowserWindow({
     width: 460,
@@ -123,7 +127,7 @@ function createSplash() {
     frame: false,
     resizable: false,
     transparent: false,
-    backgroundColor: "#0d1117",
+    backgroundColor: THEME_BACKGROUND,
     show: true,
     webPreferences: { contextIsolation: true },
   });
@@ -136,7 +140,7 @@ function createMainWindow(port) {
     height: 950,
     minWidth: 1200,
     minHeight: 780,
-    backgroundColor: "#0d1117",
+    backgroundColor: THEME_BACKGROUND,
     autoHideMenuBar: true,
     show: false,
     icon: path.join(__dirname, "assets", "icon.png"),
@@ -165,7 +169,7 @@ function runSmoke(port) {
     width: 1500,
     height: 950,
     show: false,
-    backgroundColor: "#0d1117",
+    backgroundColor: THEME_BACKGROUND,
     webPreferences: { contextIsolation: true },
   });
   win.loadURL(`http://127.0.0.1:${port}/index.html`);

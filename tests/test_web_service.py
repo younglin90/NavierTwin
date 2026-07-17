@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -457,3 +459,55 @@ def test_list_directory_missing_path_falls_back_home(tmp_path) -> None:
     from pathlib import Path
 
     assert result["cwd"] == str(Path.home())
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Physics AI — NVIDIA PhysicsNeMo 스타일 직접 필드 예측
+# ──────────────────────────────────────────────────────────────────────
+
+
+def test_build_physics_ai_twin_trains_and_predicts(demo) -> None:
+    result = service.build_physics_ai_twin(demo, "p", hidden=8, max_epochs=5, max_train_points=500)
+    assert result["param_min"] == pytest.approx(0.0)
+    assert result["param_max"] > result["param_min"]
+    assert "rmse" in result["validation_metrics"]
+    assert len(result["train_losses"]) == 5
+
+    engine = result["engine"]
+    assert engine.reducer_type == "direct_physics_ai"
+    mid = 0.5 * (result["param_min"] + result["param_max"])
+    prediction = service.predict_twin(engine, mid)
+    assert prediction.shape[0] == demo.n_points
+
+    # attach_prediction / save_engine 은 TwinEngine 과 동일한 계약으로 동작한다.
+    field_name = service.attach_prediction(demo, prediction, field_name="physics_pred")
+    assert field_name in demo.mesh.point_data
+
+
+def test_build_physics_ai_twin_requires_multiple_timesteps() -> None:
+    single = service.make_demo_dataset(nx=10, ny=10, n_steps=1)
+    with pytest.raises(ValueError):
+        service.build_physics_ai_twin(single, "p")
+
+
+def test_export_physicsnemo_module_requires_trained_model(demo) -> None:
+    class _Empty:
+        model = None
+
+    with pytest.raises(RuntimeError):
+        service.export_physicsnemo_module(_Empty(), "/tmp/nonexistent_physicsnemo.pt")
+
+
+def test_export_physicsnemo_module(demo, tmp_path) -> None:
+    """physicsnemo 설치 여부에 따라 실제 내보내기 또는 안내 에러를 검증한다."""
+    result = service.build_physics_ai_twin(demo, "p", hidden=8, max_epochs=3, max_train_points=200)
+    engine = result["engine"]
+    from naviertwin.core.physnemo.physicsnemo_model import physicsnemo_available
+
+    out = tmp_path / "module.pt"
+    if physicsnemo_available():
+        path = service.export_physicsnemo_module(engine, out)
+        assert Path(path).exists()
+    else:
+        with pytest.raises(RuntimeError, match="physicsnemo"):
+            service.export_physicsnemo_module(engine, out)

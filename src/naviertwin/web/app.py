@@ -165,6 +165,12 @@ class NavierTwinWebApp:
         st.nt_model_ready = False
         st.nt_model_summary = ""
 
+        # Model — Physics AI (NVIDIA PhysicsNeMo, POD 없이 좌표+시간 → 필드 직접 예측)
+        st.nt_physics_epochs = 150
+        st.nt_physics_hidden = 32
+        st.nt_physics_max_samples = 20_000
+        st.nt_physics_summary = ""
+
         # Twin
         st.nt_twin_ready = False
         st.nt_twin_min = 0.0
@@ -236,6 +242,7 @@ class NavierTwinWebApp:
         ctrl.nt_view_pod_mode = A(self.view_pod_mode, "POD 모드 렌더 중…", render_after=True)
         ctrl.nt_model_train = A(self.build_twin, "트윈 학습 중…")
         ctrl.nt_build_twin = ctrl.nt_model_train  # 하위 호환 alias (비동기)
+        ctrl.nt_build_physics_twin = A(self.build_physics_twin, "PhysicsNeMo 학습 중…")
         # 비교/학습은 라이브 진행 전용 async(모니터 큐 push)로 — 진행바/스파크라인 스트리밍.
         ctrl.nt_run_compare = self._run_compare_async
         ctrl.nt_predict = A(self.predict, "예측 계산 중…", render_after=True)
@@ -251,6 +258,7 @@ class NavierTwinWebApp:
         ctrl.nt_export_vtk = self.export_vtk
         ctrl.nt_export_project = self.export_project
         ctrl.nt_export_engine = self.export_engine
+        ctrl.nt_export_physicsnemo = self.export_physicsnemo
         ctrl.nt_export_report = self.export_report
         self.state.change("nt_field", "nt_cmap", "nt_show_edges", "nt_timestep")(
             self._on_view_state_change
@@ -723,6 +731,47 @@ class NavierTwinWebApp:
         except Exception as exc:  # noqa: BLE001
             self._fail("모델 학습 실패", exc)
 
+    def build_physics_twin(self) -> None:
+        """④Model — NVIDIA PhysicsNeMo 스타일 직접 필드 예측 모델을 학습한다.
+
+        POD reducer 없이 (좌표+시간) → 필드를 곧장 학습하는 PyTorch MLP.
+        결과 엔진은 ``predict()``만 노출하는 TwinEngine 과 같은 계약이라
+        ⑤Twin/⑥Export 는 수정 없이 그대로 재사용된다.
+        """
+        if self.dataset is None:
+            self._fail("데이터 없음", RuntimeError("먼저 데이터를 로드하세요."))
+            return
+        field = self._base_field()
+        try:
+            result = service.build_physics_ai_twin(
+                self.dataset,
+                field,
+                hidden=int(self.state.nt_physics_hidden or 32),
+                max_epochs=int(self.state.nt_physics_epochs or 150),
+                max_train_points=int(self.state.nt_physics_max_samples or 20_000),
+            )
+            self.engine = result["engine"]
+            pmin, pmax = result["param_min"], result["param_max"]
+            metrics = result["validation_metrics"]
+            rmse = metrics.get("rmse", float("nan"))
+            summary = (
+                f"field='{field}', PhysicsNeMo CFD Field (직접 예측), "
+                f"파라미터(t) ∈ [{pmin:.3g}, {pmax:.3g}] · RMSE {rmse:.3g}"
+            )
+            with self.state:
+                self.state.nt_model_ready = True
+                self.state.nt_model_summary = summary
+                self.state.nt_physics_summary = summary
+                self.state.nt_twin_ready = True
+                self.state.nt_twin_min = pmin
+                self.state.nt_twin_max = pmax
+                self.state.nt_twin_param = 0.5 * (pmin + pmax)
+                self.state.nt_twin_step = max((pmax - pmin) / 100.0, 1e-6)
+                self.state.nt_twin_summary = summary
+            self._set_status("PhysicsNeMo 모델 학습 완료. ⑤Twin 에서 예측하세요.")
+        except Exception as exc:  # noqa: BLE001
+            self._fail("PhysicsNeMo 학습 실패", exc)
+
     def run_compare(self) -> None:
         """모든 reducer×surrogate 조합을 학습/평가해 순위표를 표시한다."""
         if self.dataset is None:
@@ -1088,6 +1137,19 @@ class NavierTwinWebApp:
         except Exception as exc:  # noqa: BLE001
             self._fail("엔진 저장 실패", exc)
 
+    def export_physicsnemo(self) -> None:
+        """학습된 Physics AI 모델을 표준 PhysicsNeMo Module 체크포인트로 저장한다."""
+        if self.engine is None:
+            self._fail("모델 없음", RuntimeError("먼저 ④Model 에서 PhysicsNeMo를 학습하세요."))
+            return
+        try:
+            path = service.export_physicsnemo_module(
+                self.engine, self._export_path("physicsnemo_module.pt")
+            )
+            self._export_done(path, "PhysicsNeMo Module")
+        except Exception as exc:  # noqa: BLE001
+            self._fail("PhysicsNeMo Module 저장 실패", exc)
+
     def export_report(self) -> None:
         if self.dataset is None:
             self._fail("데이터 없음", RuntimeError("먼저 데이터를 로드하세요."))
@@ -1143,6 +1205,7 @@ class NavierTwinWebApp:
             self.state.nt_pod_max_mode = 0
             self.state.nt_model_ready = False
             self.state.nt_model_summary = ""
+            self.state.nt_physics_summary = ""
             self.state.nt_twin_ready = False
             self.state.nt_twin_summary = ""
             self.state.nt_fft_summary = ""
@@ -1774,6 +1837,53 @@ class NavierTwinWebApp:
                         with v3.VCardText(classes="text-caption"):
                             html.Div("학습 완료 — {{ nt_model_summary }}")
 
+                    v3.VDivider(classes="my-4")
+                    html.Div(
+                        "Physics AI — NVIDIA PhysicsNeMo",
+                        classes="text-caption text-disabled mb-2",
+                    )
+                    html.Div(
+                        "POD reducer 없이 좌표+시간을 필드로 직접 매핑하는 신경망을 "
+                        "학습합니다 (torch 만으로 학습 — physicsnemo 패키지는 ⑥Export "
+                        "모듈 저장에만 필요).",
+                        classes="text-caption text-disabled mb-2",
+                    )
+                    v3.VTextField(
+                        v_model=("nt_physics_epochs",),
+                        label="Epochs",
+                        type="number",
+                        density="compact",
+                    )
+                    v3.VTextField(
+                        v_model=("nt_physics_hidden",),
+                        label="Hidden width",
+                        type="number",
+                        density="compact",
+                        classes="mt-2",
+                    )
+                    v3.VTextField(
+                        v_model=("nt_physics_max_samples",),
+                        label="Max train samples",
+                        type="number",
+                        density="compact",
+                        classes="mt-2",
+                    )
+                    v3.VBtn(
+                        "PhysicsNeMo 학습 (좌표+시간→필드)",
+                        click=self.ctrl.nt_build_physics_twin,
+                        variant="tonal",
+                        color="secondary",
+                        block=True,
+                        classes="mt-2",
+                        disabled=("!nt_has_timesteps || nt_busy",),
+                        prepend_icon="mdi-atom-variant",
+                    )
+                    with v3.VCard(
+                        variant="tonal", classes="mt-3", v_show=("nt_physics_summary",)
+                    ):
+                        with v3.VCardText(classes="text-caption"):
+                            html.Div("{{ nt_physics_summary }}")
+
             # 5) Twin
             with v3.VExpansionPanel(title="⑤ Twin (시간→필드 예측)"):
                 with v3.VExpansionPanelText():
@@ -1870,6 +1980,15 @@ class NavierTwinWebApp:
                                 block=True,
                                 size="small",
                                 disabled=("!nt_has_dataset",),
+                            )
+                        with v3.VCol(cols=6):
+                            v3.VBtn(
+                                "PhysicsNeMo Module",
+                                click=self.ctrl.nt_export_physicsnemo,
+                                variant="tonal",
+                                block=True,
+                                size="small",
+                                disabled=("!nt_physics_summary",),
                             )
                     with v3.VCard(variant="tonal", classes="mt-3", v_show=("nt_export_last",)):
                         with v3.VCardText(classes="text-caption"):

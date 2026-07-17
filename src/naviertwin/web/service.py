@@ -587,6 +587,107 @@ def predict_twin(engine: Any, param_value: float) -> np.ndarray:
     return prediction
 
 
+def build_physics_ai_twin(
+    dataset: CFDDataset,
+    field: str,
+    *,
+    hidden: int = 32,
+    max_epochs: int = 150,
+    max_train_points: int = 20_000,
+) -> dict[str, Any]:
+    """NVIDIA PhysicsNeMo 스타일 직접 필드 예측 모델을 학습한다.
+
+    POD reducer 없이 (좌표 + 시간) → 필드값을 곧장 매핑하는 PyTorch MLP
+    (:class:`PhysicsNeMoCFDFieldModel`)를 학습해 :class:`PhysicsAITwinEngine`
+    으로 감싼다. 이 엔진은 ``predict()`` 만 노출하는 ``TwinEngine`` 과 동일한
+    덕타이핑 계약을 따르므로 :func:`predict_twin` / :func:`attach_prediction`
+    / :func:`save_engine` / ``app._restore_engine`` 을 그대로 재사용한다 —
+    ``physicsnemo`` 패키지 설치 여부와 무관하게(순수 torch 로) 학습된다.
+
+    Args:
+        dataset: 시계열 CFD 데이터셋.
+        field: 학습 대상 물리량 field.
+        hidden: 은닉층 폭.
+        max_epochs: 학습 epoch 수.
+        max_train_points: (좌표×스냅샷) 학습 샘플 상한 — 초과 시 무작위 부분추출.
+
+    Returns:
+        ``engine`` (PhysicsAITwinEngine), ``param_min``/``param_max``, 검증
+        지표(``validation_metrics``), 손실 곡선(``train_losses``) 등을 담은 dict.
+
+    Raises:
+        ValueError: 타임스텝이 2개 미만인 경우.
+    """
+    from naviertwin.core.digital_twin.physics_ai_engine import PhysicsAITwinEngine
+    from naviertwin.core.physnemo.cfd_field_model import PhysicsNeMoCFDFieldModel
+
+    n_steps = int(getattr(dataset, "n_time_steps", 0))
+    if n_steps < 2:
+        raise ValueError(
+            f"Physics AI 학습에는 2개 이상의 타임스텝이 필요합니다. 현재: {n_steps}"
+        )
+
+    model = PhysicsNeMoCFDFieldModel.from_dataset(
+        dataset,
+        field_name=field,
+        hidden=hidden,
+        max_epochs=max_epochs,
+        max_train_points=max_train_points,
+    )
+    engine = PhysicsAITwinEngine.from_fitted_model(model, model_type="physicsnemo_cfd_field")
+    meta = model.training_metadata
+    param_min = float(meta["parameter_min"][0])
+    param_max = float(meta["parameter_max"][0])
+    engine.training_metadata.update(
+        {
+            "field_name": field,
+            "reducer": "direct_physics_ai",
+            "surrogate": "physicsnemo_cfd_field",
+            "param_min": param_min,
+            "param_max": param_max,
+        }
+    )
+    return {
+        "engine": engine,
+        "field": field,
+        "param_min": param_min,
+        "param_max": param_max,
+        "validation_metrics": dict(meta.get("validation_metrics", {})),
+        "n_locations": int(meta.get("n_locations", 0)),
+        "n_snapshots": int(meta.get("n_snapshots", 0)),
+        "train_losses": list(model.train_losses_),
+    }
+
+
+def export_physicsnemo_module(engine: Any, path: str | Path) -> str:
+    """학습된 Physics AI 엔진의 PyTorch 모델을 PhysicsNeMo Module 로 감싸 저장한다.
+
+    실제 ``physicsnemo`` 패키지(``pip install nvidia-physicsnemo``)가 필요하다
+    — 학습 자체는 순수 torch 로 이뤄지므로 :func:`build_physics_ai_twin` 은
+    이 패키지 없이도 동작하지만, 표준 PhysicsNeMo 체크포인트로 내보내려면
+    필요하다.
+
+    Raises:
+        RuntimeError: 감쌀 PyTorch 모델이 없거나 ``physicsnemo`` 미설치인 경우.
+    """
+    from naviertwin.core.physnemo.physicsnemo_model import (
+        physicsnemo_available,
+        save_checkpoint,
+        wrap_as_physicsnemo_module,
+    )
+
+    torch_model = getattr(getattr(engine, "model", None), "_model", None)
+    if torch_model is None:
+        raise RuntimeError("PhysicsNeMo Module로 저장할 학습된 Physics AI 모델이 없습니다.")
+    if not physicsnemo_available():
+        raise RuntimeError("physicsnemo 미설치: pip install nvidia-physicsnemo")
+    wrapped = wrap_as_physicsnemo_module(
+        torch_model, name=f"naviertwin_{getattr(engine, 'model_type', 'physics_ai')}"
+    )
+    out = save_checkpoint(wrapped, path)
+    return str(out)
+
+
 def attach_prediction(
     dataset: CFDDataset,
     prediction: np.ndarray,
