@@ -136,6 +136,7 @@ include-package-data = true
 naviertwin = [
     "gui/styles/*.qss",
     "gui/styles/i18n/*.json",
+    "web/demo_data/*.npz",
 ]
 
 [tool.ruff]

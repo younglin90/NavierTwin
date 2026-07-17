@@ -803,11 +803,21 @@ def _write_varying_geometry_cases(directory, *, radii=(0.10, 0.15, 0.20, 0.25)):
     return list(radii)
 
 
-def test_load_case_set_rejects_varying_geometry_without_resample(tmp_path) -> None:
-    """resample=False 면 메쉬가 다른 케이스를 명확한 이유와 함께 거부한다."""
+def test_load_case_set_keeps_varying_geometry_when_resample_false(tmp_path) -> None:
+    """resample=False 면 메쉬가 달라도 그대로 둔다 (진짜 구멍 데이터 대응).
+
+    예전에는 무조건 거부했지만, 격자에 진짜 구멍이 뚫린 CFD 결과는 공통 격자로
+    옮기는 순간 구멍이 가짜 empty 가 되므로 "재샘플 안 함" 이 선택 가능해야 한다.
+    대신 점 수가 달라 ROM 은 불가하고 Physics AI 만 학습할 수 있다.
+    """
     _write_varying_geometry_cases(tmp_path / "shapes")
-    with pytest.raises(ValueError, match="메쉬가 다릅니다"):
-        service.load_case_set(tmp_path / "shapes", resample=False)
+    result = service.load_case_set(tmp_path / "shapes", resample=False)
+    assert result["resampled"] is False
+    assert "재샘플 안 함" in result["grid_summary"]
+    assert len({ds.n_points for ds in result["datasets"]}) > 1
+    # sdf 를 만들지 않는다 — 진짜 구멍을 쓰겠다는 선택이므로.
+    for ds in result["datasets"]:
+        assert "sdf" not in ds.mesh.point_data
 
 
 def test_load_case_set_auto_resamples_varying_geometry(tmp_path) -> None:

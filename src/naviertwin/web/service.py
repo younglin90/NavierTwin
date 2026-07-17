@@ -10,7 +10,7 @@ state 나 PyVista 렌더 컨텍스트(GL)에 의존하지 않는다. 따라서 h
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -253,8 +253,12 @@ def resample_cases_to_common_grid(
 # 데모 카탈로그 — 모델 계열별로 "잘 맞는 데이터"를 하나씩 갖춘다.
 # 데이터가 없으면 기능을 시험할 수 없다 (예: DMD 는 "waves" 없이는 늘 크게 빗나감).
 # ──────────────────────────────────────────────────────────────────────
-DEMO_TIME_SERIES_KINDS = ("filament", "advecting", "waves")
-DEMO_CASE_SET_KINDS = ("sweep", "shapes")
+DEMO_TIME_SERIES_KINDS = ("filament", "advecting", "waves", "karman")
+DEMO_CASE_SET_KINDS = ("sweep", "shapes", "karman_shapes")
+
+# 실제 LBM 해석이 필요한 데모 — 합성 데모와 달리 즉시 만들 수 없고(케이스당 수십 초)
+# 결과를 디스크에 캐시한다. 앱은 이 목록으로 "오래 걸린다"는 안내를 띄운다.
+DEMO_SOLVED_KINDS = ("karman", "karman_shapes")
 
 DEMO_CATALOG: list[dict[str, str]] = [
     {
@@ -282,6 +286,22 @@ DEMO_CATALOG: list[dict[str, str]] = [
         "value": "shapes",
         "title": "형상 가변 원기둥 (5형상 · 정상)",
         "note": "케이스마다 메쉬가 다름(반지름 변화) — 로드 시 공통 격자로 자동 재샘플 + sdf.",
+    },
+    {
+        "value": "karman",
+        "title": "카르만 와열 (시계열 · 실제 LBM 해석)",
+        "note": "실린더 주위 실제 LBM 해석(Re=140, 400×160, 63k점). 실린더 자리는 셀이 "
+        "아예 없는 진짜 구멍입니다 — sdf 나 0 채움이 아닙니다. 계산 결과가 저장소에 "
+        "함께 들어 있어 즉시 로드됩니다.",
+    },
+    {
+        "value": "karman_shapes",
+        "title": "형상별 정상해 (6케이스 · 실제 LBM 해석)",
+        "note": "세모·네모·원기둥(직경 4종)의 실제 정상해(Re=30 — 실린더 유동은 Re≈47 "
+        "아래에서만 진짜 정상해가 존재). 케이스마다 자기 격자에 진짜 구멍이 뚫려 있어 "
+        "점 수가 다릅니다 → POD/ROM 은 불가(길이가 다른 스냅샷은 못 쌓음), "
+        "'직접 회귀 (Physics AI)' 로 학습하세요. 계산 결과가 저장소에 들어 있어 즉시 "
+        "로드됩니다.",
     },
 ]
 
@@ -495,7 +515,11 @@ def load_case_set(
         params_path: 파라미터 CSV 경로 (None 이면 폴더 안에서 자동 탐색).
         param_columns: 쓸 CSV 열 (None 이면 숫자 열 전부).
         resample: 형상 가변 지원 — ``"auto"``(기본)면 케이스 메쉬가 서로 다를
-            때만 공통 격자로 재샘플, ``True`` 면 항상, ``False`` 면 안 함.
+            때만 공통 격자로 재샘플, ``True`` 면 항상, ``False`` 면 **메쉬가 달라도
+            원본 그대로** 둔다. 격자에 진짜 구멍이 뚫린 데이터(벽 자리에 셀이 없는
+            실제 CFD 결과)는 공통 격자로 옮기는 순간 구멍이 "가짜 empty"(무효 점을
+            0 으로 채운 값)가 되므로 ``False`` 를 쓴다. 대신 케이스마다 점 수가
+            달라 POD/ROM 은 불가하고 좌표 기반인 Physics AI 만 학습할 수 있다.
         resolution: 재샘플 격자의 최장 축 분할 수.
 
     Returns:
@@ -565,10 +589,13 @@ def load_case_set(
         resampled = True
         logger.info("케이스 메쉬가 달라 공통 격자로 재샘플: %s", grid_summary)
     elif not identical:
-        raise ValueError(
-            "케이스마다 메쉬가 다릅니다 — 형상 가변 케이스는 공통 격자 재샘플이 "
-            "필요합니다 (resample='auto' 또는 True)."
+        # resample=False 로 명시했으면 메쉬가 달라도 그대로 둔다 — 진짜 구멍이
+        # 뚫린 격자를 공통 격자로 옮기면 구멍이 가짜 empty 가 되기 때문이다.
+        counts = [int(d.mesh.n_points) for d in datasets]
+        grid_summary = (
+            f"케이스마다 자기 격자 (점 수 {min(counts)}~{max(counts)}) — 재샘플 안 함"
         )
+        logger.info("메쉬가 다르지만 재샘플하지 않음: %s", grid_summary)
 
     return {
         "datasets": datasets,
@@ -625,8 +652,13 @@ def build_twin_from_cases(
     n_features = int(columns[0].shape[0])
     if any(int(column.shape[0]) != n_features for column in columns):
         raise ValueError(
-            "케이스마다 메쉬 크기가 달라 ROM 학습이 불가능합니다 (동일 메쉬 필요). "
-            "형상이 다른 케이스는 기하 인지 연산자(GNN/GINO)가 필요합니다."
+            f"케이스마다 점 수가 달라(예: {n_features} vs "
+            f"{next(int(c.shape[0]) for c in columns if int(c.shape[0]) != n_features)}) "
+            "ROM 학습이 불가능합니다 — POD 는 길이가 같은 스냅샷 벡터를 쌓아야 합니다. "
+            "격자에 진짜 구멍이 뚫린 형상 가변 데이터는 ②Model 에서 "
+            "'직접 회귀 (Physics AI)' 를 쓰세요 — 좌표를 입력으로 받아 격자에 "
+            "묶이지 않습니다. (공통 격자로 재샘플하면 ROM 도 되지만, 구멍이 "
+            "0 으로 채워진 가짜 empty 가 됩니다.)"
         )
     snapshots = np.stack(columns, axis=1)  # (n_features, n_cases)
 
@@ -700,11 +732,15 @@ def build_physics_ai_twin_from_cases(
             f"파라미터 행 수({params_arr.shape[0]})와 케이스 수({len(cases)})가 다릅니다."
         )
 
+    # 형상 가변(격자에 진짜 구멍이 뚫린 케이스)도 학습한다 — 신경장은 좌표를
+    # 입력으로 받으므로 케이스마다 점 수가 달라도 된다. ROM 과 갈리는 지점이다.
+    varying_mesh = not meshes_are_identical(cases)
     model = PhysicsNeMoCFDFieldModel.from_datasets(
         cases,
         field_names=fields,
         params=params_arr,
         parameter_names=list(param_names) if param_names else None,
+        allow_varying_mesh=varying_mesh,
         hidden=hidden,
         max_epochs=max_epochs,
         max_train_points=max_train_points,
@@ -724,6 +760,9 @@ def build_physics_ai_twin_from_cases(
             "param_names": names,
             "param_mins": mins,
             "param_maxs": maxs,
+            # 형상 가변이면 "학습 격자" 라는 게 없다 — 예측은 보고 있는 형상 위에
+            # 그려야 한다 (app.predict 가 이 표시를 보고 경로를 고른다).
+            "varying_mesh": bool(varying_mesh),
         }
     )
     return {
@@ -731,6 +770,7 @@ def build_physics_ai_twin_from_cases(
         "field": ",".join(fields),
         "fields": list(fields),
         "n_cases": len(cases),
+        "varying_mesh": bool(varying_mesh),
         "param_names": names,
         "param_mins": mins,
         "param_maxs": maxs,
@@ -750,6 +790,7 @@ def make_demo_dataset(
     oscillation_amp: float = 0.25,
     drift_cycles_x: float = 1.5,
     drift_cycles_y: float = 0.5,
+    progress_cb: Callable[[int, int], None] | None = None,
 ) -> CFDDataset:
     """합성 시계열 데모 데이터셋을 생성한다 (파이프라인 즉시 체험용).
 
@@ -780,6 +821,12 @@ def make_demo_dataset(
     import pyvista as pv
 
     from naviertwin.core.cfd_reader.base import CFDDataset
+
+    if kind == "karman":
+        # 합성이 아니라 실제 LBM 해석 — 격자·스텝 규칙이 완전히 다르므로 위임한다.
+        from naviertwin.web.demo_karman import build_karman_unsteady
+
+        return build_karman_unsteady(progress_cb=progress_cb)
 
     nx = max(4, int(nx))
     ny = max(4, int(ny))
@@ -899,6 +946,7 @@ def make_demo_case_set(
     *,
     n_side: int = 40,
     resolution: int = 40,
+    progress_cb: Callable[[int, int], None] | None = None,
 ) -> dict[str, Any]:
     """정상 케이스 세트 데모를 메모리에서 만든다 (문제 유형 B — 파일 불필요).
 
@@ -909,6 +957,9 @@ def make_demo_case_set(
         - ``"sweep"``: 동일 메쉬, 운전조건 2개(inlet 속도·받음각)가 다른 5 케이스.
         - ``"shapes"``: 원기둥 반지름이 다른 5 케이스 — **메쉬가 서로 다르다**.
           공통 격자로 재샘플해 돌려준다(형상 가변 경로 시연, ``sdf`` 포함).
+        - ``"karman_shapes"``: 세모·네모·원기둥의 **실제 LBM 정상해**. 격자에 진짜
+          구멍이 뚫려 있어(벽 자리에 셀 없음) 재샘플하지 않는다 → ROM 불가,
+          Physics AI 전용. ``shapes`` 와 대비되는 접근이다.
 
     Returns:
         ``datasets``, ``params`` (N, k), ``param_names``, ``case_names``,
@@ -925,6 +976,11 @@ def make_demo_case_set(
         raise ValueError(
             f"지원하지 않는 케이스 세트 demo kind: {kind}. 지원: {list(DEMO_CASE_SET_KINDS)}"
         )
+    if kind == "karman_shapes":
+        # 합성이 아니라 실제 LBM 해석 — 격자 규칙이 다르므로 위임한다.
+        from naviertwin.web.demo_karman import build_karman_case_set
+
+        return build_karman_case_set(progress_cb=progress_cb)
     n_side = max(8, int(n_side))
 
     if kind == "sweep":

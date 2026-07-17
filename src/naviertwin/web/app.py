@@ -436,6 +436,10 @@ class NavierTwinWebApp:
         title = next(
             (d["title"] for d in service.DEMO_CATALOG if d["value"] == kind), kind
         )
+        # 해석 데모(karman*)도 기본 파라미터면 저장소 번들에서 즉시 로드된다 —
+        # 앱은 항상 기본값으로만 부르므로 실제 계산 경로를 타지 않는다. 진행률
+        # 배관을 여기서 켜지 않는다(모니터 생성은 loop 스레드 전용인데 이 함수는
+        # 워커 스레드라 켜면 터진다).
         try:
             if kind in service.DEMO_CASE_SET_KINDS:
                 result = service.make_demo_case_set(
@@ -1578,6 +1582,18 @@ class NavierTwinWebApp:
             return
         try:
             values, point = self._twin_param_values()
+            # 형상 가변 케이스에는 "학습 격자" 가 없다(케이스마다 자기 격자를 가짐)
+            # → 지금 보고 있는 형상 위에 예측한다. 신경장이라 좌표만 있으면 된다.
+            if self.engine.training_metadata.get("varying_mesh"):
+                predicted, names = service.predict_to_mesh(
+                    self.engine, values, self.dataset
+                )
+                self._swap_view_dataset(
+                    predicted,
+                    status=f"예측 완료: {point} → 보고 있는 형상 위에 표시",
+                    prefer=names[0] if names else "",
+                )
+                return
             prediction = service.predict_twin(self.engine, values)
             # 다중 출력(Physics AI) 이면 필드별로 잘라 각각 twin_<name> 으로 붙인다.
             parts = service.split_multi_prediction(self.engine, prediction)

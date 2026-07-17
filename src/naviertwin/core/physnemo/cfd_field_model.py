@@ -40,6 +40,17 @@ class CFDFieldTrainingData:
     parameter_names: list[str]
     input_features: NDArray[np.float64] | None = None
     input_field_names: list[str] | None = None
+    # 형상 가변(케이스마다 격자가 다름) — 격자에 진짜 구멍이 뚫린 CFD 결과는
+    # 케이스마다 점 수가 다르므로 (n_snap, n_loc, n_out) 직사각 배열에 담기지
+    # 않는다. 그때만 케이스별 블록을 싣고, coords/values 는 첫 케이스를 담아
+    # predict(params) 같은 기존 경로를 유지한다.
+    coords_blocks: list[NDArray[np.float64]] | None = None
+    values_blocks: list[NDArray[np.float64]] | None = None
+
+    @property
+    def has_varying_mesh(self) -> bool:
+        """케이스마다 격자가 다른가 (형상 가변)."""
+        return self.coords_blocks is not None
 
     @property
     def field_name(self) -> str:
@@ -133,11 +144,16 @@ class PhysicsNeMoCFDFieldModel:
         params: NDArray[np.float64] | None = None,
         parameter_names: Sequence[str] | None = None,
         input_field_names: Sequence[str] | None = None,
+        allow_varying_mesh: bool = False,
         hidden: int = 32,
         max_epochs: int = 150,
         max_train_points: int = 20_000,
     ) -> "PhysicsNeMoCFDFieldModel":
-        """Build and fit a model from multiple CFD cases."""
+        """Build and fit a model from multiple CFD cases.
+
+        Args:
+            allow_varying_mesh: 케이스마다 격자가 달라도 학습한다 (형상 가변).
+        """
         model = cls(
             hidden=hidden,
             max_epochs=max_epochs,
@@ -149,6 +165,7 @@ class PhysicsNeMoCFDFieldModel:
             params=params,
             parameter_names=parameter_names,
             input_field_names=input_field_names,
+            allow_varying_mesh=allow_varying_mesh,
         )
         return model
 
@@ -164,6 +181,7 @@ class PhysicsNeMoCFDFieldModel:
         params: NDArray[np.float64] | None = None,
         parameter_names: Sequence[str] | None = None,
         input_field_names: Sequence[str] | None = None,
+        allow_varying_mesh: bool = False,
     ) -> None:
         """Train on coordinates, operating parameters, and selected fields.
 
@@ -181,6 +199,7 @@ class PhysicsNeMoCFDFieldModel:
             params=params,
             parameter_names=parameter_names,
             input_field_names=input_field_names,
+            allow_varying_mesh=allow_varying_mesh,
         )
         X, y = self._build_training_matrix(data)
         train_idx, val_idx = self._sample_indices(X.shape[0])
@@ -435,6 +454,23 @@ class PhysicsNeMoCFDFieldModel:
         입력 field 는 (스냅샷, 위치)마다 값이 다르므로 params 처럼 repeat 하지
         않고 그대로 펼친다 — 열 순서는 :meth:`predict_at` 과 반드시 일치해야 한다.
         """
+        if data.has_varying_mesh:
+            # 형상 가변: 케이스마다 점 수가 달라 tile 이 안 된다. 신경장은 결국
+            # (좌표, 파라미터) → 필드 의 행 집합이므로 케이스별로 펼쳐 쌓으면 된다.
+            assert data.coords_blocks is not None and data.values_blocks is not None
+            coord_rows: list[NDArray[np.float64]] = []
+            value_rows: list[NDArray[np.float64]] = []
+            repeats: list[int] = []
+            for coords_i, values_i in zip(data.coords_blocks, data.values_blocks):
+                n_snap_i, n_loc_i, n_out = values_i.shape
+                coord_rows.append(np.tile(coords_i, (n_snap_i, 1)))
+                value_rows.append(values_i.reshape(n_snap_i * n_loc_i, n_out))
+                repeats.extend([n_loc_i] * n_snap_i)
+            coords = np.vstack(coord_rows)
+            values = np.vstack(value_rows)
+            params = np.repeat(data.params, repeats, axis=0)
+            return np.hstack([coords, params]), values
+
         n_steps, n_locations, _n_outputs = data.values.shape
         coords = np.tile(data.coords, (n_steps, 1))
         params = np.repeat(data.params, n_locations, axis=0)
@@ -508,6 +544,7 @@ def prepare_cfd_field_training_data_from_datasets(
     params: NDArray[np.float64] | None = None,
     parameter_names: Sequence[str] | None = None,
     input_field_names: Sequence[str] | None = None,
+    allow_varying_mesh: bool = False,
 ) -> CFDFieldTrainingData:
     """Extract aligned coordinates, parameters, and output fields.
 
@@ -515,6 +552,10 @@ def prepare_cfd_field_training_data_from_datasets(
         input_field_names: other CFD fields to feed as **inputs** (per-point),
             e.g. predict ``p`` from ``U``. Vector fields become magnitude, the
             same convention outputs use.
+        allow_varying_mesh: 케이스마다 격자가 달라도 허용한다 (형상 가변). 신경장은
+            (좌표, 파라미터) → 필드 라 격자에 묶이지 않으므로 원리적으로 가능하다.
+            벽 자리에 셀이 아예 없는 실제 CFD 결과가 여기 해당한다. 이때는 케이스별
+            블록으로 학습하며, per-point 입력 field 는 아직 지원하지 않는다.
     """
     dataset_list = list(datasets)
     if not dataset_list:
@@ -526,8 +567,10 @@ def prepare_cfd_field_training_data_from_datasets(
     coords_ref: NDArray[np.float64] | None = None
     location_ref: str | None = None
     values_blocks: list[NDArray[np.float64]] = []
+    coords_blocks: list[NDArray[np.float64]] = []
     components_ref: list[int] | None = None
     total_snapshots = 0
+    varying_mesh = False
 
     dataset_index = 0
     while dataset_index < len(dataset_list):
@@ -545,13 +588,19 @@ def prepare_cfd_field_training_data_from_datasets(
                 raise ValueError(
                     f"mixed output locations are not supported: {location_ref}, {location}"
                 )
-            if coords.shape != coords_ref.shape or not np.allclose(coords, coords_ref):
-                raise ValueError(
-                    "all CFD cases must share the same mesh coordinates/topology "
-                    f"(case index {dataset_index})"
-                )
             if components != components_ref:
                 raise ValueError("selected field component layout differs across cases")
+            same_mesh = coords.shape == coords_ref.shape and np.allclose(coords, coords_ref)
+            if not same_mesh:
+                if not allow_varying_mesh:
+                    raise ValueError(
+                        "all CFD cases must share the same mesh coordinates/topology "
+                        f"(case index {dataset_index}). 형상 가변 데이터를 학습하려면 "
+                        "allow_varying_mesh=True 를 쓰세요 — 신경장은 좌표 기반이라 "
+                        "격자가 달라도 됩니다."
+                    )
+                varying_mesh = True
+        coords_blocks.append(coords)
         values_blocks.append(values)
         total_snapshots += values.shape[0]
         dataset_index += 1
@@ -559,7 +608,9 @@ def prepare_cfd_field_training_data_from_datasets(
     assert coords_ref is not None
     assert location_ref is not None
     assert components_ref is not None
-    values_all = np.concatenate(values_blocks, axis=0)
+    # 형상 가변이면 직사각 concat 이 불가능하다 — 케이스별 블록을 그대로 넘기고
+    # values/coords 에는 첫 케이스만 담는다(predict(params) 의 기본 격자).
+    values_all = values_blocks[0] if varying_mesh else np.concatenate(values_blocks, axis=0)
 
     if params is None:
         params_arr = _default_params_for_datasets(dataset_list, total_snapshots)
@@ -594,6 +645,11 @@ def prepare_cfd_field_training_data_from_datasets(
     # 마다 값이 다르므로 params 가 아니라 per-point 특징으로 쌓는다.
     inputs = list(filter(None, map(lambda f: str(f).strip(), input_field_names or [])))
     input_all: NDArray[np.float64] | None = None
+    if inputs and varying_mesh:
+        raise ValueError(
+            "형상 가변 케이스에는 per-point 입력 field 를 아직 쓸 수 없습니다 — "
+            "입력 field 를 비우고 좌표+파라미터로 학습하세요."
+        )
     if inputs:
         overlap = sorted(set(inputs) & set(fields))
         if overlap:
@@ -630,6 +686,8 @@ def prepare_cfd_field_training_data_from_datasets(
         parameter_names=param_names,
         input_features=input_all,
         input_field_names=inputs or None,
+        coords_blocks=coords_blocks if varying_mesh else None,
+        values_blocks=values_blocks if varying_mesh else None,
     )
 
 

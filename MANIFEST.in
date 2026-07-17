@@ -4,3 +4,4 @@ include scripts/installer_smoke.py
 include examples/release-metadata.example.json
 recursive-include src/naviertwin/_native *.cpp *.h *.hpp
 recursive-include src/naviertwin/gui/styles *.qss *.json
+recursive-include src/naviertwin/web/demo_data *.npz

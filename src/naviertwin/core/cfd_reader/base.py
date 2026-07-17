@@ -127,7 +127,7 @@ class CFDDataset:
 
         arr = np.asarray(arr, dtype=float)
         if n_steps <= 1:
-            return CFDDataset._to_single_snapshot(arr)
+            return CFDDataset._to_single_snapshot(arr, expected_per_step)
 
         if arr.ndim == 1:
             if expected_per_step > 0 and arr.size == expected_per_step * n_steps:
@@ -158,16 +158,34 @@ class CFDDataset:
                 and arr.shape[1] == expected_per_step
             ):
                 return np.linalg.norm(arr, axis=-1).T
-            return CFDDataset._to_single_snapshot(arr)
+            return CFDDataset._to_single_snapshot(arr, expected_per_step)
 
-        return CFDDataset._to_single_snapshot(arr)
+        return CFDDataset._to_single_snapshot(arr, expected_per_step)
 
     @staticmethod
-    def _to_single_snapshot(arr: Any) -> Any:
-        """배열을 단일 스냅샷 (n_features, 1)로 변환한다."""
+    def _to_single_snapshot(arr: Any, expected_per_step: int = 0) -> Any:
+        """배열을 단일 스냅샷 (n_features, 1)로 변환한다.
+
+        마지막 축을 벡터 성분으로 보고 norm 을 취하는데, **선행 축이 "타임스텝
+        1개"인 경우**(예: 스칼라 필드를 ``(1, n_points)`` 로 저장)에는 그 규칙이
+        필드 전체를 값 하나로 뭉갠다. ``expected_per_step`` 을 주면 그 축이
+        위치 축임을 알아보고 먼저 벗겨낸다.
+
+        Args:
+            arr: 필드 배열.
+            expected_per_step: 스텝당 위치 수(점/셀). 0 이면 판별하지 않는다.
+        """
         import numpy as np
 
         arr = np.asarray(arr, dtype=float)
+        # (1, n_loc) 또는 (1, n_loc, ncomp) → 선행 축은 스텝이지 성분이 아니다.
+        if (
+            expected_per_step > 0
+            and arr.ndim >= 2
+            and arr.shape[0] == 1
+            and arr.shape[1] == expected_per_step
+        ):
+            arr = arr[0]
         if arr.ndim > 1:
             arr = np.linalg.norm(arr, axis=-1)
         return arr.reshape(-1, 1)
