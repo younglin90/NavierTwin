@@ -151,7 +151,12 @@ class NavierTwinWebApp:
         st.nt_pod_mode = 0
         st.nt_pod_max_mode = 0
 
-        # Model
+        # Model — 방식 우선(method-first) 2단 선택.
+        # 문헌 4계열 중 웹 노출분: "rom"(Ⓐ 축소+보간) | "physics"(Ⓑ 직접 회귀)
+        # | "operator"(Ⓒ 신경 연산자 — ⑧Bench 로 연결). 분류 근거는
+        # .omc/plans/model-taxonomy-plan.md 참조.
+        st.nt_model_method = "rom"
+        st.nt_method_hint = ""  # 데이터 로드 시 service.recommend_method 결과
         st.nt_reducer = "pod"
         st.nt_reducer_choices = [
             {"title": "POD (snapshot)", "value": "pod"},
@@ -161,7 +166,6 @@ class NavierTwinWebApp:
         st.nt_surrogate_choices = [
             {"title": "RBF", "value": "rbf"},
             {"title": "Kriging (GP)", "value": "kriging"},
-            {"title": "PhysicsNeMo (직접 예측, reducer 불필요)", "value": "physicsnemo"},
         ]
         st.nt_model_ready = False
         st.nt_model_summary = ""
@@ -445,6 +449,8 @@ class NavierTwinWebApp:
             pmin, pmax = 0.0, 1.0
         summary = f"복원된 엔진: {reducer}+{surrogate}, field='{field}'"
         with self.state:
+            if str(reducer) == "direct_physics_ai":
+                self.state.nt_model_method = "physics"
             self.state.nt_model_ready = True
             self.state.nt_twin_ready = True
             self.state.nt_twin_min = pmin
@@ -702,16 +708,24 @@ class NavierTwinWebApp:
     def build_twin(self) -> None:
         """④Model — 선택한 방식으로 (시간→필드) 트윈을 학습한다.
 
-        surrogate="physicsnemo" 이면 POD reducer 없이 좌표+시간을 필드로 직접
-        매핑하는 PhysicsNeMo 스타일 모델을 학습한다(:meth:`_build_physics_twin`
-        로 위임). 그 외에는 고전 POD reducer + surrogate(rbf/kriging) 파이프라인.
+        ``nt_model_method`` 로 디스패치한다: "physics" 는 POD reducer 없이
+        좌표+시간→필드를 직접 학습(:meth:`_build_physics_twin`), "operator" 는
+        ⑧AI Bench 안내, 기본("rom")은 POD reducer + 계수 회귀(rbf/kriging).
         """
         if self.dataset is None:
             self._fail("데이터 없음", RuntimeError("먼저 데이터를 로드하세요."))
             return
+        method = self.state.nt_model_method or "rom"
         surrogate = self.state.nt_surrogate or "rbf"
-        if surrogate == "physicsnemo":
+        # 하위호환 shim: 한때 surrogate 값으로 physicsnemo 를 표현했다.
+        if method == "physics" or surrogate == "physicsnemo":
             self._build_physics_twin()
+            return
+        if method == "operator":
+            self._fail(
+                "신경 연산자",
+                RuntimeError("신경 연산자(FNO) 학습은 ⑧AI Bench 패널에서 실행하세요."),
+            )
             return
         field = self._base_field()
         reducer = self.state.nt_reducer or "pod"
@@ -1215,6 +1229,10 @@ class NavierTwinWebApp:
             self.state.nt_model_ready = False
             self.state.nt_model_summary = ""
             self.state.nt_physics_ready = False
+            try:
+                self.state.nt_method_hint = service.recommend_method(dataset)["reason"]
+            except Exception:  # noqa: BLE001 — 추천은 부가 정보, 로드를 막지 않는다
+                self.state.nt_method_hint = ""
             self.state.nt_twin_ready = False
             self.state.nt_twin_summary = ""
             self.state.nt_fft_summary = ""
@@ -1813,31 +1831,81 @@ class NavierTwinWebApp:
                                 prepend_icon="mdi-waveform",
                             )
 
-            # 4) Model
+            # 4) Model — 방식 우선(method-first) 2단 선택.
+            # 계열 분류/근거: .omc/plans/model-taxonomy-plan.md
             with v3.VExpansionPanel(title="④ Model (트윈 학습)"):
                 with v3.VExpansionPanelText():
-                    # PhysicsNeMo 는 POD reducer 를 쓰지 않는 직접 예측 방식이라
-                    # 이때는 Reducer 선택을 숨긴다 (surrogate 하나로 방식을 고른다).
-                    v3.VSelect(
-                        v_model=("nt_reducer",),
-                        items=("nt_reducer_choices",),
-                        label="Reducer",
-                        density="compact",
-                        v_show=("nt_surrogate !== 'physicsnemo'",),
+                    html.Div("모델 방식", classes="text-caption text-disabled mb-1")
+                    method_cards = [
+                        (
+                            "rom",
+                            "축소+보간 (ROM)",
+                            "POD 로 압축 후 계수 보간 · 적은 스냅샷 · 모든 메쉬 · 표준",
+                            "mdi-chart-timeline-variant",
+                        ),
+                        (
+                            "physics",
+                            "직접 회귀 (Physics AI)",
+                            "좌표+시간→물리량 신경망 · 메쉬 프리 · NVIDIA PhysicsNeMo",
+                            "mdi-atom-variant",
+                        ),
+                        (
+                            "operator",
+                            "신경 연산자 (FNO)",
+                            "함수→함수 · 다수 샘플 · 균일 격자 · ms 추론",
+                            "mdi-waveform",
+                        ),
+                    ]
+                    for key, name, subtitle, icon in method_cards:
+                        with v3.VCard(
+                            classes="mb-1",
+                            click=f"nt_model_method = '{key}'",
+                            variant=(
+                                f"nt_model_method === '{key}' ? 'tonal' : 'outlined'",
+                            ),
+                            color=(
+                                f"nt_model_method === '{key}' ? 'primary' : undefined",
+                            ),
+                        ):
+                            with v3.VCardText(classes="py-2 d-flex align-center"):
+                                v3.VIcon(icon, classes="mr-3", size="small")
+                                with html.Div():
+                                    html.Div(name, classes="text-body-2")
+                                    html.Div(
+                                        subtitle,
+                                        classes="text-caption text-disabled",
+                                    )
+                    # 데이터 기반 자동 추천 (service.recommend_method)
+                    html.Div(
+                        "{{ nt_method_hint }}",
+                        v_show=("nt_method_hint",),
+                        classes="text-caption text-info mt-1 mb-2",
                     )
-                    v3.VSelect(
-                        v_model=("nt_surrogate",),
-                        items=("nt_surrogate_choices",),
-                        label="Surrogate",
-                        density="compact",
-                        classes="mt-2",
-                    )
-                    with html.Div(v_show=("nt_surrogate === 'physicsnemo'",)):
+
+                    # Ⓐ ROM: reducer × 계수 회귀
+                    with html.Div(v_show=("nt_model_method === 'rom'",)):
+                        v3.VSelect(
+                            v_model=("nt_reducer",),
+                            items=("nt_reducer_choices",),
+                            label="Reducer (차원 축소)",
+                            density="compact",
+                            classes="mt-1",
+                        )
+                        v3.VSelect(
+                            v_model=("nt_surrogate",),
+                            items=("nt_surrogate_choices",),
+                            label="계수 회귀 (Surrogate)",
+                            density="compact",
+                            classes="mt-2",
+                        )
+
+                    # Ⓑ Physics AI: 직접 회귀 파라미터
+                    with html.Div(v_show=("nt_model_method === 'physics'",)):
                         html.Div(
-                            "POD reducer 없이 좌표+시간을 필드로 직접 매핑하는 신경망을 "
-                            "학습합니다 (torch 만으로 학습 — physicsnemo 패키지는 ⑥Export "
+                            "POD reducer 없이 좌표+시간을 필드로 직접 매핑합니다 "
+                            "(torch 만으로 학습 — physicsnemo 패키지는 ⑥Export "
                             "모듈 저장에만 필요).",
-                            classes="text-caption text-disabled mt-2 mb-1",
+                            classes="text-caption text-disabled mt-1 mb-1",
                         )
                         v3.VTextField(
                             v_model=("nt_physics_epochs",),
@@ -1860,6 +1928,24 @@ class NavierTwinWebApp:
                             density="compact",
                             classes="mt-2",
                         )
+
+                    # Ⓒ 신경 연산자: ⑧AI Bench 로 안내 (로드 데이터 직학습은 Phase 3)
+                    with html.Div(v_show=("nt_model_method === 'operator'",)):
+                        html.Div(
+                            "신경 연산자는 다수 샘플(수백+)·균일 격자 데이터에 "
+                            "적합합니다. 현재는 ⑧AI Bench 의 벤치마크 데이터셋으로 "
+                            "학습할 수 있습니다.",
+                            classes="text-caption text-disabled mt-1 mb-1",
+                        )
+                        v3.VBtn(
+                            "⑧ AI Bench 열기",
+                            click="nt_open_panels = [7]",
+                            variant="tonal",
+                            block=True,
+                            classes="mt-1",
+                            prepend_icon="mdi-open-in-app",
+                        )
+
                     v3.VBtn(
                         "모델 학습 (시간→필드)",
                         click=self.ctrl.nt_model_train,
@@ -1868,10 +1954,12 @@ class NavierTwinWebApp:
                         classes="mt-2",
                         disabled=("!nt_has_timesteps || nt_busy",),
                         prepend_icon="mdi-cog-sync-outline",
+                        v_show=("nt_model_method !== 'operator'",),
                     )
                     html.Div(
                         "2개 이상 타임스텝이 필요합니다 (모드 수는 ③Reduce 슬라이더 공유).",
                         classes="text-caption text-disabled mt-1",
+                        v_show=("nt_model_method !== 'operator'",),
                     )
                     with v3.VCard(variant="tonal", classes="mt-3", v_show=("nt_model_ready",)):
                         with v3.VCardText(classes="text-caption"):

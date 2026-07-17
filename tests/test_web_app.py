@@ -111,13 +111,15 @@ def test_model_panel_reducer_surrogate_and_pod_mode() -> None:
     assert "kriging" in st.nt_model_summary
 
 
-def test_build_twin_dispatches_to_physicsnemo_when_selected() -> None:
-    """surrogate='physicsnemo' 선택 시 build_twin() 이 POD 없이 직접 예측 모델을 학습한다."""
+def test_build_twin_dispatches_by_model_method() -> None:
+    """nt_model_method='physics' 선택 시 build_twin() 이 POD 없이 직접 예측 모델을 학습한다."""
     app = _make_app("nt-test-physicsnemo")
     st = app.server.state
     app.load_demo()
+    # 데모(12 스텝, 단일 시계열)는 ROM 추천 힌트가 떠야 한다.
+    assert "ROM" in st.nt_method_hint
 
-    st.nt_surrogate = "physicsnemo"
+    st.nt_model_method = "physics"
     app.build_twin()
     assert st.nt_error == ""
     assert st.nt_model_ready is True
@@ -130,10 +132,27 @@ def test_build_twin_dispatches_to_physicsnemo_when_selected() -> None:
     assert st.nt_error == ""
     assert "twin_prediction" in st.nt_fields
 
-    # 고전 reducer+surrogate 로 다시 학습하면 physics_ready 플래그가 꺼진다.
-    st.nt_surrogate = "rbf"
+    # ROM 방식으로 다시 학습하면 physics_ready 플래그가 꺼진다.
+    st.nt_model_method = "rom"
     app.build_twin()
     assert st.nt_physics_ready is False
+
+    # operator 방식은 ⑧Bench 안내 에러를 낸다 (버튼은 UI 에서 숨겨지지만 방어).
+    st.nt_model_method = "operator"
+    app.build_twin()
+    assert "AI Bench" in st.nt_error
+
+
+def test_build_twin_legacy_physicsnemo_surrogate_shim() -> None:
+    """옛 상태값(surrogate='physicsnemo')도 physics 경로로 디스패치된다."""
+    app = _make_app("nt-test-physicsnemo-shim")
+    st = app.server.state
+    app.load_demo()
+    st.nt_model_method = "rom"
+    st.nt_surrogate = "physicsnemo"
+    app.build_twin()
+    assert st.nt_error == ""
+    assert st.nt_physics_ready is True
 
 
 def test_export_callbacks_write_files(tmp_path) -> None:

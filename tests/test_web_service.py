@@ -511,3 +511,15 @@ def test_export_physicsnemo_module(demo, tmp_path) -> None:
     else:
         with pytest.raises(RuntimeError, match="physicsnemo"):
             service.export_physicsnemo_module(engine, out)
+
+
+def test_recommend_method_rom_for_small_series(demo) -> None:
+    rec = service.recommend_method(demo)
+    assert rec["method"] == "rom"
+    assert "ROM" in rec["reason"]
+
+
+def test_recommend_method_none_for_single_step() -> None:
+    single = service.make_demo_dataset(nx=8, ny=8, n_steps=1)
+    rec = service.recommend_method(single)
+    assert rec["method"] == "none"

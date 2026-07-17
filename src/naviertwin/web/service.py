@@ -587,6 +587,51 @@ def predict_twin(engine: Any, param_value: float) -> np.ndarray:
     return prediction
 
 
+def recommend_method(dataset: CFDDataset) -> dict[str, str]:
+    """로드된 데이터 특성으로 ④Model 학습 방식을 추천한다.
+
+    문헌 통례 기반 휴리스틱:
+      - 비정형/스냅샷 적음 → ROM(축소+보간)이 표준.
+      - 균일 격자 + 스냅샷 많음 → 신경 연산자(FNO)도 후보.
+      - 타임스텝 1개 → 학습 불가(예측 전용).
+
+    Returns:
+        ``method`` ("rom" | "operator" | "none") 과 한국어 ``reason``.
+    """
+    n_steps = int(getattr(dataset, "n_time_steps", 0))
+    n_points = int(getattr(dataset, "n_points", 0))
+    if n_steps < 2:
+        return {
+            "method": "none",
+            "reason": "타임스텝이 1개뿐이라 (시간→필드) 학습이 불가능합니다. "
+            "저장된 트윈이 있다면 ⑤Twin 예측만 가능합니다.",
+        }
+    try:
+        import pyvista as pv
+
+        uniform = isinstance(dataset.mesh, pv.ImageData)
+    except Exception:  # noqa: BLE001
+        uniform = False
+    prefix = f"현재 데이터: {n_steps} 타임스텝 · {n_points:,} 포인트"
+    if uniform and n_steps >= 100:
+        return {
+            "method": "operator",
+            "reason": f"{prefix} · 균일 격자 — 스냅샷이 많아 신경 연산자(FNO)도 "
+            "고려할 만합니다. ROM 은 여전히 안전한 기본값입니다.",
+        }
+    if n_steps < 50:
+        return {
+            "method": "rom",
+            "reason": f"{prefix} — 스냅샷이 적어 축소+보간(ROM)이 가장 안정적입니다. "
+            "신경 연산자 학습에는 샘플이 부족합니다.",
+        }
+    return {
+        "method": "rom",
+        "reason": f"{prefix} — 단일 시계열은 ROM 권장. 물리 제약이 필요하거나 "
+        "데이터가 희소하면 Physics AI 가 대안입니다.",
+    }
+
+
 def build_physics_ai_twin(
     dataset: CFDDataset,
     field: str,
