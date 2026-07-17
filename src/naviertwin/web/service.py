@@ -30,7 +30,8 @@ RESULT_FIELD = {"q_criterion": "Q-criterion", "lambda2": "lambda2"}
 # 파생(분석/모드/예측) field 판정 — app/service 단일 출처(SSOT).
 DERIVED_PREFIXES = ("pod_mode", "twin_")  # twin_prediction + 다중출력 twin_<field>
 
-DERIVED_EXTRA = ("vorticity",)
+# sdf = 재샘플이 만든 형상 부호거리 — 뷰어로 보되 학습 대상(출력)은 아니다.
+DERIVED_EXTRA = ("vorticity", "sdf")
 
 
 def is_derived_field(name: str) -> bool:
@@ -134,11 +135,137 @@ def load_project(path: str | Path) -> tuple[CFDDataset, Any | None]:
     return dataset, engine
 
 
+def meshes_are_identical(datasets: Sequence[CFDDataset]) -> bool:
+    """케이스들이 같은 메쉬(좌표/토폴로지)를 공유하는지 판정한다."""
+    cases = list(datasets)
+    if len(cases) < 2:
+        return True
+    ref = np.asarray(cases[0].mesh.points, dtype=np.float64)
+    for case in cases[1:]:
+        points = np.asarray(case.mesh.points, dtype=np.float64)
+        if points.shape != ref.shape or not np.allclose(points, ref):
+            return False
+    return True
+
+
+def resample_cases_to_common_grid(
+    datasets: Sequence[CFDDataset],
+    *,
+    resolution: int = 32,
+    fields: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """형상이 다른 케이스들을 공통 배경 격자로 재샘플한다 (형상 가변 지원).
+
+    케이스마다 메쉬가 다르면(형상 파라미터가 바뀌는 외부유동 등) 스냅샷 행렬도
+    신경장 학습도 불가능하다 — 모든 케이스를 **같은 균일 격자**에 올려 문제를
+    유형 B(파라미터 스윕)로 되돌린다. 이는 형상 가변 ROM 의 표준 전처리다.
+
+    각 격자점에 부호거리 ``sdf`` 를 함께 계산한다 (+ = 유체, − = 고체/도메인
+    밖). VTK 표면 추출 대신 ``vtkValidPointMask`` 의 거리변환(EDT)으로 구하므로
+    2D/3D·열린/닫힌 형상 어디서나 동작한다. 고체 내부 격자점의 물리량은 0 으로
+    채워진다(``sample`` 기본) — sdf 가 그 영역을 식별해준다.
+
+    Args:
+        datasets: 케이스 목록 (메쉬가 서로 달라도 됨).
+        resolution: 최장 축 방향 격자 분할 수.
+        fields: 옮길 field 목록. None 이면 첫 케이스의 field 전체.
+
+    Returns:
+        ``datasets``(공통 격자 위 케이스 목록), ``grid_summary``,
+        ``fields``, ``resolution`` 을 담은 dict.
+
+    Raises:
+        ValueError: 케이스가 없거나 격자를 만들 수 없는 경우.
+    """
+    import pyvista as pv
+    from scipy.ndimage import distance_transform_edt
+
+    from naviertwin.core.cfd_reader.base import CFDDataset as _CFDDataset
+
+    cases = list(datasets)
+    if not cases:
+        raise ValueError("재샘플할 케이스가 없습니다.")
+
+    # 1) 모든 케이스를 덮는 합집합 바운딩 박스 (약간의 여유 포함).
+    bounds = np.asarray([case.mesh.bounds for case in cases], dtype=np.float64)
+    lo = bounds[:, [0, 2, 4]].min(axis=0)
+    hi = bounds[:, [1, 3, 5]].max(axis=0)
+    span = hi - lo
+    pad = np.where(span > 0, span * 0.02, 0.0)
+    lo, hi = lo - pad, hi + pad
+    span = hi - lo
+
+    # 2) 최장 축 기준 등방 격자. 두께 0 축(2D)은 1칸으로.
+    longest = float(span.max())
+    if longest <= 0:
+        raise ValueError("케이스 바운딩 박스가 비어 있어 격자를 만들 수 없습니다.")
+    step = longest / max(2, int(resolution))
+    dims = [max(1, int(round(s / step)) + 1) if s > 0 else 1 for s in span]
+    spacing = [step if s > 0 else 1.0 for s in span]
+    grid = pv.ImageData(
+        dimensions=tuple(dims), spacing=tuple(spacing), origin=tuple(lo)
+    )
+
+    names = (
+        [str(f) for f in fields]
+        if fields
+        else [n for n in (getattr(cases[0], "field_names", []) or [])]
+    )
+
+    # EDT 는 격자 인덱스 공간에서 계산 → 축별 물리 간격으로 환산.
+    # 배열은 VTK point 순서(z, y, x)로 reshape 하므로 spacing 도 뒤집는다.
+    # 두께 0 축(2D)은 거리가 항상 0 이라 값이 무의미하지만 길이는 맞춰야 한다.
+    edt_sampling = list(reversed(spacing))
+
+    out: list[CFDDataset] = []
+    for case in cases:
+        sampled = grid.sample(case.mesh)
+        mask = np.asarray(
+            sampled.point_data.get("vtkValidPointMask", np.ones(grid.n_points)),
+            dtype=np.int8,
+        )
+        shaped = mask.reshape(tuple(reversed(dims)))  # VTK point order = z,y,x
+        # 부호거리: 유체 안쪽은 +(고체까지 거리), 고체 안쪽은 −(유체까지 거리).
+        d_fluid = distance_transform_edt(shaped, sampling=edt_sampling)
+        d_solid = distance_transform_edt(1 - shaped, sampling=edt_sampling)
+        sdf = (np.asarray(d_fluid) - np.asarray(d_solid)).reshape(-1)
+
+        mesh = grid.copy(deep=True)
+        for name in names:
+            if name in sampled.point_data:
+                mesh.point_data[name] = np.asarray(sampled.point_data[name])
+        mesh.point_data["sdf"] = sdf.astype(np.float64)
+        out.append(
+            _CFDDataset(
+                mesh=mesh,
+                time_steps=[float((getattr(case, "time_steps", None) or [0.0])[-1])],
+                field_names=[*names, "sdf"],
+                metadata={
+                    "source": "resampled_common_grid",
+                    "resample_resolution": int(resolution),
+                },
+            )
+        )
+
+    summary = (
+        f"공통 격자 {'×'.join(str(d) for d in dims)} ({grid.n_points:,}점)"
+        f" · 재샘플 {len(cases)}케이스 · sdf 포함"
+    )
+    return {
+        "datasets": out,
+        "grid_summary": summary,
+        "fields": [*names, "sdf"],
+        "resolution": int(resolution),
+    }
+
+
 def load_case_set(
     directory: str | Path,
     *,
     params_path: str | Path | None = None,
     param_columns: Sequence[str] | None = None,
+    resample: bool | str = "auto",
+    resolution: int = 32,
 ) -> dict[str, Any]:
     """폴더의 CFD 파일들을 "정상 파라미터 스윕" 케이스 세트로 로드한다.
 
@@ -150,13 +277,23 @@ def load_case_set(
     각 케이스는 마지막 타임스텝(정상 해석의 수렴 해)만 단일 스냅샷으로
     materialize 한다 — 케이스당 정확히 1 스냅샷이라 파라미터 표 행 수와 맞는다.
 
+    Args:
+        directory: 케이스 파일들이 있는 폴더.
+        params_path: 파라미터 CSV 경로 (None 이면 폴더 안에서 자동 탐색).
+        param_columns: 쓸 CSV 열 (None 이면 숫자 열 전부).
+        resample: 형상 가변 지원 — ``"auto"``(기본)면 케이스 메쉬가 서로 다를
+            때만 공통 격자로 재샘플, ``True`` 면 항상, ``False`` 면 안 함.
+        resolution: 재샘플 격자의 최장 축 분할 수.
+
     Returns:
         ``datasets``(단일 스냅샷 CFDDataset 목록), ``params`` (N, k),
-        ``param_names``, ``case_names``, ``params_source`` 를 담은 dict.
+        ``param_names``, ``case_names``, ``params_source``, ``resampled``,
+        ``grid_summary`` 를 담은 dict.
 
     Raises:
         FileNotFoundError: 폴더가 없는 경우.
-        ValueError: 로드 가능한 케이스가 2개 미만이거나 CSV 행 수가 안 맞는 경우.
+        ValueError: 로드 가능한 케이스가 2개 미만이거나 CSV 행 수가 안 맞거나,
+            메쉬가 다른데 ``resample=False`` 인 경우.
     """
     from naviertwin.core.cfd_reader import ReaderFactory
     from naviertwin.core.physnemo.cfd_field_model import load_parameter_table
@@ -203,12 +340,31 @@ def load_case_set(
         source = "case_index (파라미터 CSV 없음)"
         logger.warning("파라미터 CSV 가 없어 case index 를 입력으로 사용합니다: %s", base)
 
+    # 형상 가변 지원: 메쉬가 서로 다르면 공통 격자로 재샘플해야 스냅샷 행렬/
+    # 신경장 학습이 성립한다 (근거: model-taxonomy-plan.md §15, M4a).
+    identical = meshes_are_identical(datasets)
+    grid_summary = ""
+    resampled = False
+    if resample is True or (resample == "auto" and not identical):
+        result = resample_cases_to_common_grid(datasets, resolution=resolution)
+        datasets = result["datasets"]
+        grid_summary = str(result["grid_summary"])
+        resampled = True
+        logger.info("케이스 메쉬가 달라 공통 격자로 재샘플: %s", grid_summary)
+    elif not identical:
+        raise ValueError(
+            "케이스마다 메쉬가 다릅니다 — 형상 가변 케이스는 공통 격자 재샘플이 "
+            "필요합니다 (resample='auto' 또는 True)."
+        )
+
     return {
         "datasets": datasets,
         "params": np.asarray(values, dtype=np.float64),
         "param_names": list(names),
         "case_names": [f.name for f in files],
         "params_source": source,
+        "resampled": resampled,
+        "grid_summary": grid_summary,
     }
 
 

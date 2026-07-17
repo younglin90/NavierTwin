@@ -134,6 +134,9 @@ class NavierTwinWebApp:
         st.nt_case_names = []
         st.nt_params_source = ""
         st.nt_param_names = []
+        # 형상 가변(M4a): 케이스 메쉬가 서로 다르면 공통 격자로 재샘플했다는 표시.
+        st.nt_case_resampled = False
+        st.nt_case_grid_summary = ""
 
         # Viewer
         st.nt_fields = []
@@ -437,18 +440,28 @@ class NavierTwinWebApp:
 
         mins = [float(v) for v in params.min(axis=0)]
         maxs = [float(v) for v in params.max(axis=0)]
+        resampled = bool(result.get("resampled"))
+        grid_summary = str(result.get("grid_summary") or "")
         with self.state:
             self.state.nt_case_mode = True
             self.state.nt_case_count = len(datasets)
             self.state.nt_case_names = list(result["case_names"])
             self.state.nt_params_source = str(result["params_source"])
             self.state.nt_param_names = names
+            self.state.nt_case_resampled = resampled
+            self.state.nt_case_grid_summary = grid_summary
             # 케이스 세트는 시계열이 아니므로 recommend_method(단일 스냅샷)의
             # "타임스텝 1개" 안내가 맞지 않는다 — 문제 유형 B 안내로 대체.
+            shape_note = (
+                " 케이스마다 메쉬가 달라 공통 격자로 재샘플했습니다(형상 가변) — "
+                "sdf 필드로 형상 경계를 볼 수 있습니다."
+                if resampled
+                else ""
+            )
             self.state.nt_method_hint = (
                 f"케이스 세트: {len(datasets)}개 케이스 × 입력 파라미터 {len(names)}개 "
                 f"({', '.join(names)}) — 정상 파라미터 스윕입니다. "
-                "스냅샷이 적으면 ROM 이 안정적입니다."
+                f"스냅샷이 적으면 ROM 이 안정적입니다.{shape_note}"
             )
         self._set_twin_param_ranges(names, mins, maxs)
 
@@ -1617,6 +1630,8 @@ class NavierTwinWebApp:
             self.state.nt_case_names = []
             self.state.nt_params_source = ""
             self.state.nt_param_names = []
+            self.state.nt_case_resampled = False
+            self.state.nt_case_grid_summary = ""
             self.state.nt_twin_params = []
             self.state.nt_twin_mins = []
             self.state.nt_twin_maxs = []
@@ -2175,6 +2190,11 @@ class NavierTwinWebApp:
                                 "{{ nt_param_names.join(', ') }} ({{ nt_params_source }})",
                                 v_show=("nt_case_mode",),
                                 classes="text-info mb-1",
+                            )
+                            html.Div(
+                                "형상 가변 — {{ nt_case_grid_summary }}",
+                                v_show=("nt_case_resampled",),
+                                classes="text-warning mb-1",
                             )
                             html.Div("Points: {{ nt_info_points }}")
                             html.Div("Cells: {{ nt_info_cells }}")

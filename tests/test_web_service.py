@@ -769,3 +769,98 @@ def test_predict_at_rejects_bad_shapes(demo) -> None:
         model.predict_at(np.zeros((4, 2)), [0.5])  # 3D 좌표가 아님
     with pytest.raises(ValueError, match="parameter dimension"):
         model.predict_at(np.zeros((4, 3)), [0.5, 1.5])  # 파라미터 1개인 모델
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 형상 가변 (M4a) — 공통 격자 재샘플 + SDF
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _write_varying_geometry_cases(directory, *, radii=(0.10, 0.15, 0.20, 0.25)):
+    """반지름이 다른 원기둥 구멍을 뚫은 케이스들 — 케이스마다 메쉬가 다르다.
+
+    2D 원기둥 주위 유동의 형상 스윕 축소판. threshold 로 구멍을 뚫으므로
+    반지름마다 점/셀 수가 달라진다(= 동일 메쉬 제약 위반).
+    """
+    import pyvista as pv
+
+    directory.mkdir(parents=True, exist_ok=True)
+    for index, radius in enumerate(radii):
+        grid = pv.ImageData(dimensions=(21, 21, 1), spacing=(1 / 20, 1 / 20, 1))
+        coords = np.asarray(grid.points, dtype=float)
+        dist = np.linalg.norm(coords[:, :2] - 0.5, axis=1)
+        ug = grid.cast_to_unstructured_grid()
+        ug.point_data["dist"] = dist
+        # 원 밖만 남긴다 → 반지름마다 다른 메쉬.
+        case = ug.threshold(radius, scalars="dist")
+        pts = np.asarray(case.points, dtype=float)
+        d = np.linalg.norm(pts[:, :2] - 0.5, axis=1)
+        # 반지름이 클수록 강해지는 합성 압력장 (형상 → 물리 의존성).
+        case.point_data["p"] = (1.0 / np.maximum(d, 1e-3)) * radius
+        case.save(directory / f"case_{index:02d}.vtu")
+    rows = ["radius"] + [f"{r}" for r in radii]
+    (directory / "params.csv").write_text("\n".join(rows) + "\n")
+    return list(radii)
+
+
+def test_load_case_set_rejects_varying_geometry_without_resample(tmp_path) -> None:
+    """resample=False 면 메쉬가 다른 케이스를 명확한 이유와 함께 거부한다."""
+    _write_varying_geometry_cases(tmp_path / "shapes")
+    with pytest.raises(ValueError, match="메쉬가 다릅니다"):
+        service.load_case_set(tmp_path / "shapes", resample=False)
+
+
+def test_load_case_set_auto_resamples_varying_geometry(tmp_path) -> None:
+    """형상이 다른 케이스는 auto 로 공통 격자에 올라간다 (문제 유형 B 로 환원)."""
+    radii = _write_varying_geometry_cases(tmp_path / "shapes")
+    result = service.load_case_set(tmp_path / "shapes", resolution=16)
+
+    assert result["resampled"] is True
+    assert "공통 격자" in result["grid_summary"]
+    np.testing.assert_allclose(result["params"][:, 0], radii)
+    datasets = result["datasets"]
+    # 재샘플 후에는 모든 케이스가 같은 격자를 공유한다 — 이게 학습의 전제.
+    assert service.meshes_are_identical(datasets)
+    assert len({ds.n_points for ds in datasets}) == 1
+    for ds in datasets:
+        assert "sdf" in ds.mesh.point_data
+        assert "p" in ds.mesh.point_data
+
+
+def test_resample_sdf_sign_tracks_geometry(tmp_path) -> None:
+    """sdf 는 유체에서 +, 고체(구멍) 안에서 − 이고 반지름이 커지면 고체가 넓어진다."""
+    _write_varying_geometry_cases(tmp_path / "shapes", radii=(0.10, 0.30))
+    result = service.load_case_set(tmp_path / "shapes", resolution=24)
+    small, large = result["datasets"]
+
+    center_small = np.asarray(small.mesh.point_data["sdf"])
+    center_large = np.asarray(large.mesh.point_data["sdf"])
+    coords = np.asarray(small.mesh.points, dtype=float)
+    at_center = np.argmin(np.linalg.norm(coords[:, :2] - 0.5, axis=1))
+    # 도메인 중앙은 두 경우 모두 구멍 안 → 음수(고체).
+    assert center_small[at_center] < 0
+    assert center_large[at_center] < 0
+    # 반지름이 크면 고체 영역(sdf<0)이 더 넓다.
+    assert int((center_large < 0).sum()) > int((center_small < 0).sum())
+
+
+def test_varying_geometry_end_to_end_rom(tmp_path) -> None:
+    """형상 가변 케이스로 ROM 스윕 학습 → 형상 파라미터로 예측까지 성립한다."""
+    _write_varying_geometry_cases(tmp_path / "shapes")
+    loaded = service.load_case_set(tmp_path / "shapes", resolution=16)
+    result = service.build_twin_from_cases(
+        loaded["datasets"], "p", 3, loaded["params"],
+        param_names=loaded["param_names"],
+    )
+    assert result["param_names"] == ["radius"]
+    prediction = service.predict_twin(result["engine"], [0.175])  # 학습 반지름 사이
+    assert prediction.shape[0] == loaded["datasets"][0].n_points
+    assert np.isfinite(prediction).all()
+
+
+def test_resample_is_skipped_when_meshes_match(tmp_path) -> None:
+    """메쉬가 같으면 auto 는 재샘플하지 않는다 (불필요한 보간 오차 방지)."""
+    _write_case_set(tmp_path / "same", n_cases=3)
+    result = service.load_case_set(tmp_path / "same")
+    assert result["resampled"] is False
+    assert result["grid_summary"] == ""
