@@ -151,6 +151,12 @@ class NavierTwinWebApp:
         st.nt_pod_mode = 0
         st.nt_pod_max_mode = 0
 
+        # Model — 입출력 설정: 출력(예측 대상 필드)은 명시적으로 고른다 —
+        # 3D 뷰어 컬러링용 nt_field 와 별개 (이전엔 몰래 재사용해 혼란을 줬다).
+        # 입력은 항상 "시간(t)" — 단일 케이스 시계열이라 유일한 파라미터.
+        st.nt_train_field = ""
+        st.nt_train_field_choices = []
+
         # Model — 방식 우선(method-first) 2단 선택.
         # 문헌 4계열 중 웹 노출분: "rom"(Ⓐ 축소+보간) | "physics"(Ⓑ 직접 회귀)
         # | "operator"(Ⓒ 신경 연산자 — ⑥연산자 랩 으로 연결). 분류 근거는
@@ -451,6 +457,8 @@ class NavierTwinWebApp:
         with self.state:
             if str(reducer) == "direct_physics_ai":
                 self.state.nt_model_method = "physics"
+            if field:
+                self.state.nt_train_field = field
             self.state.nt_model_ready = True
             self.state.nt_twin_ready = True
             self.state.nt_twin_min = pmin
@@ -727,7 +735,7 @@ class NavierTwinWebApp:
                 RuntimeError("신경 연산자(FNO) 학습은 ⑥연산자 랩 패널에서 실행하세요."),
             )
             return
-        field = self._base_field()
+        field = self._training_field()
         reducer = self.state.nt_reducer or "pod"
         try:
             result = service.build_twin(
@@ -764,7 +772,7 @@ class NavierTwinWebApp:
         결과 엔진은 ``predict()``만 노출하는 TwinEngine 과 같은 계약이라
         ③Twin/④Export 는 수정 없이 그대로 재사용된다.
         """
-        field = self._base_field()
+        field = self._training_field()
         try:
             result = service.build_physics_ai_twin(
                 self.dataset,
@@ -808,7 +816,7 @@ class NavierTwinWebApp:
 
     def _compare_compute(self, progress_cb: Any) -> dict[str, Any]:
         """전체 reducer×surrogate 조합 벤치마크 (동기 워커 — 상태 미변경)."""
-        field = self._base_field()
+        field = self._training_field()
         return service.compare_models(
             self.dataset, field, int(self.state.nt_n_modes or 6), progress_cb=progress_cb
         )
@@ -1231,6 +1239,9 @@ class NavierTwinWebApp:
             self.state.nt_model_ready = False
             self.state.nt_model_summary = ""
             self.state.nt_physics_ready = False
+            base_fields = [n for n in info["fields"] if not self._is_derived_field(n)]
+            self.state.nt_train_field_choices = base_fields
+            self.state.nt_train_field = render.preferred_field(base_fields)
             try:
                 self.state.nt_method_hint = service.recommend_method(dataset)["reason"]
             except Exception:  # noqa: BLE001 — 추천은 부가 정보, 로드를 막지 않는다
@@ -1265,13 +1276,33 @@ class NavierTwinWebApp:
         return service.is_derived_field(name)
 
     def _base_field(self) -> str:
-        """POD/Model 대상 field — 파생 결과가 아닌 원본 물리량을 우선한다."""
+        """⑤부가 분석(POD/FFT 진단) 대상 field — 3D 뷰어의 nt_field 를 따라간다.
+
+        진단 도구는 "지금 보고 있는 필드를 더 들여다본다"는 성격이라 뷰어와
+        같은 field 를 쓰는 편이 자연스럽다. ②Model 학습 대상은 이것과 별개인
+        :meth:`_training_field` 를 쓴다 — 근거: 사용자 지적("트윈 학습할 때
+        입력/출력 설정이 없냐") → 뷰어 컬러링용 필드에 학습 대상이 몰래
+        종속돼 있던 문제.
+        """
         names = render.available_fields(self.dataset) if self.dataset is not None else []
         base = [n for n in names if not self._is_derived_field(n)]
         field = self.state.nt_field or ""
         if field and not self._is_derived_field(field):
             return field
         return render.preferred_field(base) if base else field
+
+    def _training_field(self) -> str:
+        """②Model 학습 대상(출력) field — 패널 안의 명시적 선택을 우선한다.
+
+        ``nt_train_field`` 는 데이터 로드 시 기본값이 채워지고 ②Model 의
+        "출력 필드" 드롭다운으로 사용자가 바꿀 수 있다 — 3D 뷰어의 nt_field
+        (색상 표시용) 와 완전히 독립적이다.
+        """
+        choices = list(self.state.nt_train_field_choices or [])
+        chosen = str(self.state.nt_train_field or "")
+        if chosen and chosen in choices:
+            return chosen
+        return self._base_field()
 
     # ------------------------------------------------------------------
     # Rendering
@@ -1716,6 +1747,23 @@ class NavierTwinWebApp:
             # 계열 분류/근거: .omc/plans/model-taxonomy-plan.md
             with v3.VExpansionPanel(title="② Model (트윈 학습)"):
                 with v3.VExpansionPanelText():
+                    # 입출력 설정 — 무엇을 예측하고(출력) 무엇으로 예측하는지(입력)
+                    # 를 명시한다. 이전엔 출력이 3D 뷰어 컬러링용 nt_field 에
+                    # 몰래 종속돼 있어 사용자가 알아볼 수 없었다.
+                    html.Div("입력 · 출력", classes="text-caption text-disabled mb-1")
+                    v3.VSelect(
+                        v_model=("nt_train_field",),
+                        items=("nt_train_field_choices",),
+                        label="출력 필드 (예측 대상)",
+                        density="compact",
+                        hide_details=True,
+                    )
+                    html.Div(
+                        "입력 파라미터: 시간(t) — 단일 케이스 시계열의 유일한 "
+                        "파라미터라 자동으로 정해집니다.",
+                        classes="text-caption text-disabled mt-1 mb-3",
+                    )
+                    v3.VDivider(classes="mb-3")
                     html.Div("모델 방식", classes="text-caption text-disabled mb-1")
                     method_cards = [
                         (

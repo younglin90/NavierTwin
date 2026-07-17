@@ -111,6 +111,28 @@ def test_model_panel_reducer_surrogate_and_pod_mode() -> None:
     assert "kriging" in st.nt_model_summary
 
 
+def test_train_field_is_independent_of_viewer_field() -> None:
+    """②Model 출력 필드 선택은 3D 뷰어 컬러링용 nt_field 와 완전히 독립적이다."""
+    app = _make_app("nt-test-train-field")
+    st = app.server.state
+    app.load_demo()
+    assert set(st.nt_train_field_choices) == {"U", "p"}
+    assert st.nt_train_field == "p"  # preferred_field 기본값
+
+    # 뷰어 필드를 U 로 바꿔도 학습 대상(nt_train_field)은 그대로 p.
+    st.nt_field = "U"
+    app.build_twin()
+    assert st.nt_error == ""
+    assert "field='p'" in st.nt_model_summary
+
+    # 출력 필드를 명시적으로 U 로 바꾸면 그걸로 학습된다 (뷰어와 무관하게).
+    st.nt_field = "p"
+    st.nt_train_field = "U"
+    app.build_twin()
+    assert st.nt_error == ""
+    assert "field='U'" in st.nt_model_summary
+
+
 def test_build_twin_dispatches_by_model_method() -> None:
     """nt_model_method='physics' 선택 시 build_twin() 이 POD 없이 직접 예측 모델을 학습한다."""
     app = _make_app("nt-test-physicsnemo")
