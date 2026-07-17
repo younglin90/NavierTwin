@@ -249,6 +249,43 @@ def resample_cases_to_common_grid(
     }
 
 
+# ──────────────────────────────────────────────────────────────────────
+# 데모 카탈로그 — 모델 계열별로 "잘 맞는 데이터"를 하나씩 갖춘다.
+# 데이터가 없으면 기능을 시험할 수 없다 (예: DMD 는 "waves" 없이는 늘 크게 빗나감).
+# ──────────────────────────────────────────────────────────────────────
+DEMO_TIME_SERIES_KINDS = ("filament", "advecting", "waves")
+DEMO_CASE_SET_KINDS = ("sweep", "shapes")
+
+DEMO_CATALOG: list[dict[str, str]] = [
+    {
+        "value": "filament",
+        "title": "소용돌이 필라멘트 (시계열 · 불연속)",
+        "note": "불연속·비주기. ROM 에 모드가 많이 필요하고 DMD 는 부적합 — 어려운 기준.",
+    },
+    {
+        "value": "advecting",
+        "title": "이류 Taylor–Green (시계열 · 부드러움)",
+        "note": "부드럽고 준주기. ROM 이 잘 맞는 표준 케이스.",
+    },
+    {
+        "value": "waves",
+        "title": "진행파 2모드 (시계열 · DMD 적합)",
+        "note": "공간모드 2개 × 고유 주파수의 저랭크 선형 동역학 — 동역학 예보(DMD)가 "
+        "정확히 맞추고 학습 구간 밖까지 외삽되는 데모.",
+    },
+    {
+        "value": "sweep",
+        "title": "정상 파라미터 스윕 (5케이스 × 조건 2개)",
+        "note": "동일 메쉬 · 운전조건(inlet 속도, 받음각)이 다른 정상해 — 문제 유형 B.",
+    },
+    {
+        "value": "shapes",
+        "title": "형상 가변 원기둥 (5형상 · 정상)",
+        "note": "케이스마다 메쉬가 다름(반지름 변화) — 로드 시 공통 격자로 자동 재샘플 + sdf.",
+    },
+]
+
+
 def _uniform_grid_over(bounds: Sequence[float], resolution: int) -> Any:
     """바운딩 박스를 덮는 등방 균일 격자를 만든다 (두께 0 축은 1칸 → 2D 자동)."""
     import pyvista as pv
@@ -710,8 +747,10 @@ def make_demo_dataset(
         origin=(0.0, 0.0, 0.0),
     )
 
-    if kind not in {"advecting", "filament"}:
-        raise ValueError(f"지원하지 않는 demo kind: {kind}. 지원: ['advecting', 'filament']")
+    if kind not in DEMO_TIME_SERIES_KINDS:
+        raise ValueError(
+            f"지원하지 않는 demo kind: {kind}. 지원: {list(DEMO_TIME_SERIES_KINDS)}"
+        )
 
     times = np.linspace(0.0, 2.0, n_steps)
     t_span = float(times[-1]) if times[-1] > 0 else 1.0
@@ -736,6 +775,22 @@ def make_demo_dataset(
             step += 1
         source = "demo_taylor_green"
         description = "Advecting Taylor–Green vortex (smooth, periodic)"
+    elif kind == "waves":
+        # 공간모드 2개 × 각자 고유 주파수·감쇠율의 진행파 — 저랭크 선형 동역학의
+        # 교과서적 예다. DMD 가 이론적으로 정확히 맞추고 외삽까지 되는 유일한
+        # 데모 (다른 데모는 이류/불연속이라 DMD 부적합).
+        step = 0
+        while step < n_steps:
+            t = float(times[step])
+            wave1 = np.exp(-0.10 * t) * np.sin(x_flat - 1.3 * t)
+            wave2 = np.exp(-0.30 * t) * np.sin(2.0 * x_flat - 2.7 * t)
+            pressure[step] = wave1 + wave2
+            # 속도는 두 모드의 위상 이동 속도를 반영 (파동 진행 방향 = +x).
+            velocity[step, :, 0] = 1.3 * wave1 + 2.7 * 0.5 * wave2
+            velocity[step, :, 1] = 0.25 * np.exp(-0.10 * t) * np.cos(y_flat - 1.3 * t)
+            step += 1
+        source = "demo_traveling_waves"
+        description = "Two traveling modes with distinct frequencies (DMD-friendly)"
     else:  # "filament" — 소용돌이 유동이 불연속 스칼라를 나선으로 감아올림
         # 좌표를 [0,1] 로 정규화 (도메인은 경계가 있는 비주기 사각형).
         xn = x_flat / two_pi
@@ -783,6 +838,134 @@ def make_demo_dataset(
             "time_series_locations": {"U": "point", "p": "point"},
         },
     )
+
+
+def make_demo_case_set(
+    kind: str = "sweep",
+    *,
+    n_side: int = 40,
+    resolution: int = 40,
+) -> dict[str, Any]:
+    """정상 케이스 세트 데모를 메모리에서 만든다 (문제 유형 B — 파일 불필요).
+
+    :func:`load_case_set` 과 **같은 형태의 dict** 를 돌려주므로 앱의 케이스 세트
+    경로를 그대로 탄다.
+
+    ``kind``:
+        - ``"sweep"``: 동일 메쉬, 운전조건 2개(inlet 속도·받음각)가 다른 5 케이스.
+        - ``"shapes"``: 원기둥 반지름이 다른 5 케이스 — **메쉬가 서로 다르다**.
+          공통 격자로 재샘플해 돌려준다(형상 가변 경로 시연, ``sdf`` 포함).
+
+    Returns:
+        ``datasets``, ``params`` (N, k), ``param_names``, ``case_names``,
+        ``params_source``, ``resampled``, ``grid_summary``.
+
+    Raises:
+        ValueError: 지원하지 않는 ``kind``.
+    """
+    import pyvista as pv
+
+    from naviertwin.core.cfd_reader.base import CFDDataset
+
+    if kind not in DEMO_CASE_SET_KINDS:
+        raise ValueError(
+            f"지원하지 않는 케이스 세트 demo kind: {kind}. 지원: {list(DEMO_CASE_SET_KINDS)}"
+        )
+    n_side = max(8, int(n_side))
+
+    if kind == "sweep":
+        # 동일 격자 위 정상해 — inlet 속도와 받음각이 케이스마다 다르다.
+        velocities = [10.0, 15.0, 20.0, 25.0, 30.0]
+        angles = [0.0, 2.0, 4.0, 6.0, 8.0]
+        datasets: list[CFDDataset] = []
+        for speed, angle in zip(velocities, angles):
+            grid = pv.ImageData(
+                dimensions=(n_side, n_side, 1),
+                spacing=(1.0 / (n_side - 1), 1.0 / (n_side - 1), 1.0),
+            )
+            coords = np.asarray(grid.points, dtype=np.float64)
+            x, y = coords[:, 0], coords[:, 1]
+            rad = np.deg2rad(angle)
+            # 받음각에 따라 기울어지는 정체점 유동 근사 + 동압 스케일.
+            grid.point_data["p"] = (
+                -0.5 * speed**2 * (1.0 - 3.0 * ((x - 0.5) ** 2 + (y - 0.5) ** 2))
+                * np.cos(rad)
+                + 20.0 * angle * y
+            )
+            grid.point_data["U"] = np.column_stack(
+                [
+                    speed * np.cos(rad) * np.ones_like(x),
+                    speed * np.sin(rad) * np.ones_like(x),
+                    np.zeros_like(x),
+                ]
+            )
+            datasets.append(
+                CFDDataset(
+                    mesh=grid,
+                    time_steps=[0.0],
+                    field_names=["p", "U"],
+                    metadata={"source": "demo_steady_sweep"},
+                )
+            )
+        params = np.column_stack([velocities, angles]).astype(np.float64)
+        return {
+            "datasets": datasets,
+            "params": params,
+            "param_names": ["inlet_velocity", "angle_of_attack"],
+            "case_names": [f"case_v{v:g}_a{a:g}" for v, a in zip(velocities, angles)],
+            "params_source": "데모 (내장 파라미터 표)",
+            "resampled": False,
+            "grid_summary": "",
+        }
+
+    # "shapes" — 반지름이 다른 원기둥 주위 정상해. threshold 로 구멍을 뚫으므로
+    # 케이스마다 점/셀 수가 달라진다(= 동일 메쉬 제약 위반 → 재샘플 경로 시연).
+    radii = [0.06, 0.09, 0.12, 0.15, 0.18]
+    raw: list[CFDDataset] = []
+    for radius in radii:
+        grid = pv.ImageData(
+            dimensions=(n_side, max(8, n_side // 2), 1),
+            spacing=(1.5 / (n_side - 1), 1.0 / (max(8, n_side // 2) - 1), 1.0),
+        )
+        coords = np.asarray(grid.points, dtype=np.float64)
+        center = np.array([0.5, 0.5])
+        dist = np.linalg.norm(coords[:, :2] - center, axis=1)
+        unstructured = grid.cast_to_unstructured_grid()
+        unstructured.point_data["dist"] = dist
+        case = unstructured.threshold(radius, scalars="dist")  # 원기둥 제거
+        pts = np.asarray(case.points, dtype=np.float64)
+        rr = np.maximum(np.linalg.norm(pts[:, :2] - center, axis=1), 1e-6)
+        theta = np.arctan2(pts[:, 1] - center[1], pts[:, 0] - center[0])
+        # 원기둥 주위 포텐셜 유동 — 반지름에 따라 장이 달라진다.
+        ratio = radius / rr
+        case.point_data["p"] = 1.0 - (1.0 + ratio**4 - 2.0 * ratio**2 * np.cos(2 * theta))
+        case.point_data["U"] = np.column_stack(
+            [
+                1.0 - ratio**2 * np.cos(2 * theta),
+                -(ratio**2) * np.sin(2 * theta),
+                np.zeros_like(rr),
+            ]
+        )
+        case.point_data.pop("dist", None)
+        raw.append(
+            CFDDataset(
+                mesh=case,
+                time_steps=[0.0],
+                field_names=["p", "U"],
+                metadata={"source": "demo_shape_sweep"},
+            )
+        )
+
+    resampled = resample_cases_to_common_grid(raw, resolution=resolution)
+    return {
+        "datasets": resampled["datasets"],
+        "params": np.asarray(radii, dtype=np.float64).reshape(-1, 1),
+        "param_names": ["radius"],
+        "case_names": [f"cyl_r{r:g}" for r in radii],
+        "params_source": "데모 (내장 형상 파라미터)",
+        "resampled": True,
+        "grid_summary": str(resampled["grid_summary"]),
+    }
 
 
 def _demo_sharp_blobs(x: np.ndarray, y: np.ndarray) -> np.ndarray:

@@ -1105,3 +1105,81 @@ def test_predict_at_requires_input_features_when_trained_with_them() -> None:
     coords = np.asarray(ds.mesh.points, dtype=float)[:, :3]
     with pytest.raises(ValueError, match="입력 field"):
         model.predict_at(coords, np.array([[1.0]]))
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 데모 카탈로그 — 계열별로 "잘 맞는 데이터"가 하나씩 있어야 한다
+# ──────────────────────────────────────────────────────────────────────
+
+
+def test_demo_catalog_covers_both_problem_types() -> None:
+    values = [d["value"] for d in service.DEMO_CATALOG]
+    assert set(values) == set(service.DEMO_TIME_SERIES_KINDS) | set(
+        service.DEMO_CASE_SET_KINDS
+    )
+    for entry in service.DEMO_CATALOG:
+        assert entry["title"] and entry["note"]  # UI 가 그대로 보여준다
+
+
+def test_waves_demo_is_dmd_friendly() -> None:
+    """이 데모의 존재 이유 — DMD 가 실제로 맞는 유일한 데이터."""
+    ds = service.make_demo_dataset(nx=24, ny=24, n_steps=32, kind="waves")
+    assert service.dataset_info(ds)["source"] == "demo_traveling_waves"
+    result = service.build_dmd_twin(ds, "p")
+    # 필라멘트 데모는 0.66 — 여기선 기계 정밀도로 맞아야 한다.
+    assert result["reconstruction_error"] < 1e-6
+    freqs = sorted({round(abs(f), 3) for f in result["frequencies"]})
+    assert any(abs(f - 0.207) < 0.02 for f in freqs), freqs  # 1.3/2π
+    assert any(abs(f - 0.430) < 0.02 for f in freqs), freqs  # 2.7/2π
+
+
+def test_waves_demo_contrasts_with_filament_for_dmd() -> None:
+    """대조 — 같은 DMD 로 필라멘트는 크게 빗나가야 (적합도 배지가 의미를 가짐)."""
+    waves = service.build_dmd_twin(
+        service.make_demo_dataset(nx=20, ny=20, n_steps=24, kind="waves"), "p"
+    )["reconstruction_error"]
+    filament = service.build_dmd_twin(
+        service.make_demo_dataset(nx=20, ny=20, n_steps=24, kind="filament"), "p"
+    )["reconstruction_error"]
+    assert waves < 1e-6 < 0.1 < filament
+
+
+def test_demo_case_set_sweep_shares_mesh_and_trains() -> None:
+    """정상 스윕 데모: 동일 메쉬 · 2개 운전조건 → ROM 학습까지 성립."""
+    result = service.make_demo_case_set("sweep", n_side=24)
+    datasets = result["datasets"]
+    assert len(datasets) == 5
+    assert result["param_names"] == ["inlet_velocity", "angle_of_attack"]
+    assert result["params"].shape == (5, 2)
+    assert result["resampled"] is False
+    assert service.meshes_are_identical(datasets)
+
+    twin = service.build_twin_from_cases(
+        datasets, "p", 3, result["params"], param_names=result["param_names"]
+    )
+    pred = service.predict_twin(twin["engine"], [17.5, 3.0])  # 학습 조건 사이
+    assert pred.shape[0] == datasets[0].n_points
+    assert np.isfinite(pred).all()
+
+
+def test_demo_case_set_shapes_is_resampled_with_sdf() -> None:
+    """형상 가변 데모: 메쉬가 달라 공통 격자로 재샘플되고 sdf 가 붙는다."""
+    result = service.make_demo_case_set("shapes", n_side=32, resolution=24)
+    datasets = result["datasets"]
+    assert len(datasets) == 5
+    assert result["param_names"] == ["radius"]
+    assert result["resampled"] is True
+    assert "공통 격자" in result["grid_summary"]
+    # 재샘플 후에는 학습이 가능하도록 메쉬가 통일된다.
+    assert service.meshes_are_identical(datasets)
+    for ds in datasets:
+        assert "sdf" in ds.mesh.point_data
+    # 반지름이 클수록 고체 영역(sdf<0)이 넓다 — 형상이 실제로 다르다는 증거.
+    solid_small = int((np.asarray(datasets[0].mesh.point_data["sdf"]) < 0).sum())
+    solid_large = int((np.asarray(datasets[-1].mesh.point_data["sdf"]) < 0).sum())
+    assert solid_large > solid_small
+
+
+def test_make_demo_case_set_rejects_unknown_kind() -> None:
+    with pytest.raises(ValueError, match="지원하지 않는"):
+        service.make_demo_case_set("bogus")

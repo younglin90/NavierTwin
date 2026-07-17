@@ -110,7 +110,13 @@ class NavierTwinWebApp:
         st.nt_toast_color = "success"
         st.nt_toast_icon = "mdi-check-circle"
 
-        # Import
+        # Import — 데모 카탈로그 (모델 계열별로 잘 맞는 데이터를 하나씩)
+        st.nt_demo_kind = "filament"
+        st.nt_demo_choices = [
+            {"title": d["title"], "value": d["value"]} for d in service.DEMO_CATALOG
+        ]
+        st.nt_demo_notes = {d["value"]: d["note"] for d in service.DEMO_CATALOG}
+
         st.nt_path = ""
         # 파일 브라우저 모달 — "single"(파일/폴더 1개) | "caseset"(폴더=케이스 세트)
         st.nt_fb_mode = "single"
@@ -405,13 +411,23 @@ class NavierTwinWebApp:
     # ------------------------------------------------------------------
 
     def load_demo(self) -> None:
-        """불연속·비주기 소용돌이 필라멘트 데모 데이터셋을 로드한다."""
+        """선택한 데모를 로드한다 — 시계열이면 단일 데이터셋, 아니면 케이스 세트.
+
+        데모 카탈로그(:data:`service.DEMO_CATALOG`)는 모델 계열별로 "잘 맞는
+        데이터"를 하나씩 갖춘다 — 데이터가 없으면 기능을 시험할 수 없기 때문이다
+        (예: DMD 는 ``waves`` 없이는 늘 크게 빗나간다).
+        """
+        kind = str(self.state.nt_demo_kind or "filament")
+        title = next(
+            (d["title"] for d in service.DEMO_CATALOG if d["value"] == kind), kind
+        )
         try:
-            dataset = service.make_demo_dataset(kind="filament")
-            self._set_dataset(
-                dataset,
-                status="데모 데이터셋 로드 완료 (소용돌이 필라멘트 — 불연속·비주기).",
-            )
+            if kind in service.DEMO_CASE_SET_KINDS:
+                result = service.make_demo_case_set(kind)
+                self._set_case_set(result, f"데모 — {title}")
+                return
+            dataset = service.make_demo_dataset(kind=kind)
+            self._set_dataset(dataset, status=f"데모 로드 완료 — {title}")
         except Exception as exc:  # noqa: BLE001
             self._fail("데모 로드 실패", exc)
 
@@ -2282,6 +2298,18 @@ class NavierTwinWebApp:
             # 1) Import
             with v3.VExpansionPanel(title="① Import"):
                 with v3.VExpansionPanelText():
+                    # 데모 카탈로그 — 계열별로 시험 가능한 데이터를 고른다.
+                    v3.VSelect(
+                        v_model=("nt_demo_kind",),
+                        items=("nt_demo_choices",),
+                        label="데모 데이터",
+                        density="compact",
+                        hide_details=True,
+                    )
+                    html.Div(
+                        "{{ nt_demo_notes[nt_demo_kind] }}",
+                        classes="text-caption text-disabled mt-1 mb-2",
+                    )
                     v3.VBtn(
                         "데모 데이터 로드",
                         click=self.ctrl.nt_load_demo,

@@ -753,3 +753,67 @@ def test_input_field_equal_to_output_is_filtered() -> None:
     app.build_twin()
     assert st.nt_error == ""
     assert "입력 시간(t)" in st.nt_model_summary
+
+
+def test_demo_catalog_loads_time_series_and_case_sets() -> None:
+    """데모 선택이 시계열/케이스 세트 경로로 각각 올바르게 디스패치된다."""
+    app = _make_app("nt-test-demo-catalog")
+    st = app.server.state
+    assert st.nt_demo_kind == "filament"
+    assert len(st.nt_demo_choices) == len(app_service().DEMO_CATALOG)
+
+    # 시계열 데모
+    st.nt_demo_kind = "waves"
+    app.load_demo()
+    assert st.nt_error == ""
+    assert st.nt_case_mode is False
+    assert st.nt_has_timesteps is True
+    assert "진행파" in st.nt_status
+
+    # 케이스 세트 데모 — 같은 버튼이 케이스 세트 경로로 간다.
+    st.nt_demo_kind = "sweep"
+    app.load_demo()
+    assert st.nt_error == ""
+    assert st.nt_case_mode is True
+    assert st.nt_case_count == 5
+    assert st.nt_param_names == ["inlet_velocity", "angle_of_attack"]
+
+    # 형상 가변 데모 — 자동 재샘플 안내가 뜬다.
+    st.nt_demo_kind = "shapes"
+    app.load_demo()
+    assert st.nt_error == ""
+    assert st.nt_case_resampled is True
+    assert st.nt_param_names == ["radius"]
+    assert "형상 가변" in st.nt_method_hint
+
+    # 다시 시계열 데모로 돌아오면 케이스 상태가 리셋된다.
+    st.nt_demo_kind = "filament"
+    app.load_demo()
+    assert st.nt_case_mode is False
+    assert st.nt_case_count == 0
+
+
+def app_service():
+    from naviertwin.web import service
+
+    return service
+
+
+def test_waves_demo_makes_dmd_usable() -> None:
+    """waves 데모가 있어야 동역학 예보(DMD)를 실제로 시험할 수 있다."""
+    app = _make_app("nt-test-demo-waves-dmd")
+    st = app.server.state
+    st.nt_demo_kind = "waves"
+    app.load_demo()
+
+    st.nt_model_method = "dynamics"
+    app.build_twin()
+    assert st.nt_error == ""
+    assert st.nt_dmd_ready is True
+    # 필라멘트(0.66)와 달리 적합도가 초록 신호등(<10%)에 들어와야 한다.
+    assert st.nt_dmd_fit_error < 0.1
+
+    st.nt_twin_param = st.nt_twin_max  # 학습 구간 밖 외삽
+    app.predict()
+    assert st.nt_error == ""
+    assert "twin_prediction" in st.nt_fields
