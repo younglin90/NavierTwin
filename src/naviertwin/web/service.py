@@ -177,7 +177,6 @@ def resample_cases_to_common_grid(
     Raises:
         ValueError: 케이스가 없거나 격자를 만들 수 없는 경우.
     """
-    import pyvista as pv
     from scipy.ndimage import distance_transform_edt
 
     from naviertwin.core.cfd_reader.base import CFDDataset as _CFDDataset
@@ -186,25 +185,16 @@ def resample_cases_to_common_grid(
     if not cases:
         raise ValueError("재샘플할 케이스가 없습니다.")
 
-    # 1) 모든 케이스를 덮는 합집합 바운딩 박스 (약간의 여유 포함).
-    bounds = np.asarray([case.mesh.bounds for case in cases], dtype=np.float64)
-    lo = bounds[:, [0, 2, 4]].min(axis=0)
-    hi = bounds[:, [1, 3, 5]].max(axis=0)
-    span = hi - lo
-    pad = np.where(span > 0, span * 0.02, 0.0)
-    lo, hi = lo - pad, hi + pad
-    span = hi - lo
-
-    # 2) 최장 축 기준 등방 격자. 두께 0 축(2D)은 1칸으로.
-    longest = float(span.max())
-    if longest <= 0:
-        raise ValueError("케이스 바운딩 박스가 비어 있어 격자를 만들 수 없습니다.")
-    step = longest / max(2, int(resolution))
-    dims = [max(1, int(round(s / step)) + 1) if s > 0 else 1 for s in span]
-    spacing = [step if s > 0 else 1.0 for s in span]
-    grid = pv.ImageData(
-        dimensions=tuple(dims), spacing=tuple(spacing), origin=tuple(lo)
-    )
+    # 모든 케이스를 덮는 합집합 바운딩 박스 위에 등방 격자를 만든다.
+    box = np.asarray([case.mesh.bounds for case in cases], dtype=np.float64)
+    union = [
+        box[:, 0].min(), box[:, 1].max(),
+        box[:, 2].min(), box[:, 3].max(),
+        box[:, 4].min(), box[:, 5].max(),
+    ]
+    grid = _uniform_grid_over(union, resolution)
+    dims = list(grid.dimensions)
+    spacing = list(grid.spacing)
 
     names = (
         [str(f) for f in fields]
@@ -256,6 +246,138 @@ def resample_cases_to_common_grid(
         "grid_summary": summary,
         "fields": [*names, "sdf"],
         "resolution": int(resolution),
+    }
+
+
+def _uniform_grid_over(bounds: Sequence[float], resolution: int) -> Any:
+    """바운딩 박스를 덮는 등방 균일 격자를 만든다 (두께 0 축은 1칸 → 2D 자동)."""
+    import pyvista as pv
+
+    box = np.asarray(bounds, dtype=np.float64)
+    lo = box[[0, 2, 4]]
+    hi = box[[1, 3, 5]]
+    span = hi - lo
+    pad = np.where(span > 0, span * 0.02, 0.0)
+    lo, hi = lo - pad, hi + pad
+    span = hi - lo
+    longest = float(span.max())
+    if longest <= 0:
+        raise ValueError("바운딩 박스가 비어 있어 격자를 만들 수 없습니다.")
+    step = longest / max(2, int(resolution))
+    dims = [max(1, int(round(s / step)) + 1) if s > 0 else 1 for s in span]
+    spacing = [step if s > 0 else 1.0 for s in span]
+    return pv.ImageData(
+        dimensions=tuple(dims), spacing=tuple(spacing), origin=tuple(lo)
+    )
+
+
+def coarsen_dataset(
+    dataset: CFDDataset,
+    *,
+    resolution: int = 48,
+    fields: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """대용량 메쉬를 성긴 균일 격자로 재샘플해 메모리·학습 비용을 줄인다.
+
+    왜 필요한가: :meth:`CFDDataset.extract_field_snapshots` 는 (n_features,
+    n_steps) **전체 행렬을 메모리에 올린다** — 1천만 점 × 100 스텝이면 float64
+    로 8GB 다. Physics AI 의 ``max_train_points`` 는 이 행렬을 만든 **뒤**
+    부분추출하므로 피크 메모리를 줄이지 못한다. 학습 전에 해상도를 낮추는 것이
+    유일하게 효과적인 대응이다.
+
+    셀 몇 개를 하나로 합치는 게 아니라 **성긴 격자점에서 원본을 보간 샘플**한다
+    (VTK ``sample``) — 결과는 같은 물리 도메인의 저해상도 표현이며 시계열도
+    보존한다. 손실 압축이므로 급격한 구배/불연속은 뭉개진다.
+
+    Args:
+        dataset: 원본 데이터셋 (시계열 포함 가능).
+        resolution: 최장 축 방향 격자 분할 수. 작을수록 가볍고 거칠다.
+        fields: 옮길 field. None 이면 파생이 아닌 원본 물리량 전체.
+
+    Returns:
+        ``dataset``(성긴 격자 데이터셋), ``summary``, ``points_before``/
+        ``points_after``, ``ratio``(축소 배율) 를 담은 dict.
+
+    Raises:
+        ValueError: 옮길 field 가 없거나 격자를 만들 수 없는 경우.
+    """
+    from naviertwin.core.cfd_reader.base import CFDDataset as _CFDDataset
+
+    names = (
+        [str(f) for f in fields]
+        if fields
+        else [
+            n
+            for n in (getattr(dataset, "field_names", []) or [])
+            if not is_derived_field(n)
+        ]
+    )
+    if not names:
+        raise ValueError("성기게 만들 원본 물리량 field 가 없습니다.")
+
+    grid = _uniform_grid_over(dataset.mesh.bounds, resolution)
+    points_before = int(getattr(dataset, "n_points", 0))
+    n_steps = max(1, int(getattr(dataset, "n_time_steps", 1)))
+    meta = getattr(dataset, "metadata", {}) or {}
+    series_in = meta.get("time_series_fields")
+    locations = meta.get("time_series_locations") or {}
+
+    # 원본 메쉬를 복사해 타임스텝별 값을 얹어가며 샘플한다 (원본 불변).
+    source = dataset.mesh.copy(deep=True)
+    series_out: dict[str, list[Any]] = {name: [] for name in names}
+    for step in range(n_steps):
+        if isinstance(series_in, dict):
+            for name in names:
+                raw = series_in.get(name)
+                if raw is None:
+                    continue
+                values = np.asarray(raw)
+                current = values[step] if values.shape[0] == n_steps else values
+                location = str(locations.get(name, "point"))
+                target = source.cell_data if location == "cell" else source.point_data
+                target[name] = np.asarray(current)
+        sampled = grid.sample(source)
+        for name in names:
+            if name in sampled.point_data:
+                series_out[name].append(np.asarray(sampled.point_data[name]))
+
+    stacked = {
+        name: np.stack(values, axis=0) for name, values in series_out.items() if values
+    }
+    if not stacked:
+        raise ValueError("성긴 격자로 옮겨진 field 가 없습니다 (도메인 불일치?).")
+
+    mesh = grid.copy(deep=True)
+    for name, values in stacked.items():
+        mesh.point_data[name] = np.asarray(values[0])
+
+    times = [float(t) for t in (getattr(dataset, "time_steps", None) or [0.0])]
+    out = _CFDDataset(
+        mesh=mesh,
+        time_steps=times[:n_steps] if len(times) >= n_steps else times,
+        field_names=list(stacked),
+        metadata={
+            "source": f"{meta.get('source', 'unknown')}+coarsened",
+            "coarsen_resolution": int(resolution),
+            "coarsen_points_before": points_before,
+            "time_series_fields": stacked,
+            "time_series_locations": {name: "point" for name in stacked},
+        },
+    )
+    points_after = int(out.n_points)
+    ratio = (points_before / points_after) if points_after else float("nan")
+    dims = mesh.dimensions
+    summary = (
+        f"{points_before:,}점 → {points_after:,}점 "
+        f"({'×'.join(str(d) for d in dims)} 격자, {ratio:.1f}× 축소)"
+    )
+    logger.info("데이터셋 해상도 낮춤: %s", summary)
+    return {
+        "dataset": out,
+        "summary": summary,
+        "points_before": points_before,
+        "points_after": points_after,
+        "ratio": float(ratio),
     }
 
 
@@ -1035,6 +1157,7 @@ def build_physics_ai_twin(
     dataset: CFDDataset,
     field: str | Sequence[str],
     *,
+    input_fields: Sequence[str] | None = None,
     hidden: int = 32,
     max_epochs: int = 150,
     max_train_points: int = 20_000,
@@ -1053,6 +1176,9 @@ def build_physics_ai_twin(
         field: 학습 대상 물리량 field — 문자열 하나 또는 목록(다중 출력).
             다중 출력이면 한 신경망이 모든 필드를 동시에 학습한다 (예측은
             :func:`split_multi_prediction` 으로 필드별로 분해).
+        input_fields: **입력**으로 쓸 다른 field 목록 (예: U → p). 주면 모델이
+            (좌표 + 입력장 + 시간) → 출력 의 field-to-field 연산자가 된다.
+            ③Twin 예측은 학습 입력장을 시간 보간해 자동으로 채운다.
         hidden: 은닉층 폭.
         max_epochs: 학습 epoch 수.
         max_train_points: (좌표×스냅샷) 학습 샘플 상한 — 초과 시 무작위 부분추출.
@@ -1078,9 +1204,11 @@ def build_physics_ai_twin(
             f"Physics AI 학습에는 2개 이상의 타임스텝이 필요합니다. 현재: {n_steps}"
         )
 
+    inputs = [str(f) for f in (input_fields or []) if str(f).strip()]
     model = PhysicsNeMoCFDFieldModel.from_datasets(
         [dataset],
         field_names=fields,
+        input_field_names=inputs or None,
         hidden=hidden,
         max_epochs=max_epochs,
         max_train_points=max_train_points,
@@ -1093,6 +1221,7 @@ def build_physics_ai_twin(
         {
             "field_name": ",".join(fields),
             "field_names": list(fields),
+            "input_field_names": list(inputs),
             "reducer": "direct_physics_ai",
             "surrogate": "physicsnemo_cfd_field",
             "param_min": param_min,
@@ -1103,6 +1232,7 @@ def build_physics_ai_twin(
         "engine": engine,
         "field": ",".join(fields),
         "fields": list(fields),
+        "input_fields": list(inputs),
         "output_fields": list(model.output_fields),
         "param_min": param_min,
         "param_max": param_max,

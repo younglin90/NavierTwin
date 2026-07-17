@@ -969,3 +969,139 @@ def test_build_dmd_twin_rejects_bad_input() -> None:
     ds = service.make_demo_dataset(nx=8, ny=8, n_steps=6)
     with pytest.raises(ValueError, match="지원하지 않는"):
         service.build_dmd_twin(ds, "p", method="fbdmd")  # 검증 안 된 변형은 차단
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 해상도 낮추기 (coarsen) — 대용량 메모리 대응
+# ──────────────────────────────────────────────────────────────────────
+
+
+def test_coarsen_dataset_reduces_points_and_preserves_series() -> None:
+    """성긴 격자로 재샘플해도 시계열·필드·물리 범위가 보존된다."""
+    ds = service.make_demo_dataset(nx=80, ny=80, n_steps=8, kind="advecting")
+    result = service.coarsen_dataset(ds, resolution=24)
+    out = result["dataset"]
+
+    assert result["points_after"] < result["points_before"]
+    assert result["ratio"] > 3.0
+    assert "→" in result["summary"]
+    # 시계열과 벡터장이 모두 살아남는다.
+    assert out.n_time_steps == ds.n_time_steps
+    assert set(out.field_names) == {"U", "p"}
+    assert out.metadata["time_series_fields"]["U"].shape[2] == 3
+
+    full = ds.extract_field_snapshots("p")
+    small = out.extract_field_snapshots("p")
+    assert small.shape[1] == full.shape[1]  # 스텝 수 동일
+    assert small.nbytes < full.nbytes / 3  # 메모리 실제 절감
+    # 저해상도지만 물리 범위는 비슷하게 유지 (손실 압축이므로 여유 허용).
+    assert abs(float(small.max()) - float(full.max())) < 0.1 * float(full.max() - full.min())
+    # 시간 진화가 뭉개지지 않는다.
+    assert not np.allclose(small[:, 0], small[:, -1])
+    # 원본은 변경되지 않는다.
+    assert ds.n_points == result["points_before"]
+
+
+def test_coarsen_dataset_rejects_when_no_base_fields() -> None:
+    import pyvista as pv
+
+    from naviertwin.core.cfd_reader.base import CFDDataset
+
+    grid = pv.ImageData(dimensions=(4, 4, 1))
+    empty = CFDDataset(mesh=grid, time_steps=[0.0], field_names=[], metadata={})
+    with pytest.raises(ValueError, match="field"):
+        service.coarsen_dataset(empty)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 입력 필드 (field-to-field 연산자)
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _field_to_field_dataset(n_steps: int = 12, n_side: int = 12):
+    """p = 2·s 인 합성 데이터 — 입력 field s 가 출력을 결정한다.
+
+    s 는 좌표·시간과 무관한 난수라, 입력 field 없이 (x, t) 만으로는 학습이
+    불가능하다 → 입력 field 경로가 실제로 쓰이는지 구분할 수 있다.
+    """
+    import pyvista as pv
+
+    from naviertwin.core.cfd_reader.base import CFDDataset
+
+    rng = np.random.default_rng(0)
+    grid = pv.ImageData(dimensions=(n_side, n_side, 1), spacing=(1 / (n_side - 1),) * 2 + (1,))
+    s = rng.random((n_steps, grid.n_points))
+    p = 2.0 * s
+    grid.point_data["s"] = s[0]
+    grid.point_data["p"] = p[0]
+    return CFDDataset(
+        mesh=grid,
+        time_steps=[float(i) for i in range(n_steps)],
+        field_names=["s", "p"],
+        metadata={
+            "source": "field_to_field",
+            "time_series_fields": {"s": s, "p": p},
+            "time_series_locations": {"s": "point", "p": "point"},
+        },
+    ), s, p
+
+
+def test_input_fields_make_a_field_to_field_operator() -> None:
+    """입력 field 를 주면 학습에 없던 새 입력장에도 적용되는 연산자가 된다."""
+    ds, _s, _p = _field_to_field_dataset()
+    result = service.build_physics_ai_twin(
+        ds, "p", input_fields=["s"], hidden=32, max_epochs=600
+    )
+    assert result["input_fields"] == ["s"]
+    model = result["engine"].model
+    assert model.n_input_features == 1
+
+    # 학습에 전혀 없던 새 입력장 → p = 2s 를 재현해야 한다.
+    rng = np.random.default_rng(99)
+    coords = np.asarray(ds.mesh.points, dtype=float)[:, :3]
+    s_new = rng.random((1, ds.n_points, 1))
+    pred = model.predict_at(coords, np.array([[5.0]]), input_features=s_new).reshape(-1)
+    truth = 2.0 * s_new.reshape(-1)
+    rel = float(np.linalg.norm(pred - truth) / np.linalg.norm(truth))
+    assert rel < 0.15, f"새 입력장 예측이 부정확: rel={rel}"
+
+
+def test_without_input_fields_random_field_is_unlearnable() -> None:
+    """대조군 — 입력 field 없이 (x,t) 만으로는 난수 기반 출력을 못 맞춘다."""
+    ds, _s, _p = _field_to_field_dataset()
+    with_input = service.build_physics_ai_twin(
+        ds, "p", input_fields=["s"], hidden=32, max_epochs=600
+    )["validation_metrics"]["rmse"]
+    without = service.build_physics_ai_twin(ds, "p", hidden=32, max_epochs=600)[
+        "validation_metrics"
+    ]["rmse"]
+    assert with_input < without / 3, f"입력 field 효과 없음: {with_input} vs {without}"
+
+
+def test_predict_twin_uses_stored_input_fields(_=None) -> None:
+    """③Twin 은 학습 입력장을 시간 보간해 자동으로 채운다 (슬라이더 그대로 동작)."""
+    ds, _s, _p = _field_to_field_dataset()
+    engine = service.build_physics_ai_twin(
+        ds, "p", input_fields=["s"], hidden=32, max_epochs=400
+    )["engine"]
+    pred = service.predict_twin(engine, 3.0)  # 학습 시간 지점
+    assert pred.shape[0] == ds.n_points
+    assert np.isfinite(pred).all()
+
+
+def test_input_and_output_field_overlap_is_rejected() -> None:
+    ds, _s, _p = _field_to_field_dataset(n_steps=4, n_side=6)
+    with pytest.raises(ValueError, match="같은 field"):
+        service.build_physics_ai_twin(
+            ds, "p", input_fields=["p"], hidden=8, max_epochs=2
+        )
+
+
+def test_predict_at_requires_input_features_when_trained_with_them() -> None:
+    ds, _s, _p = _field_to_field_dataset(n_steps=4, n_side=6)
+    model = service.build_physics_ai_twin(
+        ds, "p", input_fields=["s"], hidden=8, max_epochs=2
+    )["engine"].model
+    coords = np.asarray(ds.mesh.points, dtype=float)[:, :3]
+    with pytest.raises(ValueError, match="입력 field"):
+        model.predict_at(coords, np.array([[1.0]]))

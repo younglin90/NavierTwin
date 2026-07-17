@@ -22,7 +22,13 @@ from numpy.typing import NDArray
 
 @dataclass(frozen=True)
 class CFDFieldTrainingData:
-    """Prepared tensors used by supervised CFD field fitting."""
+    """Prepared tensors used by supervised CFD field fitting.
+
+    ``input_features`` carries **other CFD fields used as inputs** — unlike
+    ``params`` (one row per snapshot), these vary per (snapshot, location), so
+    they are stacked as ``(n_snapshots, n_locations, n_input_features)``. This
+    turns the model into a field-to-field map, e.g. ``(x, U, t) -> p``.
+    """
 
     coords: NDArray[np.float64]
     values: NDArray[np.float64]
@@ -32,6 +38,8 @@ class CFDFieldTrainingData:
     source_components: list[int]
     output_fields: list[dict[str, object]]
     parameter_names: list[str]
+    input_features: NDArray[np.float64] | None = None
+    input_field_names: list[str] | None = None
 
     @property
     def field_name(self) -> str:
@@ -77,12 +85,17 @@ class PhysicsNeMoCFDFieldModel:
         self.source_components_by_field: list[int] = []
         self.output_fields: list[dict[str, object]] = []
         self.parameter_names: list[str] = []
+        # 입력으로 쓰는 다른 CFD field (per-point) — 비면 좌표+파라미터만 입력.
+        self.input_field_names: list[str] = []
+        self.n_input_features: int = 0
         self.is_fitted: bool = False
         self.train_losses_: list[float] = []
         self.validation_metrics: dict[str, float] = {}
         self.training_metadata: dict[str, object] = {}
 
         self._coords: NDArray[np.float64] | None = None
+        self._input_features: NDArray[np.float64] | None = None
+        self._train_params: NDArray[np.float64] | None = None
         self._param_min: NDArray[np.float64] | None = None
         self._param_max: NDArray[np.float64] | None = None
         self._x_mean: NDArray[np.float32] | None = None
@@ -119,6 +132,7 @@ class PhysicsNeMoCFDFieldModel:
         field_names: Sequence[str],
         params: NDArray[np.float64] | None = None,
         parameter_names: Sequence[str] | None = None,
+        input_field_names: Sequence[str] | None = None,
         hidden: int = 32,
         max_epochs: int = 150,
         max_train_points: int = 20_000,
@@ -134,6 +148,7 @@ class PhysicsNeMoCFDFieldModel:
             field_names=field_names,
             params=params,
             parameter_names=parameter_names,
+            input_field_names=input_field_names,
         )
         return model
 
@@ -148,8 +163,16 @@ class PhysicsNeMoCFDFieldModel:
         field_names: Sequence[str],
         params: NDArray[np.float64] | None = None,
         parameter_names: Sequence[str] | None = None,
+        input_field_names: Sequence[str] | None = None,
     ) -> None:
-        """Train on coordinates, operating parameters, and selected fields."""
+        """Train on coordinates, operating parameters, and selected fields.
+
+        Args:
+            input_field_names: other CFD fields fed as per-point inputs — makes
+                this a field-to-field map, e.g. ``(x, U, t) -> p``. Predicting
+                then requires those inputs (see :meth:`predict_at`); the stored
+                training values are reused by :meth:`predict`.
+        """
         import torch
 
         data = prepare_cfd_field_training_data_from_datasets(
@@ -157,6 +180,7 @@ class PhysicsNeMoCFDFieldModel:
             field_names=field_names,
             params=params,
             parameter_names=parameter_names,
+            input_field_names=input_field_names,
         )
         X, y = self._build_training_matrix(data)
         train_idx, val_idx = self._sample_indices(X.shape[0])
@@ -171,10 +195,22 @@ class PhysicsNeMoCFDFieldModel:
         self.parameter_names = list(data.parameter_names)
         self.coord_dim = int(data.coords.shape[1])
         self.param_dim = int(data.params.shape[1])
+        self.input_field_names = list(data.input_field_names or [])
+        self.n_input_features = int(
+            data.input_features.shape[2] if data.input_features is not None else 0
+        )
+        # 입력 field 시계열을 보관 → predict(params) 가 학습 파라미터 지점에서
+        # 자기완결적으로 동작한다 (새 입력장은 predict_at 으로 명시 제공).
+        self._input_features = (
+            np.asarray(data.input_features, dtype=np.float64)
+            if data.input_features is not None
+            else None
+        )
         self.input_dim = self.param_dim
         self.output_dim = int(data.coords.shape[0] * data.values.shape[2])
         self._param_min = np.min(data.params, axis=0)
         self._param_max = np.max(data.params, axis=0)
+        self._train_params = np.asarray(data.params, dtype=np.float64)
 
         X_train = X[train_idx].astype(np.float32, copy=False)
         y_train = y[train_idx].astype(np.float32, copy=False)
@@ -237,6 +273,8 @@ class PhysicsNeMoCFDFieldModel:
             "field_location": self.field_location,
             "source_components": list(self.source_components_by_field),
             "output_fields": list(self.output_fields),
+            "input_field_names": list(self.input_field_names),
+            "n_input_features": self.n_input_features,
             "n_params": self.param_dim,
             "n_outputs": self.output_dim,
             "n_field_outputs": len(self.field_names),
@@ -256,26 +294,75 @@ class PhysicsNeMoCFDFieldModel:
 
         Evaluates on the training coordinates. Use :meth:`predict_at` to
         evaluate on a different mesh or resolution.
+
+        입력 field 를 쓰는 모델이면 학습 때 보관해 둔 입력장을 파라미터 축으로
+        보간해 자동으로 채운다 — 그래서 ③Twin 슬라이더가 수정 없이 동작한다.
+        새로운 입력장으로 예측하려면 :meth:`predict_at` 에 명시로 넘길 것.
         """
         if self._coords is None:
             raise RuntimeError("PhysicsNeMoCFDFieldModel.fit_datasets() 먼저 호출")
-        return self.predict_at(self._coords, params)
+        features = None
+        if self.n_input_features:
+            features = self._interpolate_input_features(params)
+        return self.predict_at(self._coords, params, input_features=features)
+
+    def _interpolate_input_features(
+        self, params: NDArray[np.float64]
+    ) -> NDArray[np.float64]:
+        """학습 입력장을 질의 파라미터에서 보간한다 (1D 파라미터일 때).
+
+        파라미터가 여러 개(케이스 스윕)면 보간이 모호하므로 가장 가까운 학습
+        지점의 입력장을 쓴다 — 근사임을 호출자가 알 수 있게 문서화한다.
+        """
+        assert self._input_features is not None
+        assert self._train_params is not None
+        query = np.asarray(params, dtype=np.float64)
+        if query.ndim == 1:
+            query = query.reshape(1, -1)
+        train = self._train_params
+        out = np.empty(
+            (query.shape[0], self._input_features.shape[1], self.n_input_features),
+            dtype=np.float64,
+        )
+        order = np.argsort(train[:, 0]) if train.shape[1] == 1 else None
+        axis = train[order, 0] if order is not None else None
+        sorted_feats = self._input_features[order] if order is not None else None
+
+        for row in range(query.shape[0]):
+            if axis is None:
+                # 다차원 파라미터 — 보간이 모호해 최근접 학습 지점을 쓴다(근사).
+                nearest = int(np.argmin(np.linalg.norm(train - query[row], axis=1)))
+                out[row] = self._input_features[nearest]
+                continue
+            # 1D(시간 등) — 위치·특징 축을 통째로 선형 보간, 범위 밖은 끝값 클램프.
+            hi = int(np.clip(np.searchsorted(axis, query[row, 0]), 1, len(axis) - 1))
+            lo = hi - 1
+            span = float(axis[hi] - axis[lo])
+            weight = 0.0 if span == 0 else (float(query[row, 0]) - float(axis[lo])) / span
+            weight = float(np.clip(weight, 0.0, 1.0))
+            out[row] = (1.0 - weight) * sorted_feats[lo] + weight * sorted_feats[hi]
+        return out
 
     def predict_at(
         self,
         coords: NDArray[np.float64],
         params: NDArray[np.float64],
+        input_features: NDArray[np.float64] | None = None,
     ) -> NDArray[np.float64]:
         """Predict output fields at arbitrary coordinates.
 
-        The model is a neural field over ``(x, y, z, params)``, so it is not
-        tied to the training mesh — it can be evaluated on any point cloud
-        (a finer grid, a different mesh, probe points).
+        The model is a neural field over ``(x, y, z, [input fields], params)``,
+        so it is not tied to the training mesh — it can be evaluated on any
+        point cloud (a finer grid, a different mesh, probe points).
 
         Args:
             coords: ``(n_locations, 3)`` evaluation coordinates.
             params: operating parameters, ``(n_rows, param_dim)`` or
                 ``(param_dim,)``.
+            input_features: required when the model was trained with
+                ``input_field_names`` — the input fields sampled at ``coords``,
+                shaped ``(n_rows, n_locations, n_input_features)`` or
+                ``(n_locations, n_input_features)`` for a single row.
 
         Returns:
             ``(n_locations * n_fields, n_rows)`` field-major stacked values,
@@ -283,7 +370,7 @@ class PhysicsNeMoCFDFieldModel:
 
         Raises:
             RuntimeError: model is not fitted.
-            ValueError: coordinate or parameter dimensions do not match.
+            ValueError: coordinate/parameter/input-feature shapes do not match.
         """
         if not self.is_fitted or self._model is None:
             raise RuntimeError("PhysicsNeMoCFDFieldModel.fit_datasets() 먼저 호출")
@@ -306,7 +393,30 @@ class PhysicsNeMoCFDFieldModel:
         n_locations = coords_arr.shape[0]
         tiled = np.tile(coords_arr, (n_rows, 1))
         repeated = np.repeat(params_arr, n_locations, axis=0)
-        X = np.hstack([tiled, repeated]).astype(np.float32, copy=False)
+
+        blocks = [tiled]
+        if self.n_input_features:
+            if input_features is None:
+                raise ValueError(
+                    "이 모델은 입력 field "
+                    f"({', '.join(self.input_field_names)}) 가 필요합니다 — "
+                    "predict_at(..., input_features=...) 로 넘기세요."
+                )
+            feats = np.asarray(input_features, dtype=np.float64)
+            if feats.ndim == 2:
+                feats = feats[np.newaxis, ...]
+            expected = (n_rows, n_locations, self.n_input_features)
+            if feats.shape != expected:
+                raise ValueError(
+                    f"input_features shape mismatch: expected {expected}, "
+                    f"got {feats.shape}"
+                )
+            blocks.append(feats.reshape(n_rows * n_locations, self.n_input_features))
+        elif input_features is not None:
+            raise ValueError("이 모델은 입력 field 를 쓰지 않습니다.")
+        blocks.append(repeated)
+        # 열 순서는 _build_training_matrix 와 반드시 같아야 한다.
+        X = np.hstack(blocks).astype(np.float32, copy=False)
         assert self._x_mean is not None
         assert self._x_std is not None
         assert self._y_mean is not None
@@ -320,11 +430,21 @@ class PhysicsNeMoCFDFieldModel:
         self,
         data: CFDFieldTrainingData,
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """X = [coords | input fields | params], Y = output fields.
+
+        입력 field 는 (스냅샷, 위치)마다 값이 다르므로 params 처럼 repeat 하지
+        않고 그대로 펼친다 — 열 순서는 :meth:`predict_at` 과 반드시 일치해야 한다.
+        """
         n_steps, n_locations, _n_outputs = data.values.shape
         coords = np.tile(data.coords, (n_steps, 1))
         params = np.repeat(data.params, n_locations, axis=0)
         values = data.values.reshape(n_steps * n_locations, _n_outputs)
-        return np.hstack([coords, params]), values
+        blocks = [coords]
+        if data.input_features is not None:
+            n_in = data.input_features.shape[2]
+            blocks.append(data.input_features.reshape(n_steps * n_locations, n_in))
+        blocks.append(params)
+        return np.hstack(blocks), values
 
     def _sample_indices(
         self,
@@ -387,8 +507,15 @@ def prepare_cfd_field_training_data_from_datasets(
     field_names: Sequence[str],
     params: NDArray[np.float64] | None = None,
     parameter_names: Sequence[str] | None = None,
+    input_field_names: Sequence[str] | None = None,
 ) -> CFDFieldTrainingData:
-    """Extract aligned coordinates, parameters, and output fields."""
+    """Extract aligned coordinates, parameters, and output fields.
+
+    Args:
+        input_field_names: other CFD fields to feed as **inputs** (per-point),
+            e.g. predict ``p`` from ``U``. Vector fields become magnitude, the
+            same convention outputs use.
+    """
     dataset_list = list(datasets)
     if not dataset_list:
         raise ValueError("at least one CFD dataset is required")
@@ -462,6 +589,36 @@ def prepare_cfd_field_training_data_from_datasets(
         components=components_ref,
         n_locations=coords_ref.shape[0],
     )
+
+    # 입력으로 쓸 다른 CFD field 들 — 출력과 같은 방식으로 뽑되 (스냅샷, 위치)
+    # 마다 값이 다르므로 params 가 아니라 per-point 특징으로 쌓는다.
+    inputs = list(filter(None, map(lambda f: str(f).strip(), input_field_names or [])))
+    input_all: NDArray[np.float64] | None = None
+    if inputs:
+        overlap = sorted(set(inputs) & set(fields))
+        if overlap:
+            raise ValueError(
+                f"입력과 출력에 같은 field 를 쓸 수 없습니다: {', '.join(overlap)}"
+            )
+        input_blocks: list[NDArray[np.float64]] = []
+        for dataset in dataset_list:
+            coords_in, location_in, values_in, _components = _extract_dataset_outputs(
+                dataset, inputs
+            )
+            if location_in != location_ref:
+                raise ValueError(
+                    "입력 field 의 위치가 출력과 다릅니다: "
+                    f"{location_ref} vs {location_in}"
+                )
+            if coords_in.shape != coords_ref.shape:
+                raise ValueError("입력 field 의 메쉬 크기가 출력과 다릅니다")
+            input_blocks.append(values_in)
+        input_all = np.concatenate(input_blocks, axis=0)
+        if input_all.shape[0] != total_snapshots:
+            raise ValueError(
+                f"입력 field 스냅샷 수 불일치: {input_all.shape[0]} vs {total_snapshots}"
+            )
+
     return CFDFieldTrainingData(
         coords=coords_ref,
         values=values_all,
@@ -471,6 +628,8 @@ def prepare_cfd_field_training_data_from_datasets(
         source_components=components_ref,
         output_fields=output_fields,
         parameter_names=param_names,
+        input_features=input_all,
+        input_field_names=inputs or None,
     )
 
 

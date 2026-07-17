@@ -137,6 +137,11 @@ class NavierTwinWebApp:
         # 형상 가변(M4a): 케이스 메쉬가 서로 다르면 공통 격자로 재샘플했다는 표시.
         st.nt_case_resampled = False
         st.nt_case_grid_summary = ""
+        # 해상도 낮추기(coarsen) — 대용량 메쉬 대응. extract_field_snapshots 는
+        # (n_features × n_steps) 전체 행렬을 메모리에 올리므로 학습 전에 해상도를
+        # 줄이는 것이 유일하게 효과적이다.
+        st.nt_coarsen_resolution = 48
+        st.nt_coarsen_summary = ""
 
         # Viewer
         st.nt_fields = []
@@ -179,6 +184,9 @@ class NavierTwinWebApp:
         st.nt_train_field = ""
         st.nt_train_fields = []
         st.nt_train_field_choices = []
+        # 입력으로 쓸 다른 field (Physics AI 전용) — 주면 (좌표+입력장+시간)→출력
+        # 의 field-to-field 연산자가 된다. 비면 좌표+시간만 입력.
+        st.nt_train_input_fields = []
 
         # Model — 방식 우선(method-first) 2단 선택.
         # 문헌 4계열 중 웹 노출분: "rom"(Ⓐ 축소+보간) | "physics"(Ⓑ 직접 회귀)
@@ -300,6 +308,7 @@ class NavierTwinWebApp:
         ctrl.nt_load_path = A(self.load_path, "CFD 데이터 로드 중…", render_after=True)
         ctrl.nt_load_project = A(self.load_project, ".ntwin 프로젝트 로드 중…", render_after=True)
         # 파일 브라우저 (모달 열기/이동/선택은 즉시 반응 — 동기)
+        ctrl.nt_coarsen = A(self.coarsen_current, "해상도 낮추는 중…", render_after=True)
         ctrl.nt_fb_open = self.fb_open
         ctrl.nt_fb_open_case_set = self.fb_open_case_set
         ctrl.nt_fb_open_predict_mesh = self.fb_open_predict_mesh
@@ -434,6 +443,36 @@ class NavierTwinWebApp:
                 self._restore_engine(engine)
         except Exception as exc:  # noqa: BLE001
             self._fail("프로젝트 로드 실패", exc)
+
+    def coarsen_current(self) -> None:
+        """현재 데이터셋을 성긴 격자로 재샘플한다 (대용량 대응).
+
+        학습·POD 는 (n_features × n_steps) 전체 행렬을 메모리에 올리므로,
+        거대한 메쉬는 여기서 해상도를 낮춰야 실질적으로 다룰 수 있다. 되돌릴 수
+        없으므로(원본 교체) 축소 결과를 상태에 남긴다.
+        """
+        if self.dataset is None:
+            self._fail("데이터 없음", RuntimeError("먼저 데이터를 로드하세요."))
+            return
+        if self.state.nt_case_mode:
+            self._fail(
+                "해상도 낮추기",
+                RuntimeError(
+                    "케이스 세트는 로드 시 이미 공통 격자로 재샘플됩니다 — "
+                    "해상도는 케이스 세트 로드 옵션으로 조절하세요."
+                ),
+            )
+            return
+        try:
+            result = service.coarsen_dataset(
+                self.dataset, resolution=int(self.state.nt_coarsen_resolution or 48)
+            )
+            summary = str(result["summary"])
+            self._set_dataset(result["dataset"], status=f"해상도 낮춤: {summary}")
+            with self.state:
+                self.state.nt_coarsen_summary = summary
+        except Exception as exc:  # noqa: BLE001
+            self._fail("해상도 낮추기 실패", exc)
 
     def load_case_set(self) -> None:
         """폴더를 케이스 세트(정상 파라미터 스윕)로 로드한다 — 문제 유형 B."""
@@ -1083,10 +1122,12 @@ class NavierTwinWebApp:
             self._build_sweep_physics_twin()
             return
         fields = self._training_fields()
+        inputs = self._training_input_fields()
         try:
             result = service.build_physics_ai_twin(
                 self.dataset,
                 fields,
+                input_fields=inputs,
                 hidden=int(self.state.nt_physics_hidden or 32),
                 max_epochs=int(self.state.nt_physics_epochs or 150),
                 max_train_points=int(self.state.nt_physics_max_samples or 20_000),
@@ -1096,10 +1137,11 @@ class NavierTwinWebApp:
             metrics = result["validation_metrics"]
             rmse = metrics.get("rmse", float("nan"))
             label = ", ".join(fields)
+            multi = f", 다중 출력 {len(fields)}개" if len(fields) > 1 else ""
+            in_label = f"입력 {', '.join(inputs)}+시간(t)" if inputs else "입력 시간(t)"
             summary = (
-                f"field(s)='{label}', PhysicsNeMo CFD Field (직접 예측"
-                f"{', 다중 출력 ' + str(len(fields)) + '개' if len(fields) > 1 else ''}), "
-                f"파라미터(t) ∈ [{pmin:.3g}, {pmax:.3g}] · RMSE {rmse:.3g}"
+                f"field(s)='{label}', PhysicsNeMo CFD Field (직접 예측{multi}) · "
+                f"{in_label} · 범위 t ∈ [{pmin:.3g}, {pmax:.3g}] · RMSE {rmse:.3g}"
             )
             with self.state:
                 self.state.nt_model_ready = True
@@ -1713,6 +1755,7 @@ class NavierTwinWebApp:
             self.state.nt_param_names = []
             self.state.nt_case_resampled = False
             self.state.nt_case_grid_summary = ""
+            self.state.nt_coarsen_summary = ""
             self.state.nt_twin_params = []
             self.state.nt_twin_mins = []
             self.state.nt_twin_maxs = []
@@ -1735,6 +1778,7 @@ class NavierTwinWebApp:
             self.state.nt_train_field_choices = base_fields
             self.state.nt_train_field = default_field
             self.state.nt_train_fields = [default_field] if default_field else []
+            self.state.nt_train_input_fields = []
             try:
                 self.state.nt_method_hint = service.recommend_method(dataset)["reason"]
             except Exception:  # noqa: BLE001 — 추천은 부가 정보, 로드를 막지 않는다
@@ -1806,6 +1850,20 @@ class NavierTwinWebApp:
         choices = list(self.state.nt_train_field_choices or [])
         selected = [str(f) for f in (self.state.nt_train_fields or []) if str(f) in choices]
         return selected or [self._training_field()]
+
+    def _training_input_fields(self) -> list[str]:
+        """Physics AI 의 입력 field 목록 — 출력으로 쓰는 field 는 제외한다.
+
+        같은 field 를 입력이자 출력으로 주면 항등 매핑을 학습하게 되므로 코어가
+        거부한다. UI 실수를 여기서 미리 걸러 명확한 상태를 만든다.
+        """
+        choices = list(self.state.nt_train_field_choices or [])
+        outputs = set(self._training_fields())
+        return [
+            str(f)
+            for f in (self.state.nt_train_input_fields or [])
+            if str(f) in choices and str(f) not in outputs
+        ]
 
     # ------------------------------------------------------------------
     # Rendering
@@ -2287,6 +2345,45 @@ class NavierTwinWebApp:
                                 v_show=("!nt_case_mode",),
                             )
                             html.Div("Fields: {{ nt_info_fields }}")
+                    # 해상도 낮추기 — 대용량 메쉬는 스냅샷 행렬이 메모리를 넘긴다.
+                    with v3.VCard(
+                        variant="flat", classes="mt-2", v_show=("nt_has_dataset && !nt_case_mode",)
+                    ):
+                        with v3.VCardText():
+                            html.Div(
+                                "해상도 낮추기 (대용량 대응)",
+                                classes="text-caption text-disabled mb-1",
+                            )
+                            with v3.VRow(dense=True, classes="align-center"):
+                                with v3.VCol(cols=5):
+                                    v3.VTextField(
+                                        v_model=("nt_coarsen_resolution",),
+                                        label="격자 분할",
+                                        type="number",
+                                        density="compact",
+                                        hide_details=True,
+                                    )
+                                with v3.VCol(cols=7):
+                                    v3.VBtn(
+                                        "적용",
+                                        click=self.ctrl.nt_coarsen,
+                                        variant="tonal",
+                                        block=True,
+                                        disabled=("nt_busy",),
+                                        prepend_icon="mdi-grid-off",
+                                    )
+                            html.Div(
+                                "성긴 균일 격자로 보간 재샘플합니다 — 학습/POD 는 "
+                                "(점 수 × 스텝 수) 행렬을 통째로 메모리에 올리므로 "
+                                "거대한 메쉬는 먼저 줄여야 합니다. 손실 압축이라 "
+                                "급격한 구배는 뭉개집니다.",
+                                classes="text-caption text-disabled mt-1",
+                            )
+                            html.Div(
+                                "{{ nt_coarsen_summary }}",
+                                v_show=("nt_coarsen_summary",),
+                                classes="text-caption text-success mt-1",
+                            )
                     # 타임스텝 슬라이더
                     with v3.VCard(variant="flat", classes="mt-2", v_show=("nt_has_timesteps",)):
                         with v3.VCardText():
@@ -2331,6 +2428,27 @@ class NavierTwinWebApp:
                         chips=True,
                         closable_chips=True,
                         v_show=("nt_model_method === 'physics'",),
+                    )
+                    # 입력 field (Physics AI 전용) — ROM 은 파라미터→POD계수 구조라
+                    # per-point 입력장을 받을 수 없다.
+                    v3.VSelect(
+                        v_model=("nt_train_input_fields",),
+                        items=("nt_train_field_choices",),
+                        label="입력 필드 (선택 — 비우면 시간만)",
+                        density="compact",
+                        hide_details=True,
+                        multiple=True,
+                        chips=True,
+                        closable_chips=True,
+                        classes="mt-2",
+                        v_show=("nt_model_method === 'physics'",),
+                    )
+                    html.Div(
+                        "다른 필드를 입력으로 주면 (좌표+입력장+시간)→출력 의 "
+                        "field-to-field 연산자가 됩니다 (예: U → p). 출력으로 고른 "
+                        "필드는 자동 제외됩니다.",
+                        v_show=("nt_model_method === 'physics'",),
+                        classes="text-caption text-disabled mt-1",
                     )
                     html.Div(
                         "입력 파라미터: 시간(t) — 단일 케이스 시계열의 유일한 "

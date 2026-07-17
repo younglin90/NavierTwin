@@ -676,3 +676,80 @@ def test_dmd_rejected_for_case_sets(tmp_path) -> None:
     st.nt_model_method = "dynamics"
     app.build_twin()
     assert "시계열" in st.nt_error
+
+
+def test_coarsen_reduces_dataset_and_resets_model() -> None:
+    """①Import 해상도 낮추기: 점 수가 줄고 파생 상태가 리셋된다."""
+    app = _make_app("nt-test-coarsen")
+    st = app.server.state
+    app.load_demo()
+    before = st.nt_info_points
+    app.build_twin()
+    assert st.nt_model_ready is True
+
+    st.nt_coarsen_resolution = 16
+    app.coarsen_current()
+    assert st.nt_error == ""
+    assert st.nt_info_points < before
+    assert "→" in st.nt_coarsen_summary
+    # 성긴 데이터셋은 새 데이터셋이므로 모델 상태가 리셋된다.
+    assert st.nt_model_ready is False
+    assert app.engine is None
+    # 시계열과 필드는 살아있어 바로 재학습 가능하다.
+    assert st.nt_has_timesteps is True
+    app.build_twin()
+    assert st.nt_error == ""
+    assert st.nt_model_ready is True
+
+
+def test_coarsen_rejected_for_case_sets(tmp_path) -> None:
+    _make_case_set(tmp_path / "sweep")
+    app = _make_app("nt-test-coarsen-caseset")
+    st = app.server.state
+    st.nt_path = str(tmp_path / "sweep")
+    app.load_case_set()
+    app.coarsen_current()
+    assert "케이스 세트" in st.nt_error
+
+
+def test_input_fields_wired_to_physics_training() -> None:
+    """②Model 입력 필드 선택이 학습에 반영되고 요약에 표시된다."""
+    app = _make_app("nt-test-input-fields")
+    st = app.server.state
+    app.load_demo()
+
+    st.nt_model_method = "physics"
+    st.nt_train_field = "p"
+    st.nt_train_fields = ["p"]
+    st.nt_train_input_fields = ["U"]
+    st.nt_physics_epochs = 3
+    st.nt_physics_hidden = 8
+    app.build_twin()
+    assert st.nt_error == ""
+    assert "입력 U+시간(t)" in st.nt_model_summary
+    assert app.engine.model.input_field_names == ["U"]
+
+    # 예측 슬라이더는 그대로 동작한다 (학습 입력장을 시간 보간해 채움).
+    st.nt_twin_param = 0.5 * (st.nt_twin_min + st.nt_twin_max)
+    app.predict()
+    assert st.nt_error == ""
+    assert "twin_prediction" in st.nt_fields
+
+
+def test_input_field_equal_to_output_is_filtered() -> None:
+    """출력으로 고른 필드를 입력에도 넣으면 조용히 제외된다 (항등 학습 방지)."""
+    app = _make_app("nt-test-input-overlap")
+    st = app.server.state
+    app.load_demo()
+    st.nt_model_method = "physics"
+    st.nt_train_fields = ["p"]
+    st.nt_train_input_fields = ["p", "U"]  # p 는 출력이므로 제외되어야 함
+    assert app._training_input_fields() == ["U"]
+
+    st.nt_train_input_fields = ["p"]  # 전부 제외 → 입력 없음
+    assert app._training_input_fields() == []
+    st.nt_physics_epochs = 3
+    st.nt_physics_hidden = 8
+    app.build_twin()
+    assert st.nt_error == ""
+    assert "입력 시간(t)" in st.nt_model_summary
