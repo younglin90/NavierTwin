@@ -230,8 +230,9 @@ def test_attach_pod_mode(demo) -> None:
 
 
 def test_compare_models_ranks_all_combos() -> None:
+    """ROM 조합 역학만 검증 — Physics AI 행은 전용 테스트에서 다룬다."""
     ds = service.make_demo_dataset(nx=12, ny=12, n_steps=8)
-    result = service.compare_models(ds, "U", 4)
+    result = service.compare_models(ds, "U", 4, include_physics=False)
     rows = result["rows"]
     assert len(rows) == len(service.REDUCERS) * len(service.SURROGATES)
     # RMSE 오름차순 정렬.
@@ -247,7 +248,9 @@ def test_compare_models_ranks_all_combos() -> None:
 
 
 def test_compare_models_subset_combos(demo) -> None:
-    result = service.compare_models(demo, "U", 3, combos=[("pod", "rbf")])
+    result = service.compare_models(
+        demo, "U", 3, combos=[("pod", "rbf")], include_physics=False
+    )
     assert len(result["rows"]) == 1
     assert result["rows"][0]["combo"] == "pod+rbf"
 
@@ -257,7 +260,12 @@ def test_compare_models_progress_cb(demo) -> None:
     calls: list[tuple[int, int, str]] = []
     combos = [("pod", "rbf"), ("pod", "kriging")]
     service.compare_models(
-        demo, "U", 3, combos=combos, progress_cb=lambda d, n, lbl: calls.append((d, n, lbl))
+        demo,
+        "U",
+        3,
+        combos=combos,
+        include_physics=False,
+        progress_cb=lambda d, n, lbl: calls.append((d, n, lbl)),
     )
     # 조합 2개 시작(done=0,1) + 완료(done=2) = 3회, total 은 항상 2.
     assert [c[0] for c in calls] == [0, 1, 2]
@@ -523,3 +531,26 @@ def test_recommend_method_none_for_single_step() -> None:
     single = service.make_demo_dataset(nx=8, ny=8, n_steps=1)
     rec = service.recommend_method(single)
     assert rec["method"] == "none"
+
+
+def test_compare_models_includes_physics_row_for_scalar_field(demo) -> None:
+    """스칼라 필드 비교에는 Physics AI 행이 포함되고, RMSE 순위에 함께 선다."""
+    result = service.compare_models(
+        demo, "p", 3, combos=[("pod", "rbf")], physics_epochs=3
+    )
+    combos = [r["combo"] for r in result["rows"]]
+    assert "pod+rbf" in combos
+    assert any("physicsnemo" in c for c in combos)
+    physics_row = next(r for r in result["rows"] if "physicsnemo" in r["combo"])
+    assert physics_row["status"] == "ok"
+    assert physics_row["n_modes"] == 0  # 모드 개념 없음
+
+
+def test_compare_models_includes_physics_for_vector_field_via_magnitude(demo) -> None:
+    """벡터 필드도 양쪽 모두 크기(magnitude) 스냅샷으로 학습하므로 동일 조건 비교."""
+    result = service.compare_models(
+        demo, "U", 3, combos=[("pod", "rbf")], physics_epochs=3
+    )
+    combos = [r["combo"] for r in result["rows"]]
+    assert "pod+rbf" in combos
+    assert any("physicsnemo" in c for c in combos)

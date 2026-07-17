@@ -223,7 +223,9 @@ def test_compare_dashboard() -> None:
     app.run_compare()
     assert st.nt_error == ""
     assert st.nt_compare_dialog is True
-    assert len(st.nt_compare_rows) == 4
+    # ROM 4조합 + Physics AI(직접 회귀) 1행 = 5행 리더보드.
+    assert len(st.nt_compare_rows) == 5
+    assert any("physicsnemo" in r["combo"] for r in st.nt_compare_rows)
     assert "최우수" in st.nt_compare_summary
     # 표시용 메트릭은 문자열로 포맷된다 (inf/nan JSON 안전).
     row = st.nt_compare_rows[0]

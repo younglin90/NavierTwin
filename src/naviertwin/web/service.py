@@ -771,11 +771,16 @@ def compare_models(
     combos: list[tuple[str, str]] | None = None,
     repeat: int = 10,
     progress_cb: Any = None,
+    include_physics: bool = True,
+    physics_epochs: int = 120,
 ) -> dict[str, Any]:
-    """여러 reducer×surrogate 조합을 학습/평가해 정확도·지연시간 순위표를 만든다.
+    """여러 reducer×surrogate 조합(+Physics AI)을 학습/평가해 순위표를 만든다.
 
     각 조합으로 (시간→필드) TwinEngine 을 학습하고, 학습 파라미터에서의 재구성
     오차(RMSE / R² / 상대 L2)와 단일 예측 지연시간(ms)을 측정한다.
+    ``include_physics=True`` 면 Ⓑ 직접 회귀(PhysicsNeMo)도 같은 지표로
+    리더보드에 포함한다. 벡터 필드는 양쪽 모두 크기(magnitude) 스냅샷으로
+    학습하므로(extract_field_snapshots 계약) 동일 조건 비교다.
 
     Args:
         dataset: 시계열 데이터셋.
@@ -783,6 +788,8 @@ def compare_models(
         n_modes: POD 모드 수.
         combos: 평가할 (reducer, surrogate) 목록. None 이면 전체 조합.
         repeat: 지연시간 측정 반복 횟수.
+        include_physics: Physics AI 행 포함 여부.
+        physics_epochs: 비교용 Physics AI 학습 epoch 수.
 
     Returns:
         ``rows`` (조합별 결과 dict 리스트, RMSE 오름차순 정렬), ``best``
@@ -808,9 +815,15 @@ def compare_models(
 
     rows: list[dict[str, Any]] = []
     n_combos = len(combos)
+    # 안전장치: truth 가 point/cell 단위 스칼라 스냅샷일 때만 Physics AI 참전
+    # (extract_field_snapshots 는 벡터도 크기로 펴므로 통상 항상 성립).
+    n_points = int(getattr(dataset, "n_points", 0))
+    n_cells = int(getattr(dataset, "n_cells", 0))
+    physics_comparable = bool(include_physics) and truth.shape[0] in {n_points, n_cells}
+    n_total = n_combos + (1 if physics_comparable else 0)
     for combo_index, (reducer, surrogate) in enumerate(combos):
         if progress_cb is not None:
-            progress_cb(combo_index, n_combos, f"{reducer}+{surrogate}")
+            progress_cb(combo_index, n_total, f"{reducer}+{surrogate}")
         try:
             result = build_twin(dataset, field, n_modes, reducer=reducer, surrogate=surrogate)
             engine = result["engine"]
@@ -850,8 +863,58 @@ def compare_models(
                 }
             )
 
+    if physics_comparable:
+        # Ⓑ 직접 회귀(PhysicsNeMo) 도 같은 지표로 리더보드에 참전시킨다.
+        if progress_cb is not None:
+            progress_cb(n_combos, n_total, "physicsnemo (직접 회귀)")
+        try:
+            physics = build_physics_ai_twin(
+                dataset, field, max_epochs=int(physics_epochs)
+            )
+            engine = physics["engine"]
+            prediction = np.asarray(engine.predict(params), dtype=np.float64)
+            if prediction.shape != truth.shape:
+                raise ValueError(
+                    "벡터 필드는 Physics AI(크기 필드 학습)와 직접 비교할 수 "
+                    f"없습니다: {prediction.shape} vs {truth.shape}"
+                )
+            engine.predict(single)  # warmup
+            started = perf_counter()
+            iteration = 0
+            while iteration < max(1, repeat):
+                engine.predict(single)
+                iteration += 1
+            latency_ms = (perf_counter() - started) / max(1, repeat) * 1000.0
+            rows.append(
+                {
+                    "combo": "physicsnemo (직접 회귀)",
+                    "reducer": "direct",
+                    "surrogate": "physicsnemo",
+                    "n_modes": 0,
+                    "rmse": float(rmse(truth, prediction)),
+                    "r2": float(r2_score(truth, prediction)),
+                    "rel_l2": float(relative_l2_error(truth, prediction)),
+                    "latency_ms": float(latency_ms),
+                    "status": "ok",
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 — 실패해도 ROM 순위표는 유지
+            rows.append(
+                {
+                    "combo": "physicsnemo (직접 회귀)",
+                    "reducer": "direct",
+                    "surrogate": "physicsnemo",
+                    "n_modes": 0,
+                    "rmse": float("inf"),
+                    "r2": float("nan"),
+                    "rel_l2": float("inf"),
+                    "latency_ms": float("nan"),
+                    "status": f"error: {exc}",
+                }
+            )
+
     if progress_cb is not None:
-        progress_cb(n_combos, n_combos, "완료")
+        progress_cb(n_total, n_total, "완료")
     rows.sort(key=lambda row: row["rmse"])
     best = next((row for row in rows if row["status"] == "ok"), None)
     return {"rows": rows, "best": best, "field": field, "n_modes": int(n_modes)}

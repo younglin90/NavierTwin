@@ -196,7 +196,7 @@ class NavierTwinWebApp:
             {"title": "모드", "key": "n_modes", "align": "end"},
             {"title": "RMSE", "key": "rmse", "align": "end"},
             {"title": "R²", "key": "r2", "align": "end"},
-            {"title": "rel.L2", "key": "rel_l2", "align": "end"},
+            {"title": "nRMSE", "key": "rel_l2", "align": "end"},
             {"title": "지연(ms)", "key": "latency_ms", "align": "end"},
             {"title": "상태", "key": "status"},
         ]
@@ -879,9 +879,11 @@ class NavierTwinWebApp:
             return spec.format(value)
 
         status = str(row.get("status", ""))
+        n_modes = int(row.get("n_modes", 0))
         return {
             "combo": row.get("combo", ""),
-            "n_modes": int(row.get("n_modes", 0)),
+            # Physics AI(직접 회귀)는 모드 개념이 없다 → 0 대신 '—'.
+            "n_modes": n_modes if n_modes > 0 else "—",
             "rmse": fmt(row.get("rmse")),
             "r2": fmt(row.get("r2"), "{:.4f}"),
             "rel_l2": fmt(row.get("rel_l2")),
@@ -890,7 +892,7 @@ class NavierTwinWebApp:
         }
 
     # ------------------------------------------------------------------
-    # AI Bench callbacks (⑧) — 벤치마크 데이터셋 → 연산자 학습 → 빠른 예측
+    # 연산자 랩 callbacks (⑦, 구 AI Bench) — 벤치마크 데이터셋 → 연산자 학습
     # ------------------------------------------------------------------
 
     def _bench_set_dataset(self, dataset: dict[str, Any], *, status: str) -> None:
@@ -954,7 +956,7 @@ class NavierTwinWebApp:
         summary = (
             f"{result['operator'].upper()} · {result['n_train']}train/{result['n_test']}test · "
             f"loss {result['final_loss']:.3g} · test RMSE {result['test_rmse']:.3g} "
-            f"(rel.L2 {result['test_rel_l2']:.3g}) · "
+            f"(nRMSE {result['test_rel_l2']:.3g}) · "
             f"학습 {result['train_time_s']:.1f}s · 추론 {result['latency_ms']:.2f}ms"
         )
         with self.state:
@@ -1612,16 +1614,18 @@ class NavierTwinWebApp:
         return layout
 
     def _build_pipeline_strip(self, v3: Any, html: Any) -> None:
-        """드로어 상단 8단계 워크플로우 진행 칩 — 완료 시 초록/체크, 클릭 시 해당 패널 열기."""
+        """드로어 상단 7단계 워크플로우 진행 칩 — 완료 시 초록/체크, 클릭 시 해당 패널 열기.
+
+        구 ⑦Compare 는 ④Model 의 "자동 비교" 섹션으로 흡수되어 칩에서 빠졌다.
+        """
         stages = [
             ("①", "Import", "nt_has_dataset", 0),
             ("②", "Analyze", "nt_analysis_done", 1),
             ("③", "Reduce", "nt_pod_done", 2),
-            ("④", "Model", "nt_model_ready", 3),
+            ("④", "Model", "nt_model_ready || !!nt_compare_summary", 3),
             ("⑤", "Twin", "nt_twin_ready", 4),
             ("⑥", "Export", "!!nt_export_last", 5),
-            ("⑦", "Compare", "!!nt_compare_summary", 6),
-            ("⑧", "Bench", "nt_bench_trained", 7),
+            ("⑦", "Lab", "nt_bench_trained", 6),
         ]
         with v3.VSheet(color="transparent", classes="d-flex flex-wrap ga-1 px-3 pt-3 pb-1"):
             for num, name, done, idx in stages:
@@ -1929,17 +1933,18 @@ class NavierTwinWebApp:
                             classes="mt-2",
                         )
 
-                    # Ⓒ 신경 연산자: ⑧AI Bench 로 안내 (로드 데이터 직학습은 Phase 3)
+                    # Ⓒ 신경 연산자: ⑦연산자 랩으로 안내 (로드 데이터 직학습은 P4)
                     with html.Div(v_show=("nt_model_method === 'operator'",)):
                         html.Div(
                             "신경 연산자는 다수 샘플(수백+)·균일 격자 데이터에 "
-                            "적합합니다. 현재는 ⑧AI Bench 의 벤치마크 데이터셋으로 "
-                            "학습할 수 있습니다.",
+                            "적합합니다 (균일 격자: FNO — 탑재됨 · 기하 인지: "
+                            "GNN/GINO — 예정). 현재는 ⑦연산자 랩의 표준 벤치마크 "
+                            "문제로 학습할 수 있습니다.",
                             classes="text-caption text-disabled mt-1 mb-1",
                         )
                         v3.VBtn(
-                            "⑧ AI Bench 열기",
-                            click="nt_open_panels = [7]",
+                            "⑦ 연산자 랩 열기",
+                            click="nt_open_panels = [6]",
                             variant="tonal",
                             block=True,
                             classes="mt-1",
@@ -1964,6 +1969,40 @@ class NavierTwinWebApp:
                     with v3.VCard(variant="tonal", classes="mt-3", v_show=("nt_model_ready",)):
                         with v3.VCardText(classes="text-caption"):
                             html.Div("학습 완료 — {{ nt_model_summary }}")
+
+                    # 자동 비교 리더보드 (구 ⑦Compare 흡수) — 내 데이터에서
+                    # ROM 조합 + Physics AI 를 같은 지표로 순위 매기는 모델 선정.
+                    v3.VDivider(classes="my-4")
+                    html.Div(
+                        "자동 비교 (리더보드)",
+                        classes="text-caption text-disabled mb-1",
+                    )
+                    v3.VBtn(
+                        "전체 방식 비교",
+                        click=self.ctrl.nt_run_compare,
+                        variant="tonal",
+                        color="primary",
+                        block=True,
+                        disabled=("!nt_has_timesteps || nt_busy",),
+                        prepend_icon="mdi-table-search",
+                    )
+                    html.Div(
+                        "ROM 조합(POD×RBF/Kriging) + Physics AI 를 RMSE·R²·"
+                        "지연시간으로 순위 비교합니다 (모드 수는 ③Reduce 공유).",
+                        classes="text-caption text-disabled mt-1",
+                    )
+                    with v3.VCard(
+                        variant="tonal", classes="mt-2", v_show=("nt_compare_summary",)
+                    ):
+                        with v3.VCardText(classes="text-caption"):
+                            html.Div("{{ nt_compare_summary }}")
+                            v3.VBtn(
+                                "결과 표 다시 보기",
+                                click="nt_compare_dialog = true",
+                                variant="text",
+                                size="small",
+                                classes="mt-1",
+                            )
 
             # 5) Twin
             with v3.VExpansionPanel(title="⑤ Twin (시간→필드 예측)"):
@@ -2075,37 +2114,15 @@ class NavierTwinWebApp:
                         with v3.VCardText(classes="text-caption"):
                             html.Div("최근 저장: {{ nt_export_last }}")
 
-            # 7) Compare
-            with v3.VExpansionPanel(title="⑦ Compare (모델 비교)"):
-                with v3.VExpansionPanelText():
-                    v3.VBtn(
-                        "전체 조합 비교",
-                        click=self.ctrl.nt_run_compare,
-                        color="primary",
-                        block=True,
-                        disabled=("!nt_has_timesteps || nt_busy",),
-                        prepend_icon="mdi-table-search",
-                    )
-                    html.Div(
-                        "POD/Randomized POD × RBF/Kriging 조합을 RMSE·R²·지연시간으로 비교 (모드 수는 ③Reduce 공유).",
-                        classes="text-caption text-disabled mt-1",
-                    )
-                    with v3.VCard(variant="tonal", classes="mt-3", v_show=("nt_compare_summary",)):
-                        with v3.VCardText(classes="text-caption"):
-                            html.Div("{{ nt_compare_summary }}")
-                            v3.VBtn(
-                                "결과 표 다시 보기",
-                                click="nt_compare_dialog = true",
-                                variant="text",
-                                size="small",
-                                classes="mt-1",
-                            )
-
-            # 8) AI Bench — 벤치마크 데이터셋 → 연산자 학습 → 빠른 예측
-            with v3.VExpansionPanel(title="⑧ AI Bench (데이터셋→연산자)"):
+            # 7) 연산자 랩 (구 ⑧ AI Bench) — 표준 벤치마크 문제 실험실.
+            # ⑦Compare(내 데이터 모델 선정)는 ④Model 의 "자동 비교" 섹션으로
+            # 흡수됨 — 근거: .omc/plans/model-taxonomy-plan.md §8.
+            with v3.VExpansionPanel(title="⑦ 연산자 랩 (Benchmark Lab)"):
                 with v3.VExpansionPanelText():
                     html.Div(
-                        "CFD 벤치마크 데이터로 신경 연산자(FNO)를 학습해 ms 단위 예측을 얻습니다.",
+                        "로드한 데이터와 무관한 표준 벤치마크 문제(Burgers/열전도/"
+                        "공동 유동)로 신경 연산자(FNO)를 실험하는 공간입니다. "
+                        "내 데이터 모델 비교는 ④Model 의 '자동 비교'를 쓰세요.",
                         classes="text-caption text-disabled mb-2",
                     )
                     # A) 데이터 소스
