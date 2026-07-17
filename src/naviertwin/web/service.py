@@ -134,6 +134,243 @@ def load_project(path: str | Path) -> tuple[CFDDataset, Any | None]:
     return dataset, engine
 
 
+def load_case_set(
+    directory: str | Path,
+    *,
+    params_path: str | Path | None = None,
+    param_columns: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """폴더의 CFD 파일들을 "정상 파라미터 스윕" 케이스 세트로 로드한다.
+
+    파일 1개 = 운전조건 1개(케이스). 같은 폴더(또는 ``params_path``)의 CSV 가
+    케이스별 입력 파라미터 표를 준다 — 행 = 케이스, 열 = 파라미터이며 **행
+    순서는 파일명 정렬 순서와 일치**해야 한다. CSV 가 없으면 케이스 인덱스를
+    유일한 입력으로 폴백한다 (실제 운전조건 학습에는 CSV 필요).
+
+    각 케이스는 마지막 타임스텝(정상 해석의 수렴 해)만 단일 스냅샷으로
+    materialize 한다 — 케이스당 정확히 1 스냅샷이라 파라미터 표 행 수와 맞는다.
+
+    Returns:
+        ``datasets``(단일 스냅샷 CFDDataset 목록), ``params`` (N, k),
+        ``param_names``, ``case_names``, ``params_source`` 를 담은 dict.
+
+    Raises:
+        FileNotFoundError: 폴더가 없는 경우.
+        ValueError: 로드 가능한 케이스가 2개 미만이거나 CSV 행 수가 안 맞는 경우.
+    """
+    from naviertwin.core.cfd_reader import ReaderFactory
+    from naviertwin.core.physnemo.cfd_field_model import load_parameter_table
+
+    base = Path(directory).expanduser()
+    if not base.is_dir():
+        raise FileNotFoundError(f"케이스 폴더를 찾을 수 없습니다: {base}")
+
+    exts = set(ReaderFactory.registered_extensions())
+    files = sorted(
+        (
+            p
+            for p in base.iterdir()
+            if p.is_file() and not p.name.startswith(".") and p.suffix.lower() in exts
+        ),
+        key=lambda p: p.name.lower(),
+    )
+    if len(files) < 2:
+        raise ValueError(
+            f"케이스 세트에는 CFD 파일이 2개 이상 필요합니다 (찾음: {len(files)}개). "
+            "파일 하나가 운전조건 하나여야 합니다."
+        )
+
+    datasets: list[CFDDataset] = []
+    for target in files:
+        loaded = load_dataset(target)
+        n_steps = max(1, int(getattr(loaded, "n_time_steps", 1)))
+        # 정상 해석 = 마지막 스텝이 수렴 해.
+        datasets.append(snapshot_dataset(loaded, n_steps - 1))
+
+    csv: Path | None = Path(params_path).expanduser() if params_path else None
+    if csv is None:
+        candidates = sorted(p for p in base.glob("*.csv") if not p.name.startswith("."))
+        csv = candidates[0] if len(candidates) == 1 else None
+
+    if csv is not None:
+        values, names = load_parameter_table(
+            csv, columns=param_columns, expected_rows=len(datasets)
+        )
+        source = f"CSV: {csv.name}"
+    else:
+        values = np.arange(len(datasets), dtype=np.float64).reshape(-1, 1)
+        names = ["case_index"]
+        source = "case_index (파라미터 CSV 없음)"
+        logger.warning("파라미터 CSV 가 없어 case index 를 입력으로 사용합니다: %s", base)
+
+    return {
+        "datasets": datasets,
+        "params": np.asarray(values, dtype=np.float64),
+        "param_names": list(names),
+        "case_names": [f.name for f in files],
+        "params_source": source,
+    }
+
+
+def build_twin_from_cases(
+    datasets: Sequence[CFDDataset],
+    field: str,
+    n_modes: int,
+    params: np.ndarray,
+    *,
+    param_names: Sequence[str] | None = None,
+    reducer: str = "pod",
+    surrogate: str = "rbf",
+) -> dict[str, Any]:
+    """케이스 세트에서 (운전조건 → 필드) ROM 트윈을 학습한다 (정상 파라미터 스윕).
+
+    :func:`build_twin` 의 시계열 버전과 달리 입력이 시간이 아니라 k 차원 운전
+    조건 벡터다 — 케이스마다 스냅샷 1장, 파라미터 표 행 1개.
+
+    Raises:
+        ValueError: 케이스가 2개 미만, 파라미터 행 수 불일치, 메쉬 크기 불일치,
+            또는 미지원 reducer/surrogate 인 경우.
+    """
+    from naviertwin.core.digital_twin.twin_engine import TwinEngine
+
+    cases = list(datasets)
+    if len(cases) < 2:
+        raise ValueError(f"트윈 학습에는 케이스가 2개 이상 필요합니다. 현재: {len(cases)}")
+    if reducer not in REDUCERS:
+        raise ValueError(f"지원하지 않는 reducer: {reducer}")
+    if surrogate not in SURROGATES:
+        raise ValueError(f"지원하지 않는 surrogate: {surrogate}")
+
+    params_arr = np.asarray(params, dtype=np.float64)
+    if params_arr.ndim == 1:
+        params_arr = params_arr.reshape(-1, 1)
+    if params_arr.shape[0] != len(cases):
+        raise ValueError(
+            f"파라미터 행 수({params_arr.shape[0]})와 케이스 수({len(cases)})가 다릅니다."
+        )
+
+    columns = [
+        np.asarray(case.extract_field_snapshots(field), dtype=np.float64)[:, -1]
+        for case in cases
+    ]
+    n_features = int(columns[0].shape[0])
+    if any(int(column.shape[0]) != n_features for column in columns):
+        raise ValueError(
+            "케이스마다 메쉬 크기가 달라 ROM 학습이 불가능합니다 (동일 메쉬 필요). "
+            "형상이 다른 케이스는 기하 인지 연산자(GNN/GINO)가 필요합니다."
+        )
+    snapshots = np.stack(columns, axis=1)  # (n_features, n_cases)
+
+    names = (
+        list(param_names)
+        if param_names
+        else [f"param_{i}" for i in range(params_arr.shape[1])]
+    )
+    n_modes = max(1, min(int(n_modes), len(cases), n_features))
+    engine = TwinEngine(reducer_type=reducer, surrogate_type=surrogate, n_modes=n_modes)
+    engine.fit(snapshots, params_arr)
+
+    mins = [float(v) for v in params_arr.min(axis=0)]
+    maxs = [float(v) for v in params_arr.max(axis=0)]
+    engine.training_metadata = {
+        "field_name": field,
+        "n_modes": n_modes,
+        "reducer": reducer,
+        "surrogate": surrogate,
+        "problem_type": "steady_sweep",
+        "param_names": names,
+        "param_mins": mins,
+        "param_maxs": maxs,
+    }
+    return {
+        "engine": engine,
+        "field": field,
+        "n_modes": n_modes,
+        "reducer": reducer,
+        "surrogate": surrogate,
+        "n_cases": len(cases),
+        "param_names": names,
+        "param_mins": mins,
+        "param_maxs": maxs,
+    }
+
+
+def build_physics_ai_twin_from_cases(
+    datasets: Sequence[CFDDataset],
+    field: str | Sequence[str],
+    params: np.ndarray,
+    *,
+    param_names: Sequence[str] | None = None,
+    hidden: int = 32,
+    max_epochs: int = 150,
+    max_train_points: int = 20_000,
+) -> dict[str, Any]:
+    """케이스 세트에서 (좌표 + 운전조건 → 필드) Physics AI 트윈을 학습한다.
+
+    :func:`build_physics_ai_twin` 의 다중 케이스 버전 — 입력이 (x, y, z, μ₁..μₖ).
+    다중 출력 필드도 그대로 지원한다.
+
+    Raises:
+        ValueError: 케이스 2개 미만, 필드 미선택, 또는 파라미터 행 수 불일치.
+    """
+    from naviertwin.core.digital_twin.physics_ai_engine import PhysicsAITwinEngine
+    from naviertwin.core.physnemo.cfd_field_model import PhysicsNeMoCFDFieldModel
+
+    fields = [field] if isinstance(field, str) else [str(f) for f in field if str(f).strip()]
+    if not fields:
+        raise ValueError("학습할 출력 필드를 최소 1개 선택하세요.")
+    cases = list(datasets)
+    if len(cases) < 2:
+        raise ValueError(f"트윈 학습에는 케이스가 2개 이상 필요합니다. 현재: {len(cases)}")
+
+    params_arr = np.asarray(params, dtype=np.float64)
+    if params_arr.ndim == 1:
+        params_arr = params_arr.reshape(-1, 1)
+    if params_arr.shape[0] != len(cases):
+        raise ValueError(
+            f"파라미터 행 수({params_arr.shape[0]})와 케이스 수({len(cases)})가 다릅니다."
+        )
+
+    model = PhysicsNeMoCFDFieldModel.from_datasets(
+        cases,
+        field_names=fields,
+        params=params_arr,
+        parameter_names=list(param_names) if param_names else None,
+        hidden=hidden,
+        max_epochs=max_epochs,
+        max_train_points=max_train_points,
+    )
+    engine = PhysicsAITwinEngine.from_fitted_model(model, model_type="physicsnemo_cfd_field")
+    meta = model.training_metadata
+    names = list(meta.get("parameter_names", []) or [])
+    mins = [float(v) for v in meta["parameter_min"]]
+    maxs = [float(v) for v in meta["parameter_max"]]
+    engine.training_metadata.update(
+        {
+            "field_name": ",".join(fields),
+            "field_names": list(fields),
+            "reducer": "direct_physics_ai",
+            "surrogate": "physicsnemo_cfd_field",
+            "problem_type": "steady_sweep",
+            "param_names": names,
+            "param_mins": mins,
+            "param_maxs": maxs,
+        }
+    )
+    return {
+        "engine": engine,
+        "field": ",".join(fields),
+        "fields": list(fields),
+        "n_cases": len(cases),
+        "param_names": names,
+        "param_mins": mins,
+        "param_maxs": maxs,
+        "validation_metrics": dict(meta.get("validation_metrics", {})),
+        "per_field_metrics": dict(meta.get("per_field_metrics", {})),
+        "train_losses": list(model.train_losses_),
+    }
+
+
 def make_demo_dataset(
     nx: int = 48,
     ny: int = 48,
@@ -582,9 +819,13 @@ def build_twin(
     }
 
 
-def predict_twin(engine: Any, param_value: float) -> np.ndarray:
-    """학습된 TwinEngine 으로 단일 파라미터에서 필드를 예측한다."""
-    params = np.asarray([float(param_value)], dtype=np.float64)
+def predict_twin(engine: Any, param_value: float | Sequence[float]) -> np.ndarray:
+    """학습된 엔진으로 파라미터 지점에서 필드를 예측한다.
+
+    ``param_value`` 는 시계열 트윈이면 단일 시간값, 케이스 세트(파라미터 스윕)
+    트윈이면 k 차원 운전조건 벡터다.
+    """
+    params = np.asarray(param_value, dtype=np.float64).reshape(-1)
     prediction = np.asarray(engine.predict(params), dtype=np.float64).reshape(-1)
     return prediction
 

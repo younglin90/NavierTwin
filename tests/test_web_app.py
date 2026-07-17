@@ -456,3 +456,94 @@ def _gl_server():
     from trame.app import get_server
 
     return get_server("nt-test-ui", client_type="vue3")
+
+
+def _make_case_set(directory, *, n_cases=4):
+    """정상해 케이스 N개(.vtk) + 파라미터 CSV 폴더를 만든다 (app 레벨 테스트용)."""
+    import numpy as np
+    import pyvista as pv
+
+    directory.mkdir(parents=True, exist_ok=True)
+    velocities = [1.0 + i for i in range(n_cases)]
+    for index, velocity in enumerate(velocities):
+        grid = pv.ImageData(dimensions=(5, 5, 1))
+        coords = np.asarray(grid.points, dtype=float)
+        grid.point_data["p"] = velocity * (coords[:, 0] + 2.0 * coords[:, 1])
+        grid.save(directory / f"case_{index:02d}.vtk")
+    rows = ["inlet_velocity"] + [f"{v}" for v in velocities]
+    (directory / "params.csv").write_text("\n".join(rows) + "\n")
+    return velocities
+
+
+def test_case_set_load_train_predict(tmp_path) -> None:
+    """케이스 세트(문제 유형 B): 로드 → 운전조건 ROM 학습 → 파라미터 예측."""
+    _make_case_set(tmp_path / "sweep")
+    app = _make_app("nt-test-caseset")
+    st = app.server.state
+
+    st.nt_path = str(tmp_path / "sweep")
+    app.load_case_set()
+    assert st.nt_error == ""
+    assert st.nt_case_mode is True
+    assert st.nt_case_count == 4
+    assert st.nt_param_names == ["inlet_velocity"]
+    assert "케이스 세트" in st.nt_method_hint
+    # 파라미터별 슬라이더 상태가 준비된다 (파라미터 1개 → 배열 길이 1).
+    assert st.nt_twin_mins == [1.0]
+    assert st.nt_twin_maxs == [4.0]
+    assert len(st.nt_twin_params) == 1
+
+    app.build_twin()
+    assert st.nt_error == ""
+    assert st.nt_model_ready is True
+    assert "케이스 4개" in st.nt_model_summary
+    assert "inlet_velocity" in st.nt_model_summary
+
+    st.nt_twin_params = [2.0]
+    app.predict()
+    assert st.nt_error == ""
+    assert "twin_prediction" in st.nt_fields
+    assert "inlet_velocity=2" in st.nt_status
+
+    # 케이스 세트에서는 자동 비교(리더보드)가 명확한 안내와 함께 거부된다.
+    app.run_compare()
+    assert "케이스 세트" in st.nt_error
+
+
+def test_case_set_physics_ai_multi_param(tmp_path) -> None:
+    """케이스 세트 + Physics AI: 입력이 (좌표 + 운전조건) 으로 확장된다."""
+    _make_case_set(tmp_path / "sweep")
+    app = _make_app("nt-test-caseset-physics")
+    st = app.server.state
+
+    st.nt_path = str(tmp_path / "sweep")
+    app.load_case_set()
+    st.nt_model_method = "physics"
+    st.nt_physics_epochs = 3
+    st.nt_physics_hidden = 8
+    app.build_twin()
+    assert st.nt_error == ""
+    assert st.nt_physics_ready is True
+    assert "inlet_velocity" in st.nt_model_summary
+
+    st.nt_twin_params = [2.5]
+    app.predict()
+    assert st.nt_error == ""
+    assert "twin_prediction" in st.nt_fields
+
+
+def test_single_load_clears_case_mode(tmp_path) -> None:
+    """케이스 세트 뒤 단일 데이터셋을 로드하면 케이스 상태가 완전히 리셋된다."""
+    _make_case_set(tmp_path / "sweep")
+    app = _make_app("nt-test-caseset-reset")
+    st = app.server.state
+
+    st.nt_path = str(tmp_path / "sweep")
+    app.load_case_set()
+    assert st.nt_case_mode is True
+
+    app.load_demo()
+    assert st.nt_case_mode is False
+    assert st.nt_case_count == 0
+    assert st.nt_param_names == []
+    assert app.case_datasets is None

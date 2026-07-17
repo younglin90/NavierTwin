@@ -587,3 +587,110 @@ def test_split_multi_prediction_returns_none_for_single_output(demo) -> None:
     single = service.build_physics_ai_twin(demo, "p", hidden=8, max_epochs=2)["engine"]
     prediction = service.predict_twin(single, 0.5)
     assert service.split_multi_prediction(single, prediction) is None
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 케이스 세트 — 정상 파라미터 스윕 (문제 유형 B)
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _write_case_set(directory, *, n_cases=4, with_csv=True):
+    """정상해 케이스 N개(.vtk) + 파라미터 CSV 를 폴더에 쓴다.
+
+    각 케이스는 동일 격자, p = inlet 속도에 선형 비례하는 장 → 스윕 학습이
+    정확히 복원 가능해야 한다.
+    """
+    import pyvista as pv
+
+    directory.mkdir(parents=True, exist_ok=True)
+    velocities = [1.0 + i for i in range(n_cases)]
+    for index, velocity in enumerate(velocities):
+        grid = pv.ImageData(dimensions=(5, 5, 1))
+        coords = np.asarray(grid.points, dtype=float)
+        grid.point_data["p"] = velocity * (coords[:, 0] + 2.0 * coords[:, 1])
+        grid.save(directory / f"case_{index:02d}.vtk")
+    if with_csv:
+        rows = ["inlet_velocity"] + [f"{v}" for v in velocities]
+        (directory / "params.csv").write_text("\n".join(rows) + "\n")
+    return velocities
+
+
+def test_load_case_set_with_param_csv(tmp_path) -> None:
+    velocities = _write_case_set(tmp_path / "sweep", n_cases=4)
+    result = service.load_case_set(tmp_path / "sweep")
+
+    assert len(result["datasets"]) == 4
+    assert result["param_names"] == ["inlet_velocity"]
+    assert result["params"].shape == (4, 1)
+    np.testing.assert_allclose(result["params"][:, 0], velocities)
+    assert result["params_source"].startswith("CSV:")
+    assert result["case_names"] == [f"case_{i:02d}.vtk" for i in range(4)]
+    # 각 케이스는 단일 스냅샷으로 materialize 된다 (params 행 수와 1:1).
+    assert all(int(ds.n_time_steps) == 1 for ds in result["datasets"])
+
+
+def test_load_case_set_without_csv_falls_back_to_case_index(tmp_path) -> None:
+    _write_case_set(tmp_path / "nocsv", n_cases=3, with_csv=False)
+    result = service.load_case_set(tmp_path / "nocsv")
+    assert result["param_names"] == ["case_index"]
+    np.testing.assert_allclose(result["params"][:, 0], [0.0, 1.0, 2.0])
+    assert "case_index" in result["params_source"]
+
+
+def test_load_case_set_requires_two_cases(tmp_path) -> None:
+    _write_case_set(tmp_path / "one", n_cases=1, with_csv=False)
+    with pytest.raises(ValueError, match="2개 이상"):
+        service.load_case_set(tmp_path / "one")
+
+
+def test_load_case_set_rejects_row_count_mismatch(tmp_path) -> None:
+    _write_case_set(tmp_path / "bad", n_cases=3, with_csv=False)
+    (tmp_path / "bad" / "params.csv").write_text("inlet_velocity\n1.0\n2.0\n")  # 3개 중 2행
+    with pytest.raises(ValueError):
+        service.load_case_set(tmp_path / "bad")
+
+
+def test_build_twin_from_cases_predicts_swept_parameter(tmp_path) -> None:
+    """스윕 ROM: 학습한 운전조건에서 해당 케이스 장을 재현해야 한다."""
+    _write_case_set(tmp_path / "sweep", n_cases=4)
+    loaded = service.load_case_set(tmp_path / "sweep")
+    result = service.build_twin_from_cases(
+        loaded["datasets"], "p", 3, loaded["params"], param_names=loaded["param_names"]
+    )
+    assert result["n_cases"] == 4
+    assert result["param_names"] == ["inlet_velocity"]
+    assert result["param_mins"] == [1.0]
+    assert result["param_maxs"] == [4.0]
+    meta = result["engine"].training_metadata
+    assert meta["problem_type"] == "steady_sweep"
+
+    truth = np.asarray(loaded["datasets"][1].extract_field_snapshots("p"))[:, -1]
+    prediction = service.predict_twin(result["engine"], [2.0])  # 케이스 #1 조건
+    assert prediction.shape == truth.shape
+    np.testing.assert_allclose(prediction, truth, rtol=1e-3, atol=1e-3)
+
+
+def test_build_twin_from_cases_rejects_param_row_mismatch(tmp_path) -> None:
+    _write_case_set(tmp_path / "sweep", n_cases=3)
+    loaded = service.load_case_set(tmp_path / "sweep")
+    with pytest.raises(ValueError, match="파라미터 행 수"):
+        service.build_twin_from_cases(loaded["datasets"], "p", 2, np.zeros((2, 1)))
+
+
+def test_build_physics_ai_twin_from_cases(tmp_path) -> None:
+    _write_case_set(tmp_path / "sweep", n_cases=4)
+    loaded = service.load_case_set(tmp_path / "sweep")
+    result = service.build_physics_ai_twin_from_cases(
+        loaded["datasets"],
+        "p",
+        loaded["params"],
+        param_names=loaded["param_names"],
+        hidden=8,
+        max_epochs=3,
+    )
+    assert result["n_cases"] == 4
+    assert result["param_names"] == ["inlet_velocity"]
+    assert result["param_mins"] == [1.0]
+    assert result["engine"].training_metadata["problem_type"] == "steady_sweep"
+    prediction = service.predict_twin(result["engine"], [2.5])
+    assert prediction.shape[0] == loaded["datasets"][0].n_points

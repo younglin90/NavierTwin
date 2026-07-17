@@ -63,6 +63,11 @@ class NavierTwinWebApp:
         self.ctrl = self.server.controller
         self.plotter: Optional[Any] = None
         self.dataset: Optional[Any] = None
+        # 케이스 세트(문제 유형 B) 로드 시에만 채워진다 — dataset 은 뷰어용
+        # 첫 케이스를 가리키고, 학습은 case_datasets 전체 + case_params 로 한다.
+        self.case_datasets: Optional[list[Any]] = None
+        self.case_params: Optional[Any] = None
+        self.case_param_names: list[str] = []
         self.reducer: Optional[Any] = None
         self.engine: Optional[Any] = None
         self._pod_result: Optional[dict[str, Any]] = None
@@ -105,7 +110,8 @@ class NavierTwinWebApp:
 
         # Import
         st.nt_path = ""
-        # 파일 브라우저 모달
+        # 파일 브라우저 모달 — "single"(파일/폴더 1개) | "caseset"(폴더=케이스 세트)
+        st.nt_fb_mode = "single"
         st.nt_fb_dialog = False
         st.nt_fb_cwd = ""
         st.nt_fb_parent = None
@@ -117,6 +123,15 @@ class NavierTwinWebApp:
         st.nt_info_steps = 0
         st.nt_info_fields = ""
         st.nt_info_source = ""
+
+        # 케이스 세트 (문제 유형 B — 정상 파라미터 스윕): 파일 N개 = 운전조건
+        # N개 + 파라미터 CSV. False 면 문제 유형 A (단일 케이스 시계열, 입력=t).
+        # 근거·로드맵: .omc/plans/model-taxonomy-plan.md §13, M2.
+        st.nt_case_mode = False
+        st.nt_case_count = 0
+        st.nt_case_names = []
+        st.nt_params_source = ""
+        st.nt_param_names = []
 
         # Viewer
         st.nt_fields = []
@@ -188,12 +203,17 @@ class NavierTwinWebApp:
         st.nt_physics_hidden = 32
         st.nt_physics_max_samples = 20_000
 
-        # Twin
+        # Twin — 문제 유형 A(시계열)는 스칼라 t 슬라이더 하나,
+        # 문제 유형 B(케이스 세트)는 파라미터별 슬라이더 k 개(배열 상태).
         st.nt_twin_ready = False
         st.nt_twin_min = 0.0
         st.nt_twin_max = 1.0
         st.nt_twin_param = 0.0
         st.nt_twin_step = 0.01
+        st.nt_twin_params = []
+        st.nt_twin_mins = []
+        st.nt_twin_maxs = []
+        st.nt_twin_steps = []
         st.nt_twin_summary = ""
 
         # Compare (reducer×surrogate 벤치마크)
@@ -250,9 +270,11 @@ class NavierTwinWebApp:
         ctrl.nt_load_project = A(self.load_project, ".ntwin 프로젝트 로드 중…", render_after=True)
         # 파일 브라우저 (모달 열기/이동/선택은 즉시 반응 — 동기)
         ctrl.nt_fb_open = self.fb_open
+        ctrl.nt_fb_open_case_set = self.fb_open_case_set
         ctrl.nt_fb_navigate = self.fb_navigate
         ctrl.nt_fb_pick = self.fb_pick
         ctrl.nt_fb_load_cwd = self.fb_load_cwd
+        ctrl.nt_fb_load_case_set = self.fb_load_case_set
         ctrl.nt_run_analysis = A(self.run_analysis, "와류 식별 계산 중…", render_after=True)
         ctrl.nt_run_fft = A(self.run_fft, "FFT/PSD 계산 중…")
         ctrl.nt_run_pod = A(self.run_pod, "POD 계산 중…")
@@ -380,6 +402,63 @@ class NavierTwinWebApp:
         except Exception as exc:  # noqa: BLE001
             self._fail("프로젝트 로드 실패", exc)
 
+    def load_case_set(self) -> None:
+        """폴더를 케이스 세트(정상 파라미터 스윕)로 로드한다 — 문제 유형 B."""
+        path = (self.state.nt_path or "").strip()
+        if not path:
+            self._fail("경로 필요", ValueError("케이스 폴더를 선택하세요."))
+            return
+        try:
+            result = service.load_case_set(path)
+            self._set_case_set(result, path)
+        except Exception as exc:  # noqa: BLE001
+            self._fail("케이스 세트 로드 실패", exc)
+
+    def _set_case_set(self, result: dict[str, Any], path: str) -> None:
+        """케이스 세트를 적재한다 — 뷰어는 첫 케이스, 학습은 전체 케이스."""
+        import numpy as np
+
+        datasets = list(result["datasets"])
+        names = list(result["param_names"])
+        params = np.asarray(result["params"], dtype=float)
+        # _set_dataset 이 케이스 상태를 리셋하므로 반드시 먼저 호출한다.
+        self._set_dataset(datasets[0], status=f"케이스 세트 로드 완료: {path}")
+        self.case_datasets = datasets
+        self.case_params = params
+        self.case_param_names = names
+
+        mins = [float(v) for v in params.min(axis=0)]
+        maxs = [float(v) for v in params.max(axis=0)]
+        with self.state:
+            self.state.nt_case_mode = True
+            self.state.nt_case_count = len(datasets)
+            self.state.nt_case_names = list(result["case_names"])
+            self.state.nt_params_source = str(result["params_source"])
+            self.state.nt_param_names = names
+            # 케이스 세트는 시계열이 아니므로 recommend_method(단일 스냅샷)의
+            # "타임스텝 1개" 안내가 맞지 않는다 — 문제 유형 B 안내로 대체.
+            self.state.nt_method_hint = (
+                f"케이스 세트: {len(datasets)}개 케이스 × 입력 파라미터 {len(names)}개 "
+                f"({', '.join(names)}) — 정상 파라미터 스윕입니다. "
+                "스냅샷이 적으면 ROM 이 안정적입니다."
+            )
+        self._set_twin_param_ranges(names, mins, maxs)
+
+    def _set_twin_param_ranges(
+        self, names: list[str], mins: list[float], maxs: list[float]
+    ) -> None:
+        """③Twin 의 파라미터별 슬라이더 상태(배열)를 설정한다 — 문제 유형 B."""
+        with self.state:
+            self.state.nt_param_names = list(names)
+            self.state.nt_twin_mins = list(mins)
+            self.state.nt_twin_maxs = list(maxs)
+            self.state.nt_twin_params = [
+                0.5 * (lo + hi) for lo, hi in zip(mins, maxs)
+            ]
+            self.state.nt_twin_steps = [
+                max((hi - lo) / 100.0, 1e-6) for lo, hi in zip(mins, maxs)
+            ]
+
     # ------------------------------------------------------------------
     # 파일 브라우저 (서버측 탐색기 모달)
     # ------------------------------------------------------------------
@@ -394,7 +473,14 @@ class NavierTwinWebApp:
         st.nt_fb_home = listing["home"]
 
     def fb_open(self) -> None:
-        """파일 브라우저 모달을 연다 (마지막 위치 또는 홈)."""
+        """파일 브라우저를 단일 파일/폴더 모드로 연다 (마지막 위치 또는 홈)."""
+        self.state.nt_fb_mode = "single"
+        self._fb_refresh((self.state.nt_fb_cwd or "").strip() or None)
+        self.state.nt_fb_dialog = True
+
+    def fb_open_case_set(self) -> None:
+        """파일 브라우저를 케이스 세트 모드로 연다 (폴더 = 케이스 N개 + CSV)."""
+        self.state.nt_fb_mode = "caseset"
         self._fb_refresh((self.state.nt_fb_cwd or "").strip() or None)
         self.state.nt_fb_dialog = True
 
@@ -402,22 +488,26 @@ class NavierTwinWebApp:
         """모달 내에서 디렉토리를 이동한다."""
         self._fb_refresh(path)
 
-    def _fb_dispatch_load(self, path: str) -> None:
+    def _fb_dispatch_load(
+        self, path: str, worker: Any = None, message: str = ""
+    ) -> None:
         """모달을 닫고 경로 로드를 비동기로 트리거한다 (없으면 동기 폴백)."""
         import asyncio
 
         self.state.nt_path = path
         self.state.nt_fb_dialog = False
-        is_proj = path.lower().endswith(".ntwin")
-        msg = ".ntwin 프로젝트 로드 중…" if is_proj else "CFD 데이터 로드 중…"
+        if worker is None:
+            worker = self.load_path
+            is_proj = path.lower().endswith(".ntwin")
+            message = ".ntwin 프로젝트 로드 중…" if is_proj else "CFD 데이터 로드 중…"
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             loop = None
         if loop is not None:
-            loop.create_task(self._run_async(self.load_path, msg, render_after=True))
+            loop.create_task(self._run_async(worker, message, render_after=True))
         else:  # 테스트 등 루프 밖 컨텍스트
-            self.load_path()
+            worker()
 
     def fb_pick(self, path: str) -> None:
         """브라우저에서 파일을 선택 → 확장자에 따라 로드한다."""
@@ -428,6 +518,12 @@ class NavierTwinWebApp:
         cwd = (self.state.nt_fb_cwd or "").strip()
         if cwd:
             self._fb_dispatch_load(cwd)
+
+    def fb_load_case_set(self) -> None:
+        """현재 폴더를 케이스 세트로 로드한다 (파일 N개 = 운전조건 N개)."""
+        cwd = (self.state.nt_fb_cwd or "").strip()
+        if cwd:
+            self._fb_dispatch_load(cwd, self.load_case_set, "케이스 세트 로드 중…")
 
     def _restore_engine(self, engine: Any) -> None:
         """로드된 TwinEngine 으로 Model/Twin 상태를 복원한다.
@@ -441,6 +537,9 @@ class NavierTwinWebApp:
         field = meta.get("field_name", "")
         reducer = meta.get("reducer", getattr(engine, "reducer_type", "pod"))
         surrogate = meta.get("surrogate", getattr(engine, "surrogate_type", "rbf"))
+        if meta.get("problem_type") == "steady_sweep":
+            self._restore_sweep_engine(engine, meta, reducer, surrogate, field)
+            return
         meta_min = meta.get("param_min")
         meta_max = meta.get("param_max")
         times = [float(t) for t in (getattr(self.dataset, "time_steps", []) or [])]
@@ -472,6 +571,43 @@ class NavierTwinWebApp:
             self.state.nt_twin_step = max((pmax - pmin) / 100.0, 1e-6)
             self.state.nt_model_summary = summary
             self.state.nt_twin_summary = summary
+        self._set_status(f"프로젝트 로드 완료 — {summary}")
+
+    def _restore_sweep_engine(
+        self, engine: Any, meta: dict[str, Any], reducer: Any, surrogate: Any, field: Any
+    ) -> None:
+        """케이스 세트(파라미터 스윕) 엔진을 복원한다 — 파라미터별 슬라이더 k 개.
+
+        프로젝트 파일은 케이스 1개(첫 케이스 스냅샷)만 담으므로 재학습은 못
+        하지만, 저장된 파라미터 범위로 예측은 그대로 가능하다.
+        """
+        names = [str(n) for n in (meta.get("param_names") or [])]
+        mins = [float(v) for v in (meta.get("param_mins") or [])]
+        maxs = [float(v) for v in (meta.get("param_maxs") or [])]
+        if not (names and len(names) == len(mins) == len(maxs)):
+            self._fail(
+                "엔진 복원",
+                RuntimeError("파라미터 스윕 엔진의 파라미터 메타데이터가 불완전합니다."),
+            )
+            return
+        summary = (
+            f"복원된 엔진: {reducer}+{surrogate}, field='{field}' · "
+            f"입력 파라미터 {len(names)}개 ({', '.join(names)})"
+        )
+        with self.state:
+            if str(reducer) == "direct_physics_ai":
+                self.state.nt_model_method = "physics"
+            restored_fields = meta.get("field_names") or ([field] if field else [])
+            if restored_fields:
+                self.state.nt_train_fields = list(restored_fields)
+                self.state.nt_train_field = str(restored_fields[0])
+            # 예측 전용 — 케이스 1개만 복원되므로 재학습은 불가(case_datasets 없음).
+            self.state.nt_case_mode = True
+            self.state.nt_model_ready = True
+            self.state.nt_twin_ready = True
+            self.state.nt_model_summary = summary
+            self.state.nt_twin_summary = summary
+        self._set_twin_param_ranges(names, mins, maxs)
         self._set_status(f"프로젝트 로드 완료 — {summary}")
 
     def run_analysis(self) -> None:
@@ -719,11 +855,12 @@ class NavierTwinWebApp:
         return self._figure_to_uri(fig)
 
     def build_twin(self) -> None:
-        """②Model — 선택한 방식으로 (시간→필드) 트윈을 학습한다.
+        """②Model — 선택한 방식으로 (입력 → 필드) 트윈을 학습한다.
 
         ``nt_model_method`` 로 디스패치한다: "physics" 는 POD reducer 없이
-        좌표+시간→필드를 직접 학습(:meth:`_build_physics_twin`), "operator" 는
+        좌표+입력→필드를 직접 학습(:meth:`_build_physics_twin`), "operator" 는
         ⑥연산자 랩 안내, 기본("rom")은 POD reducer + 계수 회귀(rbf/kriging).
+        입력은 문제 유형에 따라 시간(t) 또는 운전조건 벡터(케이스 세트)다.
         """
         if self.dataset is None:
             self._fail("데이터 없음", RuntimeError("먼저 데이터를 로드하세요."))
@@ -739,6 +876,9 @@ class NavierTwinWebApp:
                 "신경 연산자",
                 RuntimeError("신경 연산자(FNO) 학습은 ⑥연산자 랩 패널에서 실행하세요."),
             )
+            return
+        if self.state.nt_case_mode:
+            self._build_sweep_twin()
             return
         field = self._training_field()
         reducer = self.state.nt_reducer or "pod"
@@ -770,13 +910,65 @@ class NavierTwinWebApp:
         except Exception as exc:  # noqa: BLE001
             self._fail("모델 학습 실패", exc)
 
+    def _build_sweep_twin(self) -> None:
+        """②Model — 케이스 세트에서 (운전조건 → 필드) ROM 트윈을 학습한다.
+
+        문제 유형 B — 입력이 시간이 아니라 파라미터 CSV 의 k 차원 운전조건이다.
+        """
+        if not self.case_datasets:
+            self._fail(
+                "케이스 없음",
+                RuntimeError(
+                    "복원된 프로젝트는 케이스 1개만 담아 재학습할 수 없습니다 — "
+                    "케이스 폴더를 다시 로드하세요."
+                ),
+            )
+            return
+        field = self._training_field()
+        reducer = self.state.nt_reducer or "pod"
+        surrogate = self.state.nt_surrogate or "rbf"
+        try:
+            result = service.build_twin_from_cases(
+                self.case_datasets,
+                field,
+                int(self.state.nt_n_modes or 6),
+                self.case_params,
+                param_names=self.case_param_names,
+                reducer=reducer,
+                surrogate=surrogate,
+            )
+            self.engine = result["engine"]
+            names = result["param_names"]
+            summary = (
+                f"field='{field}', {reducer}+{surrogate}, 모드 {result['n_modes']}개 · "
+                f"케이스 {result['n_cases']}개 · 입력 파라미터 {len(names)}개 "
+                f"({', '.join(names)})"
+            )
+            with self.state:
+                self.state.nt_model_ready = True
+                self.state.nt_model_summary = summary
+                self.state.nt_physics_ready = False
+                self.state.nt_twin_ready = True
+                self.state.nt_twin_summary = summary
+            self._set_twin_param_ranges(names, result["param_mins"], result["param_maxs"])
+            self._set_status(
+                f"모델 학습 완료: {reducer}+{surrogate} (파라미터 스윕). "
+                "③Twin 에서 예측하세요."
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._fail("모델 학습 실패", exc)
+
     def _build_physics_twin(self) -> None:
         """②Model — NVIDIA PhysicsNeMo 스타일 직접 필드 예측 모델을 학습한다.
 
-        POD reducer 없이 (좌표+시간) → 필드를 곧장 학습하는 PyTorch MLP.
+        POD reducer 없이 (좌표+입력) → 필드를 곧장 학습하는 PyTorch MLP.
         결과 엔진은 ``predict()``만 노출하는 TwinEngine 과 같은 계약이라
-        ③Twin/④Export 는 수정 없이 그대로 재사용된다.
+        ③Twin/④Export 는 수정 없이 그대로 재사용된다. 케이스 세트(문제 유형 B)
+        면 입력이 (좌표 + 운전조건 벡터)로 확장된다.
         """
+        if self.state.nt_case_mode:
+            self._build_sweep_physics_twin()
+            return
         fields = self._training_fields()
         try:
             result = service.build_physics_ai_twin(
@@ -810,10 +1002,62 @@ class NavierTwinWebApp:
         except Exception as exc:  # noqa: BLE001
             self._fail("PhysicsNeMo 학습 실패", exc)
 
+    def _build_sweep_physics_twin(self) -> None:
+        """②Model — 케이스 세트에서 (좌표+운전조건 → 필드) Physics AI 를 학습한다."""
+        if not self.case_datasets:
+            self._fail(
+                "케이스 없음",
+                RuntimeError(
+                    "복원된 프로젝트는 케이스 1개만 담아 재학습할 수 없습니다 — "
+                    "케이스 폴더를 다시 로드하세요."
+                ),
+            )
+            return
+        fields = self._training_fields()
+        try:
+            result = service.build_physics_ai_twin_from_cases(
+                self.case_datasets,
+                fields,
+                self.case_params,
+                param_names=self.case_param_names,
+                hidden=int(self.state.nt_physics_hidden or 32),
+                max_epochs=int(self.state.nt_physics_epochs or 150),
+                max_train_points=int(self.state.nt_physics_max_samples or 20_000),
+            )
+            self.engine = result["engine"]
+            names = result["param_names"]
+            rmse = result["validation_metrics"].get("rmse", float("nan"))
+            multi = f", 다중 출력 {len(fields)}개" if len(fields) > 1 else ""
+            summary = (
+                f"field(s)='{', '.join(fields)}', PhysicsNeMo CFD Field "
+                f"(직접 예측{multi}) · 케이스 {result['n_cases']}개 · 입력 파라미터 "
+                f"{len(names)}개 ({', '.join(names)}) · RMSE {rmse:.3g}"
+            )
+            with self.state:
+                self.state.nt_model_ready = True
+                self.state.nt_model_summary = summary
+                self.state.nt_physics_ready = True
+                self.state.nt_twin_ready = True
+                self.state.nt_twin_summary = summary
+            self._set_twin_param_ranges(names, result["param_mins"], result["param_maxs"])
+            self._set_status(
+                "PhysicsNeMo 모델 학습 완료 (파라미터 스윕). ③Twin 에서 예측하세요."
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._fail("PhysicsNeMo 학습 실패", exc)
+
     def run_compare(self) -> None:
         """모든 reducer×surrogate 조합을 학습/평가해 순위표를 표시한다."""
         if self.dataset is None:
             self._fail("데이터 없음", RuntimeError("먼저 데이터를 로드하세요."))
+            return
+        if self.state.nt_case_mode:
+            # 리더보드는 시계열 경로(compare_models)만 지원 — 케이스 세트 확장은
+            # 후속(M2 follow-up). 애매한 내부 에러 대신 명확히 알린다.
+            self._fail(
+                "자동 비교",
+                RuntimeError("케이스 세트(파라미터 스윕)의 자동 비교는 아직 지원하지 않습니다."),
+            )
             return
         try:
             summary = self._apply_compare_result(self._compare_compute(None))
@@ -1080,13 +1324,25 @@ class NavierTwinWebApp:
             self._fail("샘플 평가 실패", exc)
 
     def predict(self) -> None:
-        """현재 파라미터(시간)에서 필드를 예측하고 3D 뷰어에 표시한다."""
+        """현재 입력 지점에서 필드를 예측하고 3D 뷰어에 표시한다.
+
+        입력은 문제 유형 A 면 시간 t 하나, 문제 유형 B(케이스 세트)면 파라미터
+        슬라이더 k 개의 운전조건 벡터다.
+        """
         if self.engine is None or self.dataset is None:
             self._fail("트윈 없음", RuntimeError("먼저 트윈을 학습하세요."))
             return
         try:
-            value = float(self.state.nt_twin_param or 0.0)
-            prediction = service.predict_twin(self.engine, value)
+            if self.state.nt_case_mode:
+                values = [float(v) for v in (self.state.nt_twin_params or [])]
+                names = [str(n) for n in (self.state.nt_param_names or [])]
+                point = ", ".join(
+                    f"{n}={v:.4g}" for n, v in zip(names, values)
+                ) or "파라미터 없음"
+            else:
+                values = [float(self.state.nt_twin_param or 0.0)]
+                point = f"t={values[0]:.4g}"
+            prediction = service.predict_twin(self.engine, values)
             # 다중 출력(Physics AI) 이면 필드별로 잘라 각각 twin_<name> 으로 붙인다.
             parts = service.split_multi_prediction(self.engine, prediction)
             if parts:
@@ -1103,7 +1359,7 @@ class NavierTwinWebApp:
                 label = f"'{shown}'"
             self._refresh_fields(prefer=shown)
             self._render(reset_camera=False)
-            self._set_status(f"예측 완료: t={value:.4g} → {label} 3D 표시")
+            self._set_status(f"예측 완료: {point} → {label} 3D 표시")
         except Exception as exc:  # noqa: BLE001
             self._fail("예측 실패", exc)
 
@@ -1234,7 +1490,15 @@ class NavierTwinWebApp:
             self._render(reset_camera=False)
 
     def _set_dataset(self, dataset: Any, *, status: str) -> None:
+        """단일 데이터셋(문제 유형 A)을 적재하고 파생 상태를 전부 리셋한다.
+
+        케이스 세트 로드는 :meth:`_set_case_set` 이 이 메서드를 먼저 호출해
+        리셋한 뒤 케이스 상태를 다시 채운다 — 순서 의존적이다.
+        """
         self.dataset = dataset
+        self.case_datasets = None
+        self.case_params = None
+        self.case_param_names = []
         self.reducer = None
         self.engine = None
         info = service.dataset_info(dataset)
@@ -1250,6 +1514,15 @@ class NavierTwinWebApp:
             self.state.nt_nsteps = n_steps
             self.state.nt_has_timesteps = n_steps > 1
             self.state.nt_timestep = 0
+            self.state.nt_case_mode = False
+            self.state.nt_case_count = 0
+            self.state.nt_case_names = []
+            self.state.nt_params_source = ""
+            self.state.nt_param_names = []
+            self.state.nt_twin_params = []
+            self.state.nt_twin_mins = []
+            self.state.nt_twin_maxs = []
+            self.state.nt_twin_steps = []
             self.state.nt_analysis_done = False
             self.state.nt_pod_done = False
             self.state.nt_pod_summary = ""
@@ -1614,9 +1887,18 @@ class NavierTwinWebApp:
                 with v3.VCard():
                     with v3.VCardTitle(classes="text-subtitle-1 d-flex align-center"):
                         v3.VIcon("mdi-folder-open", classes="mr-2", color="primary")
-                        html.Span("파일 · 폴더 열기")
+                        html.Span(
+                            "{{ nt_fb_mode === 'caseset' "
+                            "? '케이스 세트 폴더 선택' : '파일 · 폴더 열기' }}"
+                        )
                     with v3.VCardSubtitle(classes="text-caption text-truncate pb-2"):
                         html.Span("{{ nt_fb_cwd }}")
+                    html.Div(
+                        "케이스 파일들이 들어있는 폴더로 이동한 뒤 아래 버튼을 "
+                        "누르세요 (파일 클릭 아님).",
+                        v_if="nt_fb_mode === 'caseset'",
+                        classes="text-caption text-info px-4 pb-2",
+                    )
                     v3.VDivider()
                     with v3.VCardText(
                         classes="pa-0",
@@ -1652,12 +1934,23 @@ class NavierTwinWebApp:
                         )
                     v3.VDivider()
                     with v3.VCardActions():
+                        # 모드에 따라 폴더 액션이 달라진다: single = 폴더 자체가
+                        # 케이스 1개(OpenFOAM), caseset = 폴더 안 파일들이 케이스 N개.
                         v3.VBtn(
                             "현재 폴더 로드",
                             click=self.ctrl.nt_fb_load_cwd,
                             variant="tonal",
                             color="primary",
                             prepend_icon="mdi-folder-download-outline",
+                            v_if="nt_fb_mode !== 'caseset'",
+                        )
+                        v3.VBtn(
+                            "이 폴더를 케이스 세트로 로드",
+                            click=self.ctrl.nt_fb_load_case_set,
+                            variant="tonal",
+                            color="primary",
+                            prepend_icon="mdi-folder-multiple-outline",
+                            v_if="nt_fb_mode === 'caseset'",
                         )
                         v3.VSpacer()
                         v3.VBtn("닫기", click="nt_fb_dialog = false", variant="text")
@@ -1753,11 +2046,36 @@ class NavierTwinWebApp:
                         "재로드된 프로젝트는 단일 timestep이라 예측만 가능합니다.",
                         classes="text-caption text-disabled mt-1",
                     )
+                    # 케이스 세트(문제 유형 B) — 파일 N개 = 운전조건 N개.
+                    v3.VBtn(
+                        "케이스 세트 로드 (파라미터 스윕)",
+                        click=self.ctrl.nt_fb_open_case_set,
+                        variant="tonal",
+                        block=True,
+                        classes="mt-3",
+                        disabled=("nt_busy",),
+                        prepend_icon="mdi-folder-multiple-outline",
+                    )
+                    html.Div(
+                        "폴더 하나 = 케이스 여러 개(파일 1개 = 운전조건 1개) + "
+                        "입력 파라미터 CSV(행=케이스, 파일명 정렬 순서). 정상 해석 "
+                        "결과를 형상/조건별로 학습할 때 씁니다.",
+                        classes="text-caption text-disabled mt-1",
+                    )
                     with v3.VCard(variant="tonal", classes="mt-3", v_show=("nt_has_dataset",)):
                         with v3.VCardText(classes="text-caption"):
+                            html.Div(
+                                "케이스: {{ nt_case_count }}개 · 입력 파라미터: "
+                                "{{ nt_param_names.join(', ') }} ({{ nt_params_source }})",
+                                v_show=("nt_case_mode",),
+                                classes="text-info mb-1",
+                            )
                             html.Div("Points: {{ nt_info_points }}")
                             html.Div("Cells: {{ nt_info_cells }}")
-                            html.Div("Time steps: {{ nt_info_steps }}")
+                            html.Div(
+                                "Time steps: {{ nt_info_steps }}",
+                                v_show=("!nt_case_mode",),
+                            )
                             html.Div("Fields: {{ nt_info_fields }}")
                     # 타임스텝 슬라이더
                     with v3.VCard(variant="flat", classes="mt-2", v_show=("nt_has_timesteps",)):
@@ -1807,6 +2125,14 @@ class NavierTwinWebApp:
                     html.Div(
                         "입력 파라미터: 시간(t) — 단일 케이스 시계열의 유일한 "
                         "파라미터라 자동으로 정해집니다.",
+                        v_show=("!nt_case_mode",),
+                        classes="text-caption text-disabled mt-1 mb-3",
+                    )
+                    html.Div(
+                        "입력 파라미터: {{ nt_param_names.join(', ') }} "
+                        "({{ nt_param_names.length }}개) — 케이스 세트의 "
+                        "파라미터 표에서 왔습니다.",
+                        v_show=("nt_case_mode",),
                         classes="text-caption text-disabled mt-1 mb-3",
                     )
                     v3.VDivider(classes="mb-3")
@@ -1922,20 +2248,31 @@ class NavierTwinWebApp:
                             prepend_icon="mdi-open-in-app",
                         )
 
-                    v3.VBtn(
-                        "모델 학습 (시간→필드)",
+                    # 라벨은 입력 종류에 따라 바뀐다 (t vs 운전조건). VBtn 의
+                    # 첫 위치 인자는 텍스트 child 라 바인딩이 안 되므로 mustache 로.
+                    with v3.VBtn(
                         click=self.ctrl.nt_model_train,
                         color="primary",
                         block=True,
                         classes="mt-2",
-                        disabled=("!nt_has_timesteps || nt_busy",),
+                        disabled=("(!nt_has_timesteps && !nt_case_mode) || nt_busy",),
                         prepend_icon="mdi-cog-sync-outline",
                         v_show=("nt_model_method !== 'operator'",),
-                    )
+                    ):
+                        html.Span(
+                            "{{ nt_case_mode ? '모델 학습 (운전조건→필드)' "
+                            ": '모델 학습 (시간→필드)' }}"
+                        )
                     html.Div(
                         "2개 이상 타임스텝이 필요합니다 (모드 수는 ⑤부가 분석 슬라이더 공유).",
                         classes="text-caption text-disabled mt-1",
-                        v_show=("nt_model_method !== 'operator'",),
+                        v_show=("nt_model_method !== 'operator' && !nt_case_mode",),
+                    )
+                    html.Div(
+                        "케이스 {{ nt_case_count }}개로 학습합니다 "
+                        "(모드 수는 ⑤부가 분석 슬라이더 공유).",
+                        classes="text-caption text-disabled mt-1",
+                        v_show=("nt_model_method !== 'operator' && nt_case_mode",),
                     )
                     with v3.VCard(variant="tonal", classes="mt-3", v_show=("nt_model_ready",)):
                         with v3.VCardText(classes="text-caption"):
@@ -1954,13 +2291,20 @@ class NavierTwinWebApp:
                         variant="tonal",
                         color="primary",
                         block=True,
-                        disabled=("!nt_has_timesteps || nt_busy",),
+                        disabled=("!nt_has_timesteps || nt_case_mode || nt_busy",),
                         prepend_icon="mdi-table-search",
                     )
                     html.Div(
                         "ROM 조합(POD×RBF/Kriging) + Physics AI 를 RMSE·R²·"
                         "지연시간으로 순위 비교합니다 (모드 수는 ⑤부가 분석 공유).",
                         classes="text-caption text-disabled mt-1",
+                        v_show=("!nt_case_mode",),
+                    )
+                    html.Div(
+                        "케이스 세트(파라미터 스윕)의 자동 비교는 아직 지원하지 "
+                        "않습니다 — 방식을 바꿔가며 직접 학습해 비교하세요.",
+                        classes="text-caption text-disabled mt-1",
+                        v_show=("nt_case_mode",),
                     )
                     with v3.VCard(
                         variant="tonal", classes="mt-2", v_show=("nt_compare_summary",)
@@ -1976,7 +2320,7 @@ class NavierTwinWebApp:
                             )
 
             # 3) Twin
-            with v3.VExpansionPanel(title="③ Twin (시간→필드 예측)"):
+            with v3.VExpansionPanel(title="③ Twin (입력→필드 예측)"):
                 with v3.VExpansionPanelText():
                     html.Div(
                         "먼저 ②Model 에서 학습하세요.",
@@ -1986,18 +2330,45 @@ class NavierTwinWebApp:
                     with v3.VCard(variant="flat", v_show=("nt_twin_ready",)):
                         with v3.VCardText():
                             html.Div("{{ nt_twin_summary }}", classes="text-caption mb-2")
-                            html.Div(
-                                "예측 파라미터 t = {{ nt_twin_param }}",
-                                classes="text-caption mb-1",
-                            )
-                            v3.VSlider(
-                                v_model=("nt_twin_param",),
-                                min=("nt_twin_min",),
-                                max=("nt_twin_max",),
-                                step=("nt_twin_step",),
-                                hide_details=True,
-                                density="compact",
-                            )
+                            # 문제 유형 A — 시간 슬라이더 1개.
+                            with html.Div(v_show=("!nt_case_mode",)):
+                                html.Div(
+                                    "예측 파라미터 t = {{ nt_twin_param }}",
+                                    classes="text-caption mb-1",
+                                )
+                                v3.VSlider(
+                                    v_model=("nt_twin_param",),
+                                    min=("nt_twin_min",),
+                                    max=("nt_twin_max",),
+                                    step=("nt_twin_step",),
+                                    hide_details=True,
+                                    density="compact",
+                                )
+                            # 문제 유형 B — 운전조건 슬라이더 k 개.
+                            # 배열 원소를 v-model 로 바꾸면 trame 이 dirty 를
+                            # 감지 못하므로 flushState 로 명시 push 한다.
+                            with html.Div(v_show=("nt_case_mode",)):
+                                with html.Template(
+                                    v_for="(pname, i) in nt_param_names",
+                                    key="pname",
+                                ):
+                                    html.Div(
+                                        "{{ pname }} = {{ nt_twin_params[i] }}",
+                                        classes="text-caption mb-1",
+                                    )
+                                    v3.VSlider(
+                                        v_model=("nt_twin_params[i]",),
+                                        min=("nt_twin_mins[i]",),
+                                        max=("nt_twin_maxs[i]",),
+                                        step=("nt_twin_steps[i]",),
+                                        hide_details=True,
+                                        density="compact",
+                                        classes="mb-1",
+                                        raw_attrs=[
+                                            '@update:model-value='
+                                            '"flushState(\'nt_twin_params\')"'
+                                        ],
+                                    )
                             v3.VBtn(
                                 "예측 실행",
                                 click=self.ctrl.nt_predict,
