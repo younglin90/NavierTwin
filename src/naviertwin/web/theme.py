@@ -124,6 +124,20 @@ CUSTOM_CSS = FONT_CSS + f"""
   font-size: 0.8rem;
 }}
 
+/* ⓘ/⚠ 설명 아이콘 — 평소엔 물러나 있고 호버하면 살아난다.
+   설명이 패널을 채우는 대신 여기 접혀 있으므로, "누를 수 있다"는 신호가
+   있어야 사용자가 존재를 알아챈다. */
+.nt-tip {{
+  cursor: help;
+  opacity: 0.55;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  flex: 0 0 auto;
+}}
+.nt-tip:hover {{
+  opacity: 1;
+  transform: scale(1.25);
+}}
+
 /* 브랜드 — 시안 발광 + 스코프 스윕 */
 .nt-brand {{
   font-family: var(--nt-display) !important;

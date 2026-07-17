@@ -424,12 +424,94 @@ def test_callbacks_guard_without_dataset() -> None:
     assert st.nt_error
 
 
+def _built_html() -> str:
+    """실제로 생성된 vue 마크업 (소스 텍스트가 아니라 빌드 결과)."""
+    from trame.app import get_server
+
+    from naviertwin.web.app import NavierTwinWebApp
+
+    app = NavierTwinWebApp(server=get_server("nt-test-html", client_type="vue3"))
+    try:
+        return str(app.build_ui().html)
+    except (NameError, TypeError):
+        raise
+    except Exception as exc:  # noqa: BLE001 — GL/render 컨텍스트 부재
+        pytest.skip(f"GL 렌더 컨텍스트 없음: {exc}")
+
+
+def test_long_explanations_live_in_tooltips_not_panels() -> None:
+    """긴 설명은 패널 본문이 아니라 ⓘ 툴팁 안에 있어야 한다.
+
+    캡션을 다시 패널에 눌러 담으면(원래 상태로 되돌리면) 여기서 깨진다.
+    """
+    html = _built_html()
+    for phrase in (
+        "탐색기에서 CFD 파일",
+        "폴더 하나 = 케이스 여러 개",
+        "성긴 균일 격자로 보간 재샘플합니다",
+        "신경장(Physics AI)은 좌표를 입력으로 받아",
+    ):
+        assert phrase in html, f"설명이 사라졌습니다: {phrase}"
+        # 설명 앞의 가장 가까운 태그가 VTooltip 이어야 한다 = 툴팁 안에 있다.
+        before = html[: html.index(phrase)]
+        assert before.rindex("<VTooltip") > before.rindex("<VExpansionPanelText"), (
+            f"설명이 툴팁 밖(패널 본문)에 있습니다: {phrase}"
+        )
+
+
+def test_warnings_get_the_orange_icon_and_explanations_the_grey_one() -> None:
+    """경고와 설명은 아이콘 색으로 구분된다 — 화면을 비우되 신호는 남긴다."""
+    html = _built_html()
+
+    # DMD 부적합 경고: 못 보면 결과가 조용히 틀어지므로 반드시 ⚠ 여야 한다.
+    dmd = html[: html.index("상태의 시간 전이 규칙을 학습해")]
+    dmd_icon = dmd[dmd.rindex("<VIcon") :]
+    assert "mdi-alert-circle-outline" in dmd_icon
+    assert 'color="warning"' in dmd_icon
+
+    # 일반 설명은 회색 ⓘ.
+    info = html[: html.index("탐색기에서 CFD 파일")]
+    info_icon = info[info.rindex("<VIcon") :]
+    assert "mdi-information-outline" in info_icon
+    assert 'color="grey"' in info_icon
+
+    # 두 종류가 모두 실제로 쓰이고 있다.
+    assert html.count("mdi-alert-circle-outline") >= 3
+    assert html.count("mdi-information-outline") >= 5
+
+
+def test_live_status_stays_visible_outside_tooltips() -> None:
+    """상태·결과는 툴팁에 숨기면 안 된다 — 호버해야 보이면 기능이 죽는다."""
+    html = _built_html()
+    for binding in (
+        "{{ nt_coarsen_preview }}",  # 해상도 선택의 근거
+        "{{ nt_fft_summary }}",  # 분석 결과
+        "{{ nt_model_summary }}",  # 학습 결과
+        "{{ nt_error }}",  # 오류
+    ):
+        assert binding in html, f"상태 표시가 사라졌습니다: {binding}"
+        before = html[: html.index(binding)]
+        last_tooltip = before.rfind("<VTooltip")
+        if last_tooltip != -1:
+            # 툴팁이 앞에 있더라도 이미 닫힌 뒤여야 한다.
+            assert before.rfind("</VTooltip>") > last_tooltip, (
+                f"상태가 툴팁 안에 갇혔습니다: {binding}"
+            )
+
+
 def test_build_ui_if_gl_available() -> None:
-    """전체 UI(PyVista 뷰어) 빌드 — GL 미지원 환경에서는 skip."""
+    """전체 UI(PyVista 뷰어) 빌드 — GL 미지원 환경에서만 skip.
+
+    이 테스트는 UI 코드 전체를 실제로 빌드하는 유일한 곳이다. 예전엔 모든
+    예외를 skip 으로 삼켜서 UI 코드의 NameError 조차 "GL 없음"으로 위장됐다
+    (실제로 그렇게 버그를 놓쳤다). 명백한 프로그래밍 오류는 다시 던진다.
+    """
     from naviertwin.web.app import create_web_app
 
     try:
         app = create_web_app(build_ui=True, server=_gl_server())
+    except (NameError, TypeError, SyntaxError, IndentationError):
+        raise  # UI 코드 버그 — skip 으로 덮으면 안 된다
     except Exception as exc:  # noqa: BLE001 — GL/render 컨텍스트 부재
         pytest.skip(f"GL 렌더 컨텍스트 없음: {exc}")
     assert app.plotter is not None

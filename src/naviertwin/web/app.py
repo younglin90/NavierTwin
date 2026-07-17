@@ -2106,6 +2106,50 @@ class NavierTwinWebApp:
     # UI
     # ------------------------------------------------------------------
 
+    def _tip(
+        self, text: str, *, warn: bool = False, v_show_expr: str = ""
+    ) -> None:
+        """긴 설명을 패널에서 걷어내 호버 툴팁으로 옮긴다.
+
+        해설이 패널에 상주하면 정작 봐야 할 컨트롤과 상태값이 묻힌다. 설명은
+        회색 ⓘ, 경고는 주황 ⚠ 로 아이콘 색만 다르게 해서 화면을 비우면서도
+        "여기 주의할 게 있다"는 신호는 남긴다.
+
+        아이콘은 버튼 **옆**에 별도로 둔다 — 비활성(disabled) 버튼에는 hover
+        이벤트가 걸리지 않아 툴팁이 뜨지 않기 때문이다. 버튼이 비활성인 순간이
+        바로 "왜 안 되는지" 설명이 필요한 순간이므로 이게 중요하다.
+
+        Args:
+            text: 툴팁 내용. ``{{ ... }}`` 바인딩도 쓸 수 있다.
+            warn: 경고면 True — 주황 ⚠ 아이콘이 된다.
+            v_show_expr: 조건부로 띄울 때의 vue 표현식 (빈 문자열이면 항상).
+        """
+        from trame.widgets import html
+        from trame.widgets import vuetify3 as v3
+
+        icon_kwargs: dict[str, Any] = {}
+        if v_show_expr:
+            icon_kwargs["v_show"] = (v_show_expr,)
+        with v3.VTooltip(location="bottom", max_width=340, open_delay=80):
+            with v3.Template(v_slot_activator="{ props }"):
+                v3.VIcon(
+                    "mdi-alert-circle-outline" if warn else "mdi-information-outline",
+                    v_bind="props",
+                    size="x-small",
+                    color="warning" if warn else "grey",
+                    classes="nt-tip ml-1",
+                    **icon_kwargs,
+                )
+            html.Span(text, classes="text-caption")
+
+    def _tip_row(self, label: str, text: str, *, warn: bool = False) -> None:
+        """라벨 + ⓘ 를 한 줄로 (섹션 제목 옆에 붙이는 경우)."""
+        from trame.widgets import html
+
+        with html.Div(classes="d-flex align-center"):
+            html.Span(label, classes="text-caption text-disabled")
+            self._tip(text, warn=warn)
+
     def build_ui(self) -> Any:
         """trame UI 레이아웃을 구성한다 (PyVista Plotter + vuetify3 컨트롤)."""
         from pyvista.trame.ui import plotter_ui
@@ -2256,9 +2300,12 @@ class NavierTwinWebApp:
                     # 공통 격자 해상도는 로드 시점에 정해진다 — 케이스 메쉬가 서로
                     # 다르면(형상 가변) 여기서 정한 격자로 재샘플되기 때문이다.
                     with html.Div(v_if="nt_fb_mode === 'caseset'", classes="px-4 pb-2"):
-                        html.Div(
+                        self._tip_row(
                             "공통 격자 해상도: 긴 축 {{ nt_case_resolution }}분할",
-                            classes="text-caption text-disabled",
+                            "케이스 메쉬가 서로 다를 때만 쓰입니다 — 모두 같은 "
+                            "메쉬면 재샘플 없이 원본 그대로 씁니다. 형상이 다른 "
+                            "케이스는 이 격자로 보간되므로, 형상 경계를 살리려면 "
+                            "충분히 촘촘해야 합니다.",
                         )
                         v3.VSlider(
                             v_model=("nt_case_resolution",),
@@ -2268,11 +2315,6 @@ class NavierTwinWebApp:
                             thumb_label=True,
                             density="compact",
                             hide_details=True,
-                        )
-                        html.Div(
-                            "케이스 메쉬가 서로 다를 때만 쓰입니다 — 모두 같은 "
-                            "메쉬면 재샘플 없이 원본 그대로 씁니다.",
-                            classes="text-caption text-disabled",
                         )
                     html.Div(
                         "예측 결과를 올릴 메쉬 파일을 클릭하세요 — 그 격자의 "
@@ -2401,60 +2443,59 @@ class NavierTwinWebApp:
             with v3.VExpansionPanel(title="① Import"):
                 with v3.VExpansionPanelText():
                     # 데모 카탈로그 — 계열별로 시험 가능한 데이터를 고른다.
-                    v3.VSelect(
-                        v_model=("nt_demo_kind",),
-                        items=("nt_demo_choices",),
-                        label="데모 데이터",
-                        density="compact",
-                        hide_details=True,
-                    )
-                    html.Div(
-                        "{{ nt_demo_notes[nt_demo_kind] }}",
-                        classes="text-caption text-disabled mt-1 mb-2",
-                    )
+                    # 데모 설명은 ⓘ 로: 드롭다운에서 고르는 순간에만 필요하다.
+                    with html.Div(classes="d-flex align-center"):
+                        v3.VSelect(
+                            v_model=("nt_demo_kind",),
+                            items=("nt_demo_choices",),
+                            label="데모 데이터",
+                            density="compact",
+                            hide_details=True,
+                            classes="flex-grow-1",
+                        )
+                        self._tip("{{ nt_demo_notes[nt_demo_kind] }}")
                     v3.VBtn(
                         "데모 데이터 로드",
                         click=self.ctrl.nt_load_demo,
                         color="primary",
                         block=True,
+                        classes="mt-2",
                         disabled=("nt_busy",),
                         prepend_icon="mdi-flask-outline",
                     )
-                    v3.VBtn(
-                        "경로에서 로드",
-                        click=self.ctrl.nt_fb_open,
-                        variant="tonal",
-                        block=True,
-                        classes="mt-3",
-                        disabled=("nt_busy",),
-                        prepend_icon="mdi-folder-search-outline",
-                    )
-                    html.Div(
-                        "탐색기에서 CFD 파일(*.vtk, *.vtu, ...), OpenFOAM 폴더, "
-                        "또는 .ntwin 프로젝트를 선택합니다.",
-                        classes="text-caption text-disabled mt-1",
-                    )
-                    html.Div(
-                        "같은 폴더의 <name>.engine.pkl 이 있으면 트윈도 함께 복원합니다. "
-                        "재로드된 프로젝트는 단일 timestep이라 예측만 가능합니다.",
-                        classes="text-caption text-disabled mt-1",
-                    )
+                    with html.Div(classes="d-flex align-center mt-3"):
+                        v3.VBtn(
+                            "경로에서 로드",
+                            click=self.ctrl.nt_fb_open,
+                            variant="tonal",
+                            block=True,
+                            disabled=("nt_busy",),
+                            prepend_icon="mdi-folder-search-outline",
+                            classes="flex-grow-1",
+                        )
+                        self._tip(
+                            "탐색기에서 CFD 파일(*.vtk, *.vtu, ...), OpenFOAM 폴더, "
+                            "또는 .ntwin 프로젝트를 선택합니다. 같은 폴더의 "
+                            "<name>.engine.pkl 이 있으면 트윈도 함께 복원합니다. "
+                            "재로드된 프로젝트는 단일 timestep 이라 예측만 "
+                            "가능합니다."
+                        )
                     # 케이스 세트(문제 유형 B) — 파일 N개 = 운전조건 N개.
-                    v3.VBtn(
-                        "케이스 세트 로드 (파라미터 스윕)",
-                        click=self.ctrl.nt_fb_open_case_set,
-                        variant="tonal",
-                        block=True,
-                        classes="mt-3",
-                        disabled=("nt_busy",),
-                        prepend_icon="mdi-folder-multiple-outline",
-                    )
-                    html.Div(
-                        "폴더 하나 = 케이스 여러 개(파일 1개 = 운전조건 1개) + "
-                        "입력 파라미터 CSV(행=케이스, 파일명 정렬 순서). 정상 해석 "
-                        "결과를 형상/조건별로 학습할 때 씁니다.",
-                        classes="text-caption text-disabled mt-1",
-                    )
+                    with html.Div(classes="d-flex align-center mt-3"):
+                        v3.VBtn(
+                            "케이스 세트 로드 (파라미터 스윕)",
+                            click=self.ctrl.nt_fb_open_case_set,
+                            variant="tonal",
+                            block=True,
+                            disabled=("nt_busy",),
+                            prepend_icon="mdi-folder-multiple-outline",
+                            classes="flex-grow-1",
+                        )
+                        self._tip(
+                            "폴더 하나 = 케이스 여러 개(파일 1개 = 운전조건 1개) + "
+                            "입력 파라미터 CSV(행=케이스, 파일명 정렬 순서). 정상 "
+                            "해석 결과를 형상/조건별로 학습할 때 씁니다."
+                        )
                     with v3.VCard(variant="tonal", classes="mt-3", v_show=("nt_has_dataset",)):
                         with v3.VCardText(classes="text-caption"):
                             html.Div(
@@ -2480,9 +2521,14 @@ class NavierTwinWebApp:
                         variant="flat", classes="mt-2", v_show=("nt_has_dataset && !nt_case_mode",)
                     ):
                         with v3.VCardText():
-                            html.Div(
+                            self._tip_row(
                                 "해상도 낮추기 (대용량 대응)",
-                                classes="text-caption text-disabled mb-1",
+                                "성긴 균일 격자로 보간 재샘플합니다 — 학습/POD 는 "
+                                "(점 수 × 스텝 수) 행렬을 통째로 메모리에 올리므로 "
+                                "거대한 메쉬는 먼저 줄여야 합니다. 손실 압축이라 "
+                                "급격한 구배는 뭉개지고, 원본을 교체하므로 되돌릴 "
+                                "수 없습니다.",
+                                warn=True,
                             )
                             html.Div(
                                 "긴 축 기준 {{ nt_coarsen_resolution }}분할",
@@ -2518,13 +2564,6 @@ class NavierTwinWebApp:
                                 prepend_icon="mdi-grid-off",
                             )
                             html.Div(
-                                "성긴 균일 격자로 보간 재샘플합니다 — 학습/POD 는 "
-                                "(점 수 × 스텝 수) 행렬을 통째로 메모리에 올리므로 "
-                                "거대한 메쉬는 먼저 줄여야 합니다. 손실 압축이라 "
-                                "급격한 구배는 뭉개집니다.",
-                                classes="text-caption text-disabled mt-1",
-                            )
-                            html.Div(
                                 "{{ nt_coarsen_summary }}",
                                 v_show=("nt_coarsen_summary",),
                                 classes="text-caption text-success mt-1",
@@ -2533,11 +2572,18 @@ class NavierTwinWebApp:
                     # 슬라이더 대신 이걸로 케이스별 원본 해를 본다.
                     with v3.VCard(variant="flat", classes="mt-2", v_show=("nt_case_mode",)):
                         with v3.VCardText():
-                            html.Div(
-                                "케이스 {{ nt_case_index + 1 }} / {{ nt_case_count }} — "
-                                "{{ nt_case_names[nt_case_index] }}",
-                                classes="text-caption mb-1",
-                            )
+                            with html.Div(classes="d-flex align-center mb-1"):
+                                html.Span(
+                                    "케이스 {{ nt_case_index + 1 }} / "
+                                    "{{ nt_case_count }} — "
+                                    "{{ nt_case_names[nt_case_index] }}",
+                                    classes="text-caption",
+                                )
+                                self._tip(
+                                    "케이스별 원본 해를 봅니다 — ③Twin 예측 결과와 "
+                                    "눈으로 비교할 수 있습니다. 케이스를 바꿔도 "
+                                    "학습한 모델은 그대로 유지됩니다."
+                                )
                             html.Div(
                                 "{{ nt_case_labels[nt_case_index] }}",
                                 classes="text-caption text-info mb-1",
@@ -2549,11 +2595,6 @@ class NavierTwinWebApp:
                                 step=1,
                                 hide_details=True,
                                 density="compact",
-                            )
-                            html.Div(
-                                "케이스별 원본 해를 봅니다 — ③Twin 예측 결과와 "
-                                "눈으로 비교할 수 있습니다.",
-                                classes="text-caption text-disabled mt-1",
                             )
                     # 타임스텝 슬라이더
                     with v3.VCard(variant="flat", classes="mt-2", v_show=("nt_has_timesteps",)):
@@ -2614,26 +2655,29 @@ class NavierTwinWebApp:
                         classes="mt-2",
                         v_show=("nt_model_method === 'physics'",),
                     )
-                    html.Div(
-                        "다른 필드를 입력으로 주면 (좌표+입력장+시간)→출력 의 "
-                        "field-to-field 연산자가 됩니다 (예: U → p). 출력으로 고른 "
-                        "필드는 자동 제외됩니다.",
-                        v_show=("nt_model_method === 'physics'",),
-                        classes="text-caption text-disabled mt-1",
-                    )
-                    html.Div(
-                        "입력 파라미터: 시간(t) — 단일 케이스 시계열의 유일한 "
-                        "파라미터라 자동으로 정해집니다.",
-                        v_show=("!nt_case_mode",),
-                        classes="text-caption text-disabled mt-1 mb-3",
-                    )
-                    html.Div(
-                        "입력 파라미터: {{ nt_param_names.join(', ') }} "
-                        "({{ nt_param_names.length }}개) — 케이스 세트의 "
-                        "파라미터 표에서 왔습니다.",
-                        v_show=("nt_case_mode",),
-                        classes="text-caption text-disabled mt-1 mb-3",
-                    )
+                    # 입력 파라미터는 "무엇으로 예측하는가" 자체라 상태로 남기고,
+                    # 왜 그렇게 정해지는지만 ⓘ 로 접는다.
+                    with html.Div(classes="d-flex align-center mt-1 mb-3"):
+                        html.Span(
+                            "입력 파라미터: 시간(t)",
+                            v_show=("!nt_case_mode",),
+                            classes="text-caption text-disabled",
+                        )
+                        html.Span(
+                            "입력 파라미터: {{ nt_param_names.join(', ') }} "
+                            "({{ nt_param_names.length }}개)",
+                            v_show=("nt_case_mode",),
+                            classes="text-caption text-disabled",
+                        )
+                        self._tip(
+                            "{{ nt_case_mode "
+                            "? '케이스 세트의 파라미터 표에서 왔습니다.' "
+                            ": '단일 케이스 시계열의 유일한 파라미터라 자동으로 "
+                            "정해집니다.' }} 위에서 다른 필드를 입력으로 주면 "
+                            "(좌표+입력장+시간)→출력 의 field-to-field 연산자가 "
+                            "됩니다 (예: U → p). 출력으로 고른 필드는 자동 "
+                            "제외됩니다."
+                        )
                     v3.VDivider(classes="mb-3")
                     html.Div("모델 방식", classes="text-caption text-disabled mb-1")
                     method_cards = [
@@ -2707,11 +2751,11 @@ class NavierTwinWebApp:
 
                     # Ⓑ Physics AI: 직접 회귀 파라미터
                     with html.Div(v_show=("nt_model_method === 'physics'",)):
-                        html.Div(
+                        self._tip_row(
+                            "학습 설정",
                             "POD reducer 없이 좌표+시간을 필드로 직접 매핑합니다 "
                             "(torch 만으로 학습 — physicsnemo 패키지는 ④Export "
                             "모듈 저장에만 필요).",
-                            classes="text-caption text-disabled mt-1 mb-1",
                         )
                         v3.VTextField(
                             v_model=("nt_physics_epochs",),
@@ -2737,12 +2781,14 @@ class NavierTwinWebApp:
 
                     # Ⓒ 신경 연산자: ⑥연산자 랩으로 안내 (로드 데이터 직학습은 P4)
                     with html.Div(v_show=("nt_model_method === 'operator'",)):
-                        html.Div(
+                        # 로드한 데이터로는 아직 학습 불가 — 제약이라 ⚠.
+                        self._tip_row(
+                            "내 데이터 직접 학습은 아직 미지원",
                             "신경 연산자는 다수 샘플(수백+)·균일 격자 데이터에 "
                             "적합합니다 (균일 격자: FNO — 탑재됨 · 기하 인지: "
                             "GNN/GINO — 예정). 현재는 ⑥연산자 랩의 표준 벤치마크 "
-                            "문제로 학습할 수 있습니다.",
-                            classes="text-caption text-disabled mt-1 mb-1",
+                            "문제로만 학습할 수 있습니다.",
+                            warn=True,
                         )
                         v3.VBtn(
                             "⑥ 연산자 랩 열기",
@@ -2755,14 +2801,19 @@ class NavierTwinWebApp:
 
                     # Ⓓ 동역학 예보 (PyDMD) — 학습 구간 밖 외삽이 가능한 유일 계열.
                     with html.Div(v_show=("nt_model_method === 'dynamics'",)):
-                        # HTML 이라 마크다운(**) 은 렌더되지 않는다 — 강조는 클래스로.
-                        html.Div(
+                        # DMD 는 부적합해도 조용히 학습에 "성공"한다 — 못 보면
+                        # 결과가 조용히 틀어지므로 ⚠ 로 신호를 남긴다.
+                        self._tip_row(
+                            "데이터가 맞아야만 쓸 수 있습니다",
                             "상태의 시간 전이 규칙을 학습해 학습 구간 밖까지 "
                             "예보합니다. 유동이 '공간모드 × 고유 주파수'의 저랭크 "
                             "선형 동역학으로 근사될 때만 맞습니다 — 강한 이류나 "
                             "불연속(필라멘트 데모 등)에는 부적합하니 학습 후 "
-                            "적합도(재구성 오차)를 반드시 확인하세요.",
-                            classes="text-caption text-disabled mt-1 mb-1",
+                            "적합도(재구성 오차)를 반드시 확인하세요. 모드 수는 "
+                            "PyDMD 가 자동 결정합니다 (실수 진동은 켤레쌍 때문에 "
+                            "물리 모드당 랭크 2가 필요해 수동 지정 시 과소적합되기 "
+                            "쉽습니다).",
+                            warn=True,
                         )
                         v3.VSelect(
                             v_model=("nt_dmd_method",),
@@ -2770,12 +2821,6 @@ class NavierTwinWebApp:
                             label="DMD 변형",
                             density="compact",
                             classes="mt-1",
-                        )
-                        html.Div(
-                            "모드 수는 PyDMD 가 자동 결정합니다 (실수 진동은 "
-                            "켤레쌍 때문에 물리 모드당 랭크 2가 필요해 수동 지정 시 "
-                            "과소적합되기 쉽습니다).",
-                            classes="text-caption text-disabled mt-1",
                         )
                         with v3.VCard(
                             variant="tonal", classes="mt-2", v_show=("nt_dmd_ready",)
@@ -2801,27 +2846,35 @@ class NavierTwinWebApp:
 
                     # 라벨은 입력 종류에 따라 바뀐다 (t vs 운전조건). VBtn 의
                     # 첫 위치 인자는 텍스트 child 라 바인딩이 안 되므로 mustache 로.
-                    with v3.VBtn(
-                        click=self.ctrl.nt_model_train,
-                        color="primary",
-                        block=True,
-                        classes="mt-2",
-                        disabled=("(!nt_has_timesteps && !nt_case_mode) || nt_busy",),
-                        prepend_icon="mdi-cog-sync-outline",
+                    with html.Div(
+                        classes="d-flex align-center mt-2",
                         v_show=("nt_model_method !== 'operator'",),
                     ):
-                        html.Span(
-                            "{{ nt_case_mode ? '모델 학습 (운전조건→필드)' "
-                            ": '모델 학습 (시간→필드)' }}"
+                        with v3.VBtn(
+                            click=self.ctrl.nt_model_train,
+                            color="primary",
+                            block=True,
+                            disabled=(
+                                "(!nt_has_timesteps && !nt_case_mode) || nt_busy",
+                            ),
+                            prepend_icon="mdi-cog-sync-outline",
+                            classes="flex-grow-1",
+                        ):
+                            html.Span(
+                                "{{ nt_case_mode ? '모델 학습 (운전조건→필드)' "
+                                ": '모델 학습 (시간→필드)' }}"
+                            )
+                        # 버튼이 비활성일 때가 바로 이 설명이 필요한 순간이므로,
+                        # 아이콘은 버튼 밖에 둔다 (disabled 는 hover 가 죽는다).
+                        self._tip(
+                            "{{ nt_case_mode "
+                            "? '케이스 세트의 운전조건으로 학습합니다.' "
+                            ": '2개 이상 타임스텝이 필요합니다.' }} "
+                            "모드 수는 ⑤부가 분석의 슬라이더와 공유합니다."
                         )
+                    # "케이스 N개로 학습" 은 상태(무엇으로 학습하는지)라 남긴다.
                     html.Div(
-                        "2개 이상 타임스텝이 필요합니다 (모드 수는 ⑤부가 분석 슬라이더 공유).",
-                        classes="text-caption text-disabled mt-1",
-                        v_show=("nt_model_method !== 'operator' && !nt_case_mode",),
-                    )
-                    html.Div(
-                        "케이스 {{ nt_case_count }}개로 학습합니다 "
-                        "(모드 수는 ⑤부가 분석 슬라이더 공유).",
+                        "케이스 {{ nt_case_count }}개로 학습합니다.",
                         classes="text-caption text-disabled mt-1",
                         v_show=("nt_model_method !== 'operator' && nt_case_mode",),
                     )
@@ -2836,27 +2889,32 @@ class NavierTwinWebApp:
                         "자동 비교 (리더보드)",
                         classes="text-caption text-disabled mb-1",
                     )
-                    v3.VBtn(
-                        "전체 방식 비교",
-                        click=self.ctrl.nt_run_compare,
-                        variant="tonal",
-                        color="primary",
-                        block=True,
-                        disabled=("!nt_has_timesteps || nt_case_mode || nt_busy",),
-                        prepend_icon="mdi-table-search",
-                    )
-                    html.Div(
-                        "ROM 조합(POD×RBF/Kriging) + Physics AI 를 RMSE·R²·"
-                        "지연시간으로 순위 비교합니다 (모드 수는 ⑤부가 분석 공유).",
-                        classes="text-caption text-disabled mt-1",
-                        v_show=("!nt_case_mode",),
-                    )
-                    html.Div(
-                        "케이스 세트(파라미터 스윕)의 자동 비교는 아직 지원하지 "
-                        "않습니다 — 방식을 바꿔가며 직접 학습해 비교하세요.",
-                        classes="text-caption text-disabled mt-1",
-                        v_show=("nt_case_mode",),
-                    )
+                    with html.Div(classes="d-flex align-center"):
+                        v3.VBtn(
+                            "전체 방식 비교",
+                            click=self.ctrl.nt_run_compare,
+                            variant="tonal",
+                            color="primary",
+                            block=True,
+                            disabled=("!nt_has_timesteps || nt_case_mode || nt_busy",),
+                            prepend_icon="mdi-table-search",
+                            classes="flex-grow-1",
+                        )
+                        # 케이스 세트에서는 버튼이 비활성이라 "왜 안 되는지"를
+                        # 알려주는 게 이 아이콘의 존재 이유다 — 그래서 ⚠.
+                        self._tip(
+                            "ROM 조합(POD×RBF/Kriging) + Physics AI 를 RMSE·R²·"
+                            "지연시간으로 순위 비교합니다 (모드 수는 ⑤부가 분석 "
+                            "공유).",
+                            v_show_expr="!nt_case_mode",
+                        )
+                        self._tip(
+                            "케이스 세트(파라미터 스윕)의 자동 비교는 아직 지원하지 "
+                            "않습니다 — ②Model 에서 방식을 바꿔가며 직접 학습해 "
+                            "비교하세요.",
+                            warn=True,
+                            v_show_expr="nt_case_mode",
+                        )
                     with v3.VCard(
                         variant="tonal", classes="mt-2", v_show=("nt_compare_summary",)
                     ):
@@ -2945,9 +3003,12 @@ class NavierTwinWebApp:
                             )
                             # 출력 격자 자유화(M3) — Physics AI(신경장)만 가능.
                             v3.VDivider(classes="my-3")
-                            html.Div(
+                            self._tip_row(
                                 "출력 격자",
-                                classes="text-caption text-disabled mb-1",
+                                "신경장(Physics AI)은 좌표를 입력으로 받아 학습 "
+                                "격자에 묶이지 않습니다 — 더 촘촘한 격자나 다른 "
+                                "메쉬 파일에 그대로 예측할 수 있습니다. ROM 은 "
+                                "POD 모드가 학습 메쉬에 묶여 불가합니다.",
                             )
                             html.Div(
                                 "현재: {{ nt_predict_mesh_name || '학습 격자' }}",
@@ -2969,13 +3030,6 @@ class NavierTwinWebApp:
                                 classes="mt-1",
                                 v_show=("nt_predict_mesh_name",),
                                 prepend_icon="mdi-undo",
-                            )
-                            html.Div(
-                                "신경장(Physics AI)은 좌표를 입력으로 받아 학습 "
-                                "격자에 묶이지 않습니다 — 더 촘촘한 격자나 다른 "
-                                "메쉬 파일에 그대로 예측할 수 있습니다. ROM 은 "
-                                "POD 모드가 학습 메쉬에 묶여 불가합니다.",
-                                classes="text-caption text-disabled mt-1",
                             )
 
             # 4) Export
@@ -3065,31 +3119,32 @@ class NavierTwinWebApp:
             # 새로 만든다) — 근거·판단: .omc/plans/model-taxonomy-plan.md §9.
             with v3.VExpansionPanel(title="⑤ 부가 분석 (선택)"):
                 with v3.VExpansionPanelText():
-                    html.Div(
-                        "②Model 트윈 학습에는 필요 없는 진단 도구입니다 — "
-                        "유동장을 더 깊이 들여다보고 싶을 때만 쓰세요.",
-                        classes="text-caption text-disabled mb-2",
-                    )
-                    html.Div("와류 식별 (Vortex ID)", classes="text-subtitle-2 mb-1")
+                    with html.Div(classes="d-flex align-center mb-1"):
+                        html.Span("와류 식별 (Vortex ID)", classes="text-subtitle-2")
+                        self._tip(
+                            "②Model 트윈 학습에는 필요 없는 진단 도구입니다 — "
+                            "유동장을 더 깊이 들여다보고 싶을 때만 쓰세요."
+                        )
                     v3.VSelect(
                         v_model=("nt_method",),
                         items=("nt_method_choices",),
                         label="기법",
                         density="compact",
                     )
-                    v3.VBtn(
-                        "분석 실행",
-                        click=self.ctrl.nt_run_analysis,
-                        color="primary",
-                        block=True,
-                        classes="mt-2",
-                        disabled=("!nt_has_dataset || nt_busy",),
-                        prepend_icon="mdi-tornado",
-                    )
-                    html.Div(
-                        "속도장 'U' 가 필요합니다 (Q-criterion / λ₂).",
-                        classes="text-caption text-disabled mt-2",
-                    )
+                    with html.Div(classes="d-flex align-center mt-2"):
+                        v3.VBtn(
+                            "분석 실행",
+                            click=self.ctrl.nt_run_analysis,
+                            color="primary",
+                            block=True,
+                            disabled=("!nt_has_dataset || nt_busy",),
+                            prepend_icon="mdi-tornado",
+                            classes="flex-grow-1",
+                        )
+                        self._tip(
+                            "속도장 'U' 가 필요합니다 (Q-criterion / λ₂).",
+                            warn=True,
+                        )
                     v3.VDivider(classes="my-3")
                     html.Div("FFT / PSD (시계열 주파수 분석)", classes="text-caption mb-1")
                     v3.VSelect(
@@ -3212,20 +3267,24 @@ class NavierTwinWebApp:
             # 흡수됨 — 근거: .omc/plans/model-taxonomy-plan.md §8.
             with v3.VExpansionPanel(title="⑥ 연산자 랩 (Benchmark Lab)"):
                 with v3.VExpansionPanelText():
-                    html.Div(
-                        "로드한 데이터와 무관한 표준 벤치마크 문제(Burgers/열전도/"
-                        "공동 유동)로 신경 연산자(FNO)를 실험하는 공간입니다. "
-                        "내 데이터 모델 비교는 ②Model 의 '자동 비교'를 쓰세요.",
-                        classes="text-caption text-disabled mb-2",
-                    )
-                    # A) 데이터 소스
-                    v3.VSelect(
-                        v_model=("nt_bench_kind",),
-                        items=("nt_bench_choices",),
-                        label="내장 벤치마크",
-                        density="compact",
-                        hide_details=True,
-                    )
+                    # A) 데이터 소스 — 로드한 데이터와 무관하다는 점이 이 패널의
+                    # 가장 큰 오해 지점이라 ⚠ 로 남긴다.
+                    with html.Div(classes="d-flex align-center"):
+                        v3.VSelect(
+                            v_model=("nt_bench_kind",),
+                            items=("nt_bench_choices",),
+                            label="내장 벤치마크",
+                            density="compact",
+                            hide_details=True,
+                            classes="flex-grow-1",
+                        )
+                        self._tip(
+                            "로드한 데이터와 무관한 표준 벤치마크 문제(Burgers/"
+                            "열전도/공동 유동)로 신경 연산자(FNO)를 실험하는 "
+                            "공간입니다. 내 데이터 모델 비교는 ②Model 의 "
+                            "'자동 비교'를 쓰세요.",
+                            warn=True,
+                        )
                     with v3.VRow(classes="mt-1", dense=True):
                         with v3.VCol(cols=6):
                             v3.VTextField(
@@ -3275,20 +3334,20 @@ class NavierTwinWebApp:
                     # B) 연산자 학습
                     v3.VDivider(classes="my-3")
                     # FNO 구현 선택 — 같은 계약이라 동일 조건으로 직접 비교된다.
-                    v3.VSelect(
-                        v_model=("nt_bench_backend",),
-                        items=("nt_bench_backend_choices",),
-                        label="FNO 구현",
-                        density="compact",
-                        hide_details=True,
-                        classes="mb-2",
-                    )
-                    html.Div(
-                        "neuraloperator 는 FNO 논문 저자들이 유지하는 레퍼런스 "
-                        "구현입니다. 같은 벤치·하이퍼파라미터로 자체 구현과 "
-                        "바꿔가며 비교할 수 있습니다.",
-                        classes="text-caption text-disabled mb-2",
-                    )
+                    with html.Div(classes="d-flex align-center mb-2"):
+                        v3.VSelect(
+                            v_model=("nt_bench_backend",),
+                            items=("nt_bench_backend_choices",),
+                            label="FNO 구현",
+                            density="compact",
+                            hide_details=True,
+                            classes="flex-grow-1",
+                        )
+                        self._tip(
+                            "neuraloperator 는 FNO 논문 저자들이 유지하는 레퍼런스 "
+                            "구현입니다. 같은 벤치·하이퍼파라미터로 자체 구현과 "
+                            "바꿔가며 비교할 수 있습니다."
+                        )
                     with v3.VRow(dense=True):
                         with v3.VCol(cols=4):
                             v3.VTextField(
