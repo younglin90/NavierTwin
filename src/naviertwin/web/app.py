@@ -153,7 +153,7 @@ class NavierTwinWebApp:
 
         # Model — 방식 우선(method-first) 2단 선택.
         # 문헌 4계열 중 웹 노출분: "rom"(Ⓐ 축소+보간) | "physics"(Ⓑ 직접 회귀)
-        # | "operator"(Ⓒ 신경 연산자 — ⑧Bench 로 연결). 분류 근거는
+        # | "operator"(Ⓒ 신경 연산자 — ⑥연산자 랩 으로 연결). 분류 근거는
         # .omc/plans/model-taxonomy-plan.md 참조.
         st.nt_model_method = "rom"
         st.nt_method_hint = ""  # 데이터 로드 시 service.recommend_method 결과
@@ -169,7 +169,7 @@ class NavierTwinWebApp:
         ]
         st.nt_model_ready = False
         st.nt_model_summary = ""
-        # surrogate="physicsnemo" 로 학습된 엔진인지 — ⑥Export 의 "PhysicsNeMo
+        # surrogate="physicsnemo" 로 학습된 엔진인지 — ⑤Export 의 "PhysicsNeMo
         # Module" 버튼(실제 physicsnemo 패키지로 감싸기)은 이때만 의미가 있다.
         st.nt_physics_ready = False
         # Model — Physics AI (NVIDIA PhysicsNeMo) 학습 파라미터. POD reducer 없이
@@ -537,7 +537,7 @@ class NavierTwinWebApp:
     def view_pod_mode(self) -> None:
         """학습된 POD 모드 형상을 3D 뷰어에 표시한다."""
         if self.dataset is None or self.reducer is None:
-            self._fail("POD 없음", RuntimeError("먼저 ③Reduce 에서 POD 를 실행하세요."))
+            self._fail("POD 없음", RuntimeError("먼저 ②부가 분석에서 POD 를 실행하세요."))
             return
         try:
             index = max(0, min(int(self.state.nt_pod_mode or 0), int(self.state.nt_pod_max_mode or 0)))
@@ -551,7 +551,7 @@ class NavierTwinWebApp:
     def show_energy_chart(self) -> None:
         """POD 특이값 + 누적 에너지 스펙트럼을 차트 모달로 표시한다."""
         if not self._pod_result:
-            self._fail("POD 없음", RuntimeError("먼저 ③Reduce 에서 POD 를 실행하세요."))
+            self._fail("POD 없음", RuntimeError("먼저 ②부가 분석에서 POD 를 실행하세요."))
             return
         try:
             self._show_chart(
@@ -706,11 +706,11 @@ class NavierTwinWebApp:
         return self._figure_to_uri(fig)
 
     def build_twin(self) -> None:
-        """④Model — 선택한 방식으로 (시간→필드) 트윈을 학습한다.
+        """③Model — 선택한 방식으로 (시간→필드) 트윈을 학습한다.
 
         ``nt_model_method`` 로 디스패치한다: "physics" 는 POD reducer 없이
         좌표+시간→필드를 직접 학습(:meth:`_build_physics_twin`), "operator" 는
-        ⑧AI Bench 안내, 기본("rom")은 POD reducer + 계수 회귀(rbf/kriging).
+        ⑥연산자 랩 안내, 기본("rom")은 POD reducer + 계수 회귀(rbf/kriging).
         """
         if self.dataset is None:
             self._fail("데이터 없음", RuntimeError("먼저 데이터를 로드하세요."))
@@ -724,7 +724,7 @@ class NavierTwinWebApp:
         if method == "operator":
             self._fail(
                 "신경 연산자",
-                RuntimeError("신경 연산자(FNO) 학습은 ⑧AI Bench 패널에서 실행하세요."),
+                RuntimeError("신경 연산자(FNO) 학습은 ⑥연산자 랩 패널에서 실행하세요."),
             )
             return
         field = self._base_field()
@@ -753,16 +753,16 @@ class NavierTwinWebApp:
                 self.state.nt_twin_param = 0.5 * (pmin + pmax)
                 self.state.nt_twin_step = max((pmax - pmin) / 100.0, 1e-6)
                 self.state.nt_twin_summary = summary
-            self._set_status(f"모델 학습 완료: {reducer}+{surrogate}. ⑤Twin 에서 예측하세요.")
+            self._set_status(f"모델 학습 완료: {reducer}+{surrogate}. ④Twin 에서 예측하세요.")
         except Exception as exc:  # noqa: BLE001
             self._fail("모델 학습 실패", exc)
 
     def _build_physics_twin(self) -> None:
-        """④Model — NVIDIA PhysicsNeMo 스타일 직접 필드 예측 모델을 학습한다.
+        """③Model — NVIDIA PhysicsNeMo 스타일 직접 필드 예측 모델을 학습한다.
 
         POD reducer 없이 (좌표+시간) → 필드를 곧장 학습하는 PyTorch MLP.
         결과 엔진은 ``predict()``만 노출하는 TwinEngine 과 같은 계약이라
-        ⑤Twin/⑥Export 는 수정 없이 그대로 재사용된다.
+        ④Twin/⑤Export 는 수정 없이 그대로 재사용된다.
         """
         field = self._base_field()
         try:
@@ -791,7 +791,7 @@ class NavierTwinWebApp:
                 self.state.nt_twin_param = 0.5 * (pmin + pmax)
                 self.state.nt_twin_step = max((pmax - pmin) / 100.0, 1e-6)
                 self.state.nt_twin_summary = summary
-            self._set_status("PhysicsNeMo 모델 학습 완료. ⑤Twin 에서 예측하세요.")
+            self._set_status("PhysicsNeMo 모델 학습 완료. ④Twin 에서 예측하세요.")
         except Exception as exc:  # noqa: BLE001
             self._fail("PhysicsNeMo 학습 실패", exc)
 
@@ -1154,7 +1154,7 @@ class NavierTwinWebApp:
 
     def export_engine(self) -> None:
         if self.engine is None:
-            self._fail("모델 없음", RuntimeError("먼저 ④Model 에서 학습하세요."))
+            self._fail("모델 없음", RuntimeError("먼저 ③Model 에서 학습하세요."))
             return
         try:
             path = service.save_engine(self.engine, self._export_path("engine.pkl"))
@@ -1165,7 +1165,7 @@ class NavierTwinWebApp:
     def export_physicsnemo(self) -> None:
         """학습된 Physics AI 모델을 표준 PhysicsNeMo Module 체크포인트로 저장한다."""
         if self.engine is None:
-            self._fail("모델 없음", RuntimeError("먼저 ④Model 에서 PhysicsNeMo를 학습하세요."))
+            self._fail("모델 없음", RuntimeError("먼저 ③Model 에서 PhysicsNeMo를 학습하세요."))
             return
         try:
             path = service.export_physicsnemo_module(
@@ -1614,18 +1614,19 @@ class NavierTwinWebApp:
         return layout
 
     def _build_pipeline_strip(self, v3: Any, html: Any) -> None:
-        """드로어 상단 7단계 워크플로우 진행 칩 — 완료 시 초록/체크, 클릭 시 해당 패널 열기.
+        """드로어 상단 6단계 워크플로우 진행 칩 — 완료 시 초록/체크, 클릭 시 해당 패널 열기.
 
-        구 ⑦Compare 는 ④Model 의 "자동 비교" 섹션으로 흡수되어 칩에서 빠졌다.
+        구 ⑦Compare 는 ③Model 의 "자동 비교" 섹션으로, 구 ②Analyze/③Reduce 는
+        하나의 "부가 분석(선택)" 패널로 흡수됐다 — 근거:
+        .omc/plans/model-taxonomy-plan.md §9 (핵심 트윈 파이프라인 vs 보조 진단).
         """
         stages = [
             ("①", "Import", "nt_has_dataset", 0),
-            ("②", "Analyze", "nt_analysis_done", 1),
-            ("③", "Reduce", "nt_pod_done", 2),
-            ("④", "Model", "nt_model_ready || !!nt_compare_summary", 3),
-            ("⑤", "Twin", "nt_twin_ready", 4),
-            ("⑥", "Export", "!!nt_export_last", 5),
-            ("⑦", "Lab", "nt_bench_trained", 6),
+            ("②", "분석", "nt_analysis_done || nt_pod_done", 1),
+            ("③", "Model", "nt_model_ready || !!nt_compare_summary", 2),
+            ("④", "Twin", "nt_twin_ready", 3),
+            ("⑤", "Export", "!!nt_export_last", 4),
+            ("⑥", "Lab", "nt_bench_trained", 5),
         ]
         with v3.VSheet(color="transparent", classes="d-flex flex-wrap ga-1 px-3 pt-3 pb-1"):
             for num, name, done, idx in stages:
@@ -1695,9 +1696,18 @@ class NavierTwinWebApp:
                                 density="compact",
                             )
 
-            # 2) Analyze
-            with v3.VExpansionPanel(title="② Analyze (와류 식별)"):
+            # 2) 부가 분석 (선택) — 구 ②Analyze + ③Reduce 통합.
+            # 둘 다 ④Model 학습과 무관한 진단/탐색 도구다 (build_twin() 은
+            # nt_analysis_done/nt_pod_done 을 참조하지 않고 POD 를 내부에서
+            # 새로 만든다) — 근거·판단: .omc/plans/model-taxonomy-plan.md §9.
+            with v3.VExpansionPanel(title="② 부가 분석 (선택)"):
                 with v3.VExpansionPanelText():
+                    html.Div(
+                        "③Model 트윈 학습에는 필요 없는 진단 도구입니다 — "
+                        "유동장을 더 깊이 들여다보고 싶을 때만 쓰세요.",
+                        classes="text-caption text-disabled mb-2",
+                    )
+                    html.Div("와류 식별 (Vortex ID)", classes="text-subtitle-2 mb-1")
                     v3.VSelect(
                         v_model=("nt_method",),
                         items=("nt_method_choices",),
@@ -1773,9 +1783,8 @@ class NavierTwinWebApp:
                         v_show=("nt_fft_summary",),
                     )
 
-            # 3) Reduce
-            with v3.VExpansionPanel(title="③ Reduce (POD)"):
-                with v3.VExpansionPanelText():
+                    v3.VDivider(classes="my-3")
+                    html.Div("POD 진단 (모드 에너지)", classes="text-subtitle-2 mb-1")
                     v3.VSlider(
                         v_model=("nt_n_modes",),
                         label="모드 수",
@@ -1835,9 +1844,9 @@ class NavierTwinWebApp:
                                 prepend_icon="mdi-waveform",
                             )
 
-            # 4) Model — 방식 우선(method-first) 2단 선택.
+            # 3) Model — 방식 우선(method-first) 2단 선택.
             # 계열 분류/근거: .omc/plans/model-taxonomy-plan.md
-            with v3.VExpansionPanel(title="④ Model (트윈 학습)"):
+            with v3.VExpansionPanel(title="③ Model (트윈 학습)"):
                 with v3.VExpansionPanelText():
                     html.Div("모델 방식", classes="text-caption text-disabled mb-1")
                     method_cards = [
@@ -1907,7 +1916,7 @@ class NavierTwinWebApp:
                     with html.Div(v_show=("nt_model_method === 'physics'",)):
                         html.Div(
                             "POD reducer 없이 좌표+시간을 필드로 직접 매핑합니다 "
-                            "(torch 만으로 학습 — physicsnemo 패키지는 ⑥Export "
+                            "(torch 만으로 학습 — physicsnemo 패키지는 ⑤Export "
                             "모듈 저장에만 필요).",
                             classes="text-caption text-disabled mt-1 mb-1",
                         )
@@ -1933,18 +1942,18 @@ class NavierTwinWebApp:
                             classes="mt-2",
                         )
 
-                    # Ⓒ 신경 연산자: ⑦연산자 랩으로 안내 (로드 데이터 직학습은 P4)
+                    # Ⓒ 신경 연산자: ⑥연산자 랩으로 안내 (로드 데이터 직학습은 P4)
                     with html.Div(v_show=("nt_model_method === 'operator'",)):
                         html.Div(
                             "신경 연산자는 다수 샘플(수백+)·균일 격자 데이터에 "
                             "적합합니다 (균일 격자: FNO — 탑재됨 · 기하 인지: "
-                            "GNN/GINO — 예정). 현재는 ⑦연산자 랩의 표준 벤치마크 "
+                            "GNN/GINO — 예정). 현재는 ⑥연산자 랩의 표준 벤치마크 "
                             "문제로 학습할 수 있습니다.",
                             classes="text-caption text-disabled mt-1 mb-1",
                         )
                         v3.VBtn(
-                            "⑦ 연산자 랩 열기",
-                            click="nt_open_panels = [6]",
+                            "⑥ 연산자 랩 열기",
+                            click="nt_open_panels = [5]",
                             variant="tonal",
                             block=True,
                             classes="mt-1",
@@ -1962,7 +1971,7 @@ class NavierTwinWebApp:
                         v_show=("nt_model_method !== 'operator'",),
                     )
                     html.Div(
-                        "2개 이상 타임스텝이 필요합니다 (모드 수는 ③Reduce 슬라이더 공유).",
+                        "2개 이상 타임스텝이 필요합니다 (모드 수는 ②부가 분석 슬라이더 공유).",
                         classes="text-caption text-disabled mt-1",
                         v_show=("nt_model_method !== 'operator'",),
                     )
@@ -1988,7 +1997,7 @@ class NavierTwinWebApp:
                     )
                     html.Div(
                         "ROM 조합(POD×RBF/Kriging) + Physics AI 를 RMSE·R²·"
-                        "지연시간으로 순위 비교합니다 (모드 수는 ③Reduce 공유).",
+                        "지연시간으로 순위 비교합니다 (모드 수는 ②부가 분석 공유).",
                         classes="text-caption text-disabled mt-1",
                     )
                     with v3.VCard(
@@ -2005,10 +2014,10 @@ class NavierTwinWebApp:
                             )
 
             # 5) Twin
-            with v3.VExpansionPanel(title="⑤ Twin (시간→필드 예측)"):
+            with v3.VExpansionPanel(title="④ Twin (시간→필드 예측)"):
                 with v3.VExpansionPanelText():
                     html.Div(
-                        "먼저 ④Model 에서 학습하세요.",
+                        "먼저 ③Model 에서 학습하세요.",
                         classes="text-caption text-disabled",
                         v_show=("!nt_twin_ready",),
                     )
@@ -2038,7 +2047,7 @@ class NavierTwinWebApp:
                             )
 
             # 6) Export
-            with v3.VExpansionPanel(title="⑥ Export (저장)"):
+            with v3.VExpansionPanel(title="⑤ Export (저장)"):
                 with v3.VExpansionPanelText():
                     v3.VTextField(
                         v_model=("nt_export_dir",),
@@ -2114,15 +2123,15 @@ class NavierTwinWebApp:
                         with v3.VCardText(classes="text-caption"):
                             html.Div("최근 저장: {{ nt_export_last }}")
 
-            # 7) 연산자 랩 (구 ⑧ AI Bench) — 표준 벤치마크 문제 실험실.
-            # ⑦Compare(내 데이터 모델 선정)는 ④Model 의 "자동 비교" 섹션으로
+            # 6) 연산자 랩 (구 ⑧ AI Bench) — 표준 벤치마크 문제 실험실.
+            # 구 ⑦Compare(내 데이터 모델 선정)는 ③Model 의 "자동 비교" 섹션으로
             # 흡수됨 — 근거: .omc/plans/model-taxonomy-plan.md §8.
-            with v3.VExpansionPanel(title="⑦ 연산자 랩 (Benchmark Lab)"):
+            with v3.VExpansionPanel(title="⑥ 연산자 랩 (Benchmark Lab)"):
                 with v3.VExpansionPanelText():
                     html.Div(
                         "로드한 데이터와 무관한 표준 벤치마크 문제(Burgers/열전도/"
                         "공동 유동)로 신경 연산자(FNO)를 실험하는 공간입니다. "
-                        "내 데이터 모델 비교는 ④Model 의 '자동 비교'를 쓰세요.",
+                        "내 데이터 모델 비교는 ③Model 의 '자동 비교'를 쓰세요.",
                         classes="text-caption text-disabled mb-2",
                     )
                     # A) 데이터 소스

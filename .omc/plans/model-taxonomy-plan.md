@@ -201,7 +201,7 @@ n_steps < 50 (단일 시계열)         → Ⓐ 권장
 
 | 계열 | 사실상 표준 | 우리가 차용할 것 |
 |---|---|---|
-| ROM | pyMOR(346★), **EZyRB**(mathLab) | EZyRB 의  분해 = 우리 Ⓐ와 동일 → "EZyRB 호환 워크플로우" 표기 가능 |
+| ROM | pyMOR(346★), **EZyRB**(mathLab) | EZyRB 의 Reduction × Approximation 분해 = 우리 Ⓐ와 동일 → "EZyRB 호환 워크플로우" 표기 가능 |
 | 서로게이트/UQ | SMT 2.x(897★), GPyTorch/BoTorch | SMT 식 능력 매트릭스 표(모델×정상/과도·메쉬·데이터규모) |
 | 신경 연산자 | **neuraloperator**(3.8k★), **PhysicsNeMo**(3.1k★) | "Model Zoo" 명칭, 해상도 불변 태그. PhysicsNeMo v2 는 Solver/Constraint 추상화 통합 |
 | PINN | DeepXDE(4.3k★), **PINA**(mathLab) | PINA 의 Problem/Model/Solver 축 — 아키텍처와 학습전략 분리 |
@@ -256,3 +256,48 @@ Sci. 2022 · Wang et al. arXiv:2408.12171 (ML-for-CFD 서베이) · Li et al. GI
 NeurIPS 2023 · Herde et al. Poseidon NeurIPS 2024 · Elrefaie et al.
 DrivAerNet++ NeurIPS 2024 · Kapteyn & Willcox Nat. Comput. Sci. 2021 ·
 arXiv:2504.06699 (산업 공력 CNN vs GNN 벤치마크)
+
+---
+
+# v3 — 핵심 파이프라인 vs 보조 진단 분리 (2026-07-17)
+
+사용자 지적: "Analyze/Reduce 는 트윈 생성의 메인 방법이 아니지 않냐 — 부수적
+분석이니 서브섹션으로 빼도 되지 않냐?" → 코드로 검증 후 확정.
+
+## 9. 검증 — ②Analyze/③Reduce는 ④Model 학습과 완전히 비결합
+
+`app.py::build_twin()` / `service.build_twin()` 모두 `nt_analysis_done`,
+`nt_pod_done`, `self._pod_result` 를 전혀 참조하지 않는다. 학습 시 POD reducer
+를 **내부에서 처음부터 새로 생성**한다 (`TwinEngine(reducer_type=..., n_modes=...)`
+→ `.fit()`). ③Reduce 패널에서 실행한 POD 결과(에너지 차트, 모드 뷰어)는 학습에
+전혀 재사용되지 않는 **진단 전용 사이드바**였다 — 공유되는 것은 `nt_n_modes`
+슬라이더 값 하나뿐. ②Analyze(와류 식별/FFT)도 마찬가지로 완전히 독립.
+
+사용자 판단이 정확했음을 코드가 확인시켜준다: 핵심 트윈 파이프라인은
+**Import → Model → Twin → Export** 4단계뿐이고, Analyze/Reduce/연산자 랩은
+전부 보조 도구다.
+
+## 10. 조치 — 6패널로 정리
+
+```
+① Import
+② 부가 분석 (선택)         ← 구 ②Analyze + ③Reduce 통합, 캡션으로 "학습에
+                              필요 없다" 명시. 내부는 "와류 식별" / "POD 진단"
+                              두 서브섹션(구분선+소제목)으로 구성.
+③ Model (트윈 학습)         ← 핵심. 자동 비교 리더보드 포함(v2 P2).
+④ Twin (예측)               ← 핵심.
+⑤ Export (저장)             ← 핵심.
+⑥ 연산자 랩 (Benchmark Lab) ← 보조. 표준 문제 실험실.
+```
+
+파이프라인 칩도 6개로: "② 분석" 칩은 `nt_analysis_done || nt_pod_done` 중
+하나만 완료돼도 점등(두 진단 중 무엇을 했든 "분석 좀 해봤다"는 신호로 충분).
+
+핵심 4단계와 보조 2단계가 번호상 뒤섞여 있는 점(② 부가분석, ⑥ 연산자 랩)은
+남지만, 정보 구조(부가 분석을 하나로 묶고 캡션으로 "선택사항" 명시)로 우선순위
+차이를 전달했다. 완전한 시각적 분리(핵심 섹션 vs 보조 섹션 그룹 헤더)는 필요시
+후속 조치로 고려.
+
+검증: 브라우저에서 6패널/6칩 렌더, POD→Model→연산자 랩 점프 링크(버그 발견해
+수정: 점프 대상이 ⑤Export 를 가리키던 것을 ⑥연산자 랩 index[5]로 정정) 확인,
+웹 테스트 91개 통과.

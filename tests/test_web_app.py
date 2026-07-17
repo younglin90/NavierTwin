@@ -140,7 +140,7 @@ def test_build_twin_dispatches_by_model_method() -> None:
     # operator 방식은 ⑧Bench 안내 에러를 낸다 (버튼은 UI 에서 숨겨지지만 방어).
     st.nt_model_method = "operator"
     app.build_twin()
-    assert "AI Bench" in st.nt_error
+    assert "연산자 랩" in st.nt_error
 
 
 def test_build_twin_legacy_physicsnemo_surrogate_shim() -> None:
