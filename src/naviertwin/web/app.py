@@ -140,6 +140,10 @@ class NavierTwinWebApp:
         st.nt_case_names = []
         st.nt_params_source = ""
         st.nt_param_names = []
+        # 케이스 세트에는 시간축이 없으므로 타임스텝 슬라이더 대신 케이스
+        # 슬라이더로 케이스별 결과를 본다 (뷰어만 교체 — 학습 상태 보존).
+        st.nt_case_index = 0
+        st.nt_case_labels = []
         # 형상 가변(M4a): 케이스 메쉬가 서로 다르면 공통 격자로 재샘플했다는 표시.
         st.nt_case_resampled = False
         st.nt_case_grid_summary = ""
@@ -349,6 +353,8 @@ class NavierTwinWebApp:
         self.state.change("nt_field", "nt_cmap", "nt_show_edges", "nt_timestep")(
             self._on_view_state_change
         )
+        # 케이스 슬라이더 — 시간축이 없는 케이스 세트의 "타임스텝" 역할.
+        self.state.change("nt_case_index")(self.select_case)
 
     def _get_executor(self) -> Any:
         if self._executor is None:
@@ -525,6 +531,12 @@ class NavierTwinWebApp:
             self.state.nt_case_names = list(result["case_names"])
             self.state.nt_params_source = str(result["params_source"])
             self.state.nt_param_names = names
+            self.state.nt_case_index = 0
+            # 케이스별 운전조건 문구 — 슬라이더로 넘길 때 무엇을 보는지 알려준다.
+            self.state.nt_case_labels = [
+                ", ".join(f"{n}={float(v):.4g}" for n, v in zip(names, row))
+                for row in params
+            ]
             self.state.nt_case_resampled = resampled
             self.state.nt_case_grid_summary = grid_summary
             # 케이스 세트는 시계열이 아니므로 recommend_method(단일 스냅샷)의
@@ -541,6 +553,28 @@ class NavierTwinWebApp:
                 f"스냅샷이 적으면 ROM 이 안정적입니다.{shape_note}"
             )
         self._set_twin_param_ranges(names, mins, maxs)
+
+    def select_case(self, **_kwargs: Any) -> None:
+        """케이스 세트에서 볼 케이스를 바꾼다 — 뷰어만 교체하고 학습 상태는 보존.
+
+        케이스 세트는 시간축이 없어 타임스텝 슬라이더가 못 쓰이므로, 케이스별
+        결과(원본 해)를 이 경로로 본다. ③Twin 예측 결과와 눈으로 비교할 수 있다.
+        """
+        if not self.case_datasets:
+            return
+        index = int(self.state.nt_case_index or 0)
+        index = max(0, min(index, len(self.case_datasets) - 1))
+        labels = list(self.state.nt_case_labels or [])
+        names = list(self.state.nt_case_names or [])
+        detail = labels[index] if index < len(labels) else ""
+        name = names[index] if index < len(names) else f"#{index}"
+        try:
+            self._swap_view_dataset(
+                self.case_datasets[index],
+                status=f"케이스 {index + 1}/{len(self.case_datasets)} — {name} ({detail})",
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._fail("케이스 표시 실패", exc)
 
     def _set_twin_param_ranges(
         self, names: list[str], mins: list[float], maxs: list[float]
@@ -1769,6 +1803,8 @@ class NavierTwinWebApp:
             self.state.nt_case_names = []
             self.state.nt_params_source = ""
             self.state.nt_param_names = []
+            self.state.nt_case_index = 0
+            self.state.nt_case_labels = []
             self.state.nt_case_resampled = False
             self.state.nt_case_grid_summary = ""
             self.state.nt_coarsen_summary = ""
@@ -2411,6 +2447,32 @@ class NavierTwinWebApp:
                                 "{{ nt_coarsen_summary }}",
                                 v_show=("nt_coarsen_summary",),
                                 classes="text-caption text-success mt-1",
+                            )
+                    # 케이스 슬라이더 — 케이스 세트는 시간축이 없어 타임스텝
+                    # 슬라이더 대신 이걸로 케이스별 원본 해를 본다.
+                    with v3.VCard(variant="flat", classes="mt-2", v_show=("nt_case_mode",)):
+                        with v3.VCardText():
+                            html.Div(
+                                "케이스 {{ nt_case_index + 1 }} / {{ nt_case_count }} — "
+                                "{{ nt_case_names[nt_case_index] }}",
+                                classes="text-caption mb-1",
+                            )
+                            html.Div(
+                                "{{ nt_case_labels[nt_case_index] }}",
+                                classes="text-caption text-info mb-1",
+                            )
+                            v3.VSlider(
+                                v_model=("nt_case_index",),
+                                min=0,
+                                max=("nt_case_count - 1",),
+                                step=1,
+                                hide_details=True,
+                                density="compact",
+                            )
+                            html.Div(
+                                "케이스별 원본 해를 봅니다 — ③Twin 예측 결과와 "
+                                "눈으로 비교할 수 있습니다.",
+                                classes="text-caption text-disabled mt-1",
                             )
                     # 타임스텝 슬라이더
                     with v3.VCard(variant="flat", classes="mt-2", v_show=("nt_has_timesteps",)):

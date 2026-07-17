@@ -817,3 +817,56 @@ def test_waves_demo_makes_dmd_usable() -> None:
     app.predict()
     assert st.nt_error == ""
     assert "twin_prediction" in st.nt_fields
+
+
+def test_case_selector_shows_each_case_and_preserves_model() -> None:
+    """케이스 세트: 슬라이더로 케이스별 원본 해를 보되 학습 상태는 유지된다."""
+    import numpy as np
+
+    app = _make_app("nt-test-case-selector")
+    st = app.server.state
+    st.nt_demo_kind = "sweep"
+    app.load_demo()
+    assert st.nt_case_mode is True
+    assert st.nt_case_index == 0
+    # 케이스별 운전조건 문구가 준비된다.
+    assert len(st.nt_case_labels) == st.nt_case_count
+    assert "inlet_velocity=10" in st.nt_case_labels[0]
+
+    app.build_twin()
+    engine = app.engine
+    assert st.nt_model_ready is True
+
+    first = np.asarray(app.dataset.mesh.point_data["p"]).copy()
+
+    # 다른 케이스로 전환 → 실제로 다른 장이 보여야 한다.
+    st.nt_case_index = 4
+    app.select_case()
+    assert st.nt_error == ""
+    assert "케이스 5/5" in st.nt_status
+    assert "inlet_velocity=30" in st.nt_status
+    last = np.asarray(app.dataset.mesh.point_data["p"])
+    assert not np.allclose(first, last), "케이스를 바꿔도 장이 같다"
+
+    # 뷰어만 바뀌고 학습 상태(엔진/케이스 모드)는 보존된다.
+    assert app.engine is engine
+    assert st.nt_case_mode is True
+    assert st.nt_model_ready is True
+    assert st.nt_case_count == 5
+
+    # 범위를 벗어난 인덱스는 클램프된다.
+    st.nt_case_index = 99
+    app.select_case()
+    assert st.nt_error == ""
+    assert "케이스 5/5" in st.nt_status
+
+
+def test_case_selector_noop_without_case_set() -> None:
+    """시계열 데이터에서는 케이스 선택이 아무 일도 하지 않는다."""
+    app = _make_app("nt-test-case-selector-noop")
+    st = app.server.state
+    app.load_demo()
+    before = st.nt_status
+    app.select_case()
+    assert st.nt_status == before
+    assert st.nt_error == ""
