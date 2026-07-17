@@ -208,6 +208,21 @@ class NavierTwinWebApp:
         st.nt_physics_hidden = 32
         st.nt_physics_max_samples = 20_000
 
+        # Model — 계열 Ⓓ 동역학 예보 (PyDMD). 학습 구간 밖 외삽이 가능한 유일
+        # 계열. 적합도(재구성 오차)를 반드시 노출한다 — DMD 는 데이터가 안 맞으면
+        # 조용히 크게 빗나간다. 근거: model-taxonomy-plan.md §20.
+        st.nt_dmd_method = "dmd"
+        st.nt_dmd_choices = [
+            {"title": "DMD (표준)", "value": "dmd"},
+            {"title": "Sparsity-promoting DMD", "value": "spdmd"},
+        ]
+        st.nt_dmd_ready = False
+        st.nt_dmd_fit_error = 0.0
+        st.nt_dmd_summary = ""
+        # 학습 데이터의 t 상한. DMD 는 슬라이더 상한(nt_twin_max)을 이보다 크게
+        # 잡아 외삽을 허용하므로, 이 값을 넘으면 UI 가 경고한다.
+        st.nt_twin_train_max = 1.0
+
         # Twin — 문제 유형 A(시계열)는 스칼라 t 슬라이더 하나,
         # 문제 유형 B(케이스 세트)는 파라미터별 슬라이더 k 개(배열 상태).
         st.nt_twin_ready = False
@@ -914,6 +929,9 @@ class NavierTwinWebApp:
                 RuntimeError("신경 연산자(FNO) 학습은 ⑥연산자 랩 패널에서 실행하세요."),
             )
             return
+        if method == "dynamics":
+            self._build_dmd_twin()
+            return
         if self.state.nt_case_mode:
             self._build_sweep_twin()
             return
@@ -937,15 +955,65 @@ class NavierTwinWebApp:
                 self.state.nt_model_ready = True
                 self.state.nt_model_summary = summary
                 self.state.nt_physics_ready = False
+                self.state.nt_dmd_ready = False
                 self.state.nt_twin_ready = True
                 self.state.nt_twin_min = pmin
                 self.state.nt_twin_max = pmax
+                self.state.nt_twin_train_max = pmax  # 내삽 전용 — 외삽 구간 없음
                 self.state.nt_twin_param = 0.5 * (pmin + pmax)
                 self.state.nt_twin_step = max((pmax - pmin) / 100.0, 1e-6)
                 self.state.nt_twin_summary = summary
             self._set_status(f"모델 학습 완료: {reducer}+{surrogate}. ③Twin 에서 예측하세요.")
         except Exception as exc:  # noqa: BLE001
             self._fail("모델 학습 실패", exc)
+
+    def _build_dmd_twin(self) -> None:
+        """②Model — PyDMD 동역학 트윈을 학습한다 (계열 Ⓓ, 시간 외삽 가능).
+
+        케이스 세트(문제 유형 B)는 시간축이 없어 적용 불가 — 시계열 전용이다.
+        """
+        if self.state.nt_case_mode:
+            self._fail(
+                "동역학 예보",
+                RuntimeError(
+                    "동역학 예보는 시계열 데이터 전용입니다 — 케이스 세트"
+                    "(파라미터 스윕)에는 시간축이 없습니다."
+                ),
+            )
+            return
+        field = self._training_field()
+        method = self.state.nt_dmd_method or "dmd"
+        try:
+            result = service.build_dmd_twin(self.dataset, field, method=method)
+            self.engine = result["engine"]
+            pmin, pmax = result["param_min"], result["param_max"]
+            fmax = result["forecast_max"]
+            err = result["reconstruction_error"]
+            summary = (
+                f"field='{field}', DMD({method}) · 모드 {result['n_modes']}개 · "
+                f"학습 t ∈ [{pmin:.3g}, {pmax:.3g}] · 예보 t ≤ {fmax:.3g}"
+            )
+            with self.state:
+                self.state.nt_model_ready = True
+                self.state.nt_model_summary = summary
+                self.state.nt_physics_ready = False
+                self.state.nt_dmd_ready = True
+                self.state.nt_dmd_fit_error = float(err)
+                self.state.nt_dmd_summary = summary
+                self.state.nt_twin_ready = True
+                self.state.nt_twin_min = pmin
+                # 슬라이더 상한을 학습 구간 밖까지 — 여기가 이 계열의 존재 이유.
+                self.state.nt_twin_max = fmax
+                self.state.nt_twin_train_max = pmax  # 경고 임계 = 학습 t 상한
+                self.state.nt_twin_param = pmax
+                self.state.nt_twin_step = max((fmax - pmin) / 200.0, 1e-6)
+                self.state.nt_twin_summary = summary
+            self._set_status(
+                f"DMD 학습 완료 (재구성 오차 {err * 100:.1f}%). "
+                "③Twin 에서 학습 구간 밖까지 예보하세요."
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._fail("DMD 학습 실패", exc)
 
     def _build_sweep_twin(self) -> None:
         """②Model — 케이스 세트에서 (운전조건 → 필드) ROM 트윈을 학습한다.
@@ -985,6 +1053,7 @@ class NavierTwinWebApp:
                 self.state.nt_model_ready = True
                 self.state.nt_model_summary = summary
                 self.state.nt_physics_ready = False
+                self.state.nt_dmd_ready = False
                 self.state.nt_twin_ready = True
                 self.state.nt_twin_summary = summary
             self._set_twin_param_ranges(names, result["param_mins"], result["param_maxs"])
@@ -1029,7 +1098,9 @@ class NavierTwinWebApp:
                 self.state.nt_model_ready = True
                 self.state.nt_model_summary = summary
                 self.state.nt_physics_ready = True
+                self.state.nt_dmd_ready = False
                 self.state.nt_twin_ready = True
+                self.state.nt_twin_train_max = pmax  # 내삽 전용
                 self.state.nt_twin_min = pmin
                 self.state.nt_twin_max = pmax
                 self.state.nt_twin_param = 0.5 * (pmin + pmax)
@@ -1074,6 +1145,7 @@ class NavierTwinWebApp:
                 self.state.nt_model_ready = True
                 self.state.nt_model_summary = summary
                 self.state.nt_physics_ready = True
+                self.state.nt_dmd_ready = False
                 self.state.nt_twin_ready = True
                 self.state.nt_twin_summary = summary
             self._set_twin_param_ranges(names, result["param_mins"], result["param_maxs"])
@@ -1646,6 +1718,9 @@ class NavierTwinWebApp:
             self.state.nt_model_ready = False
             self.state.nt_model_summary = ""
             self.state.nt_physics_ready = False
+            self.state.nt_dmd_ready = False
+            self.state.nt_dmd_fit_error = 0.0
+            self.state.nt_dmd_summary = ""
             base_fields = [n for n in info["fields"] if not self._is_derived_field(n)]
             default_field = render.preferred_field(base_fields)
             self.state.nt_train_field_choices = base_fields
@@ -2282,6 +2357,12 @@ class NavierTwinWebApp:
                             "함수→함수 · 다수 샘플 · 균일 격자 · ms 추론",
                             "mdi-waveform",
                         ),
+                        (
+                            "dynamics",
+                            "동역학 예보 (DMD)",
+                            "시간 전이 규칙 학습 · 학습 구간 밖 외삽 가능 · PyDMD",
+                            "mdi-chart-bell-curve-cumulative",
+                        ),
                     ]
                     for key, name, subtitle, icon in method_cards:
                         with v3.VCard(
@@ -2373,6 +2454,52 @@ class NavierTwinWebApp:
                             classes="mt-1",
                             prepend_icon="mdi-open-in-app",
                         )
+
+                    # Ⓓ 동역학 예보 (PyDMD) — 학습 구간 밖 외삽이 가능한 유일 계열.
+                    with html.Div(v_show=("nt_model_method === 'dynamics'",)):
+                        # HTML 이라 마크다운(**) 은 렌더되지 않는다 — 강조는 클래스로.
+                        html.Div(
+                            "상태의 시간 전이 규칙을 학습해 학습 구간 밖까지 "
+                            "예보합니다. 유동이 '공간모드 × 고유 주파수'의 저랭크 "
+                            "선형 동역학으로 근사될 때만 맞습니다 — 강한 이류나 "
+                            "불연속(필라멘트 데모 등)에는 부적합하니 학습 후 "
+                            "적합도(재구성 오차)를 반드시 확인하세요.",
+                            classes="text-caption text-disabled mt-1 mb-1",
+                        )
+                        v3.VSelect(
+                            v_model=("nt_dmd_method",),
+                            items=("nt_dmd_choices",),
+                            label="DMD 변형",
+                            density="compact",
+                            classes="mt-1",
+                        )
+                        html.Div(
+                            "모드 수는 PyDMD 가 자동 결정합니다 (실수 진동은 "
+                            "켤레쌍 때문에 물리 모드당 랭크 2가 필요해 수동 지정 시 "
+                            "과소적합되기 쉽습니다).",
+                            classes="text-caption text-disabled mt-1",
+                        )
+                        with v3.VCard(
+                            variant="tonal", classes="mt-2", v_show=("nt_dmd_ready",)
+                        ):
+                            with v3.VCardText(classes="text-caption"):
+                                html.Div("{{ nt_dmd_summary }}")
+                                # 적합도 신호등 — DMD 는 안 맞아도 조용히 틀린다.
+                                html.Div(
+                                    "적합도: 재구성 오차 "
+                                    "{{ (nt_dmd_fit_error * 100).toFixed(1) }}%",
+                                    classes=(
+                                        "nt_dmd_fit_error < 0.1 ? 'text-success mt-1'"
+                                        " : (nt_dmd_fit_error < 0.3 ?"
+                                        " 'text-warning mt-1' : 'text-error mt-1')",
+                                    ),
+                                )
+                                html.Div(
+                                    "재구성 오차가 크면 이 데이터에 DMD 가 맞지 "
+                                    "않는 것입니다 — 예보를 믿지 마세요.",
+                                    v_show=("nt_dmd_fit_error >= 0.3",),
+                                    classes="text-error",
+                                )
 
                     # 라벨은 입력 종류에 따라 바뀐다 (t vs 운전조건). VBtn 의
                     # 첫 위치 인자는 텍스트 child 라 바인딩이 안 되므로 mustache 로.
@@ -2469,6 +2596,20 @@ class NavierTwinWebApp:
                                     step=("nt_twin_step",),
                                     hide_details=True,
                                     density="compact",
+                                    # 외삽 구간에 들어가면 색으로 경고 (DMD 전용).
+                                    color=(
+                                        "nt_dmd_ready && nt_twin_param > "
+                                        "nt_twin_train_max ? 'warning' : 'primary'",
+                                    ),
+                                )
+                                html.Div(
+                                    "⚠ 학습 구간 밖 — 외삽 예보입니다 "
+                                    "(학습 t ≤ {{ nt_twin_train_max }})",
+                                    v_show=(
+                                        "nt_dmd_ready && nt_twin_param > "
+                                        "nt_twin_train_max",
+                                    ),
+                                    classes="text-caption text-warning",
                                 )
                             # 문제 유형 B — 운전조건 슬라이더 k 개.
                             # 배열 원소를 v-model 로 바꾸면 trame 이 dirty 를

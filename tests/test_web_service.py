@@ -864,3 +864,108 @@ def test_resample_is_skipped_when_meshes_match(tmp_path) -> None:
     result = service.load_case_set(tmp_path / "same")
     assert result["resampled"] is False
     assert result["grid_summary"] == ""
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 계열 Ⓓ — DMD 동역학 예보 (PyDMD)
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _dmd_friendly_dataset(n_steps=48):
+    """DMD 가 이론적으로 정확히 맞추는 데이터 — 공간모드 2개 × 고유 주파수.
+
+    각 모드가 자기 주파수/성장률을 갖는 저랭크 선형 동역학(진행파). 실수
+    데이터라 켤레쌍 때문에 실제 랭크는 4 다.
+    """
+    import pyvista as pv
+
+    from naviertwin.core.cfd_reader.base import CFDDataset
+
+    nx, ny = 24, 12
+    grid = pv.ImageData(dimensions=(nx, ny, 1), spacing=(2 * np.pi / (nx - 1), 1.0, 1))
+    coords = np.asarray(grid.points, dtype=float)
+    x = coords[:, 0]
+    times = np.linspace(0.0, 6.0, n_steps)
+    series = np.stack(
+        [
+            np.exp(-0.10 * t) * np.sin(x - 1.3 * t)
+            + np.exp(-0.30 * t) * np.sin(2 * x - 2.7 * t)
+            for t in times
+        ],
+        axis=0,
+    )
+    grid.point_data["p"] = series[0]
+    return CFDDataset(
+        mesh=grid,
+        time_steps=[float(t) for t in times],
+        field_names=["p"],
+        metadata={
+            "source": "dmd_friendly",
+            "time_series_fields": {"p": series},
+            "time_series_locations": {"p": "point"},
+        },
+    )
+
+
+def test_build_dmd_twin_reconstructs_and_reports_fit(_=None) -> None:
+    """적합한 데이터에서 DMD 는 기계 정밀도로 재구성하고 주파수를 복원한다."""
+    ds = _dmd_friendly_dataset()
+    result = service.build_dmd_twin(ds, "p")
+
+    assert result["method"] == "dmd"
+    assert result["reconstruction_error"] < 1e-6
+    assert result["forecast_max"] > result["param_max"]  # 외삽 여유
+    # 참 주파수 1.3/2pi=0.207, 2.7/2pi=0.430 를 복원한다.
+    freqs = sorted({round(abs(f), 3) for f in result["frequencies"]})
+    assert any(abs(f - 0.207) < 0.02 for f in freqs), freqs
+    assert any(abs(f - 0.430) < 0.02 for f in freqs), freqs
+    meta = result["engine"].training_metadata
+    assert meta["problem_type"] == "dynamics_forecast"
+
+
+def test_dmd_twin_forecasts_beyond_training_window() -> None:
+    """계열 Ⓓ의 존재 이유 — 학습에 없던 미래 시간을 실제로 맞춘다."""
+    full = _dmd_friendly_dataset(n_steps=48)
+    series = np.asarray(full.metadata["time_series_fields"]["p"])
+    times = np.asarray(full.time_steps)
+
+    # 앞 절반만 담은 데이터셋으로 학습 → 뒤 절반은 완전히 미지의 구간.
+    from naviertwin.core.cfd_reader.base import CFDDataset
+
+    half = 24
+    train = CFDDataset(
+        mesh=full.mesh.copy(deep=True),
+        time_steps=[float(t) for t in times[:half]],
+        field_names=["p"],
+        metadata={
+            "source": "dmd_friendly",
+            "time_series_fields": {"p": series[:half]},
+            "time_series_locations": {"p": "point"},
+        },
+    )
+    engine = service.build_dmd_twin(train, "p")["engine"]
+
+    future_t = float(times[-1])  # 학습 구간 밖
+    truth = series[-1]
+    pred = service.predict_twin(engine, future_t)
+    rel = float(np.linalg.norm(pred - truth) / np.linalg.norm(truth))
+    assert rel < 1e-3, f"미래 외삽이 부정확: rel={rel}"
+
+
+def test_build_dmd_twin_reports_poor_fit_on_unsuitable_data() -> None:
+    """부적합 데이터(불연속 필라멘트)에서는 재구성 오차가 크게 보고된다.
+
+    DMD 는 안 맞아도 조용히 틀리므로, UI 가 신뢰도를 보여줄 수 있어야 한다.
+    """
+    ds = service.make_demo_dataset(nx=16, ny=16, n_steps=12, kind="filament")
+    result = service.build_dmd_twin(ds, "p")
+    assert result["reconstruction_error"] > 0.1  # 눈에 띄게 나쁨 → UI 경고 대상
+
+
+def test_build_dmd_twin_rejects_bad_input() -> None:
+    single = service.make_demo_dataset(nx=8, ny=8, n_steps=1)
+    with pytest.raises(ValueError, match="2개 이상"):
+        service.build_dmd_twin(single, "p")
+    ds = service.make_demo_dataset(nx=8, ny=8, n_steps=6)
+    with pytest.raises(ValueError, match="지원하지 않는"):
+        service.build_dmd_twin(ds, "p", method="fbdmd")  # 검증 안 된 변형은 차단

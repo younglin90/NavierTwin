@@ -32,9 +32,20 @@ class DMDAnalyzer:
     동적 모드, 고유값(주파수/성장률), 진폭을 추출한다.
 
     Attributes:
-        method: DMD 변형. "dmd" | "fbdmd" | "hodmd" | "spdmd" (기본: "fbdmd").
+        method: DMD 변형. "dmd" | "fbdmd" | "hodmd" | "spdmd" (기본: "dmd").
         dt: 타임스텝 간격 [s].
-        n_modes: 추출할 모드 수. None이면 전체 모드 사용.
+        n_modes: 추출할 모드 수. None이면 PyDMD가 자동 결정(권장).
+
+    Note:
+        검증된 변형은 ``dmd``/``spdmd`` 다 — 적합한 데이터(공간모드별 고유
+        주파수를 갖는 저랭크 동역학)에서 기계 정밀도로 재구성·외삽한다.
+        ``fbdmd`` 는 이상적인 데이터에서도 발산하는 사례가 확인됐고(PyDMD 의
+        FbDMD 자체 ``reconstructed_data`` 도 동일하게 나쁨), ``hodmd`` 는 지연
+        임베딩으로 모드 차원이 바뀌어 :meth:`reconstruct` 와 맞지 않는다.
+        둘은 사용 전 직접 검증할 것.
+
+        실수 진동 데이터는 켤레쌍 때문에 **물리 모드 1개당 랭크 2** 가 필요하다
+        — ``n_modes`` 를 물리 모드 수로 주면 과소적합된다(None 권장).
 
     Examples:
         >>> import numpy as np
@@ -49,15 +60,16 @@ class DMDAnalyzer:
 
     def __init__(
         self,
-        method: str = "fbdmd",
+        method: str = "dmd",
         dt: float = 1.0,
         n_modes: int | None = None,
     ) -> None:
         """초기화.
 
         Args:
-            method: PyDMD 변형 종류.
-                "dmd" | "fbdmd" | "hodmd" | "spdmd".
+            method: PyDMD 변형 종류. "dmd"(기본, 검증됨) | "spdmd"(검증됨) |
+                "fbdmd"(불안정) | "hodmd"(reconstruct 비호환). 클래스
+                docstring 의 Note 참조.
             dt: 타임스텝 간격 [s]. 주파수 계산에 사용.
             n_modes: 추출할 모드 수. None이면 전체 모드 사용.
 

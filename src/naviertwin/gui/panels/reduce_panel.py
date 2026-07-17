@@ -194,7 +194,9 @@ class ReducePanel(QWidget):
         form = QFormLayout(w)
         form.setContentsMargins(4, 4, 4, 4)
         method = QComboBox()
-        method.addItems(["fbdmd", "dmd", "hodmd", "spdmd"])
+        # 검증된 변형 우선 — fbdmd 는 이상적인 데이터에서도 발산 사례가 있고
+        # hodmd 는 지연 임베딩으로 reconstruct 와 차원이 안 맞는다 (dmd.py Note).
+        method.addItems(["dmd", "spdmd", "fbdmd", "hodmd"])
         form.addRow("DMD 방법:", method)
         n_modes = QSpinBox()
         n_modes.setRange(1, 9999)
@@ -448,7 +450,7 @@ class ReducePanel(QWidget):
         page = self._param_stack.widget(4)
         combos = page.findChildren(QComboBox)
         spins = page.findChildren(QDoubleSpinBox)
-        method = combos[0].currentText() if combos else "fbdmd"
+        method = combos[0].currentText() if combos else "dmd"
         dt = spins[0].value() if spins else 0.01
 
         # DMD는 최소 2개 스냅샷 필요 → 단일 스냅샷이면 복제

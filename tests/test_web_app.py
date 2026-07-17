@@ -632,3 +632,47 @@ def test_train_guarded_while_on_predict_mesh(tmp_path) -> None:
 
     app.build_twin()
     assert "학습 격자로 복귀" in st.nt_error
+
+
+def test_dmd_dynamics_method_forecasts_beyond_training() -> None:
+    """계열 Ⓓ: DMD 선택 시 슬라이더가 학습 구간 밖까지 열리고 적합도를 보고한다."""
+    app = _make_app("nt-test-dmd")
+    st = app.server.state
+    app.load_demo()
+
+    st.nt_model_method = "dynamics"
+    app.build_twin()
+    assert st.nt_error == ""
+    assert st.nt_dmd_ready is True
+    assert st.nt_physics_ready is False
+    assert "DMD" in st.nt_model_summary
+    # 외삽 허용: 슬라이더 상한 > 학습 상한.
+    assert st.nt_twin_max > st.nt_twin_train_max
+    # 적합도가 보고된다 (필라멘트 데모는 DMD 부적합 → 큰 오차가 나와야 정상).
+    assert st.nt_dmd_fit_error > 0.0
+    assert "재구성 오차" in st.nt_status
+
+    # 학습 구간 밖에서 예측이 실제로 동작한다.
+    st.nt_twin_param = st.nt_twin_max
+    app.predict()
+    assert st.nt_error == ""
+    assert "twin_prediction" in st.nt_fields
+
+    # 다른 방식으로 재학습하면 DMD 상태가 꺼진다.
+    st.nt_model_method = "rom"
+    app.build_twin()
+    assert st.nt_dmd_ready is False
+    assert st.nt_twin_max == st.nt_twin_train_max  # 내삽 전용으로 복귀
+
+
+def test_dmd_rejected_for_case_sets(tmp_path) -> None:
+    """케이스 세트는 시간축이 없어 동역학 예보가 명확히 거부된다."""
+    _make_case_set(tmp_path / "sweep")
+    app = _make_app("nt-test-dmd-caseset")
+    st = app.server.state
+    st.nt_path = str(tmp_path / "sweep")
+    app.load_case_set()
+
+    st.nt_model_method = "dynamics"
+    app.build_twin()
+    assert "시계열" in st.nt_error

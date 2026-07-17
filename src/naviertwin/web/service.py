@@ -1114,6 +1114,112 @@ def build_physics_ai_twin(
     }
 
 
+# 검증된 PyDMD 변형만 노출한다 — fbdmd 는 이상적인 데이터에서도 발산하고
+# hodmd 는 지연 임베딩으로 reconstruct 와 차원이 안 맞는다 (core dmd.py Note).
+DMD_METHODS = ("dmd", "spdmd")
+
+
+def build_dmd_twin(
+    dataset: CFDDataset,
+    field: str,
+    *,
+    method: str = "dmd",
+    n_modes: int | None = None,
+    forecast_factor: float = 1.5,
+) -> dict[str, Any]:
+    """시계열에서 DMD 동역학 트윈을 학습한다 (계열 Ⓓ — 시간 외삽 가능).
+
+    PyDMD(:class:`DMDAnalyzer`) 로 상태의 **시간 전이 규칙**을 학습한다. 다른
+    계열(POD+보간, 신경장)은 학습 파라미터 범위 안 내삽이 전제인 반면, DMD 는
+    모드별 고유값(성장률·주파수)으로 **학습 구간 너머를 외삽**할 수 있다.
+
+    적용 한계가 뚜렷하다 — 유동이 "공간모드 × 고유 주파수"의 저랭크 선형
+    동역학으로 근사될 때만 맞는다. 강한 이류/불연속(예: 이 앱의 필라멘트 데모)
+    이나 공간 구조가 사실상 하나뿐인 경우엔 크게 빗나간다. 그래서 학습 구간
+    **재구성 상대오차(``reconstruction_error``)를 함께 돌려주니 UI 에 반드시
+    노출할 것** — 사용자가 적합 여부를 눈으로 판단할 유일한 근거다.
+
+    Args:
+        dataset: 시계열 데이터셋 (타임스텝 2개 이상).
+        field: 학습 대상 물리량.
+        method: PyDMD 변형 — ``dmd``(기본) | ``spdmd``(희소). 둘 다 검증됨.
+        n_modes: 모드 수. None(권장)이면 PyDMD 가 자동 결정 — 실수 진동은
+            켤레쌍 때문에 물리 모드당 랭크 2 가 필요해 수동 지정 시 과소적합
+            되기 쉽다.
+        forecast_factor: 예측 슬라이더 상한 배수 (1.5 = 학습 구간의 1.5배까지
+            외삽 허용).
+
+    Returns:
+        ``engine`` (DMDTwinEngine), ``param_min``/``param_max`` (학습 범위),
+        ``forecast_max`` (외삽 포함 상한), ``reconstruction_error`` (학습 구간
+        상대오차 — 적합도), ``frequencies``/``growth_rates`` (모드 진단),
+        ``n_modes``, ``method`` 를 담은 dict.
+
+    Raises:
+        ValueError: 타임스텝 2개 미만 또는 미지원 method.
+        ImportError: pydmd 미설치.
+    """
+    from naviertwin.core.digital_twin.dmd_engine import DMDTwinEngine
+    from naviertwin.core.flow_analysis.modal.dmd import DMDAnalyzer
+
+    if method not in DMD_METHODS:
+        raise ValueError(f"지원하지 않는 DMD method: {method}")
+    n_steps = int(getattr(dataset, "n_time_steps", 0))
+    if n_steps < 2:
+        raise ValueError(
+            f"DMD 학습에는 2개 이상의 타임스텝이 필요합니다. 현재: {n_steps}"
+        )
+
+    snapshots = np.asarray(dataset.extract_field_snapshots(field), dtype=np.float64)
+    times = np.asarray(getattr(dataset, "time_steps", []), dtype=np.float64)
+    dt = estimate_dt(dataset)
+
+    analyzer = DMDAnalyzer(method=method, dt=dt, n_modes=n_modes)
+    analyzer.fit(snapshots)
+
+    # 적합도 = 학습 구간 재구성 상대오차. DMD 는 데이터가 맞지 않으면 조용히
+    # 크게 빗나가므로(경고 없이) 이 값을 반드시 사용자에게 보여줘야 한다.
+    rebuilt = np.asarray(analyzer.reconstruct(times), dtype=np.float64)
+    denom = float(np.linalg.norm(snapshots))
+    reconstruction_error = (
+        float(np.linalg.norm(rebuilt - snapshots) / denom) if denom > 0 else float("nan")
+    )
+
+    param_min, param_max = float(times.min()), float(times.max())
+    span = max(param_max - param_min, 1e-9)
+    forecast_max = param_min + span * float(forecast_factor)
+    engine = DMDTwinEngine(
+        analyzer,
+        method=method,
+        metadata={
+            "field_name": field,
+            "reducer": "dmd_dynamics",
+            "surrogate": method,
+            "problem_type": "dynamics_forecast",
+            "param_min": param_min,
+            "param_max": param_max,
+            "forecast_max": forecast_max,
+            "dt": dt,
+            "reconstruction_error": reconstruction_error,
+        },
+    )
+    frequencies = np.asarray(analyzer.frequencies, dtype=np.float64)
+    growth = np.asarray(analyzer.growth_rates, dtype=np.float64)
+    return {
+        "engine": engine,
+        "field": field,
+        "method": method,
+        "n_modes": int(np.asarray(analyzer.modes).shape[1]),
+        "dt": dt,
+        "param_min": param_min,
+        "param_max": param_max,
+        "forecast_max": forecast_max,
+        "reconstruction_error": reconstruction_error,
+        "frequencies": frequencies.tolist(),
+        "growth_rates": growth.tolist(),
+    }
+
+
 def predict_to_mesh(
     engine: Any,
     param_value: float | Sequence[float],
