@@ -547,3 +547,88 @@ def test_single_load_clears_case_mode(tmp_path) -> None:
     assert st.nt_case_count == 0
     assert st.nt_param_names == []
     assert app.case_datasets is None
+
+
+def test_predict_on_other_mesh_and_restore(tmp_path) -> None:
+    """M3: 다른 격자에 예측 → 뷰어 전환(학습 상태 보존) → 학습 격자 복귀."""
+    import pyvista as pv
+
+    _make_case_set(tmp_path / "sweep")
+    app = _make_app("nt-test-predict-mesh")
+    st = app.server.state
+
+    st.nt_path = str(tmp_path / "sweep")
+    app.load_case_set()
+    st.nt_model_method = "physics"
+    st.nt_physics_epochs = 3
+    st.nt_physics_hidden = 8
+    app.build_twin()
+    assert st.nt_physics_ready is True
+    origin_points = st.nt_info_points
+    engine = app.engine
+
+    # 학습 격자(5×5=25)와 다른 해상도(7×7=49)의 대상 메쉬.
+    fine = pv.ImageData(dimensions=(7, 7, 1), spacing=(4 / 6, 4 / 6, 1))
+    fine.save(tmp_path / "target.vtk")
+
+    st.nt_twin_params = [2.0]
+    st.nt_path = str(tmp_path / "target.vtk")
+    app.predict_on_mesh()
+    assert st.nt_error == ""
+    assert st.nt_predict_mesh_name == "target.vtk"
+    assert st.nt_info_points == 49  # 뷰어가 대상 격자로 전환됨
+    assert "twin_p" in st.nt_fields
+    # 학습 상태는 그대로 보존된다 (엔진/케이스 모드).
+    assert app.engine is engine
+    assert st.nt_case_mode is True
+    assert st.nt_model_ready is True
+
+    # 예측 격자 모드에서도 케이스 세트는 case_datasets 로 재학습 가능하다.
+    app.build_twin()
+    assert st.nt_error == ""
+
+    app.restore_training_mesh()
+    assert st.nt_predict_mesh_name == ""
+    assert st.nt_info_points == origin_points
+    assert app.engine is not None
+
+
+def test_predict_on_mesh_rejects_rom_engine(tmp_path) -> None:
+    """ROM 트윈은 학습 메쉬에 묶여 다른 격자 예측이 거부된다 (명확한 안내)."""
+    import pyvista as pv
+
+    app = _make_app("nt-test-predict-mesh-rom")
+    st = app.server.state
+    app.load_demo()
+    app.build_twin()  # 기본 ROM
+    assert st.nt_model_ready is True
+
+    fine = pv.ImageData(dimensions=(5, 5, 1))
+    fine.save(tmp_path / "target.vtk")
+    st.nt_path = str(tmp_path / "target.vtk")
+    app.predict_on_mesh()
+    assert "Physics AI" in st.nt_error
+
+
+def test_train_guarded_while_on_predict_mesh(tmp_path) -> None:
+    """시계열 트윈에서 예측 격자로 전환한 상태면 재학습을 막는다."""
+    import pyvista as pv
+
+    app = _make_app("nt-test-predict-mesh-guard")
+    st = app.server.state
+    app.load_demo()
+    st.nt_model_method = "physics"
+    st.nt_physics_epochs = 3
+    st.nt_physics_hidden = 8
+    app.build_twin()
+
+    fine = pv.ImageData(dimensions=(5, 5, 1), spacing=(6.3 / 4, 6.3 / 4, 1))
+    fine.save(tmp_path / "target.vtk")
+    st.nt_twin_param = 1.0
+    st.nt_path = str(tmp_path / "target.vtk")
+    app.predict_on_mesh()
+    assert st.nt_error == ""
+    assert st.nt_predict_mesh_name == "target.vtk"
+
+    app.build_twin()
+    assert "학습 격자로 복귀" in st.nt_error

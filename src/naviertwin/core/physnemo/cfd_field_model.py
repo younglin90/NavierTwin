@@ -252,8 +252,40 @@ class PhysicsNeMoCFDFieldModel:
         }
 
     def predict(self, params: NDArray[np.float64]) -> NDArray[np.float64]:
-        """Predict full scalar output fields per operating parameter row."""
-        if not self.is_fitted or self._model is None or self._coords is None:
+        """Predict full scalar output fields per operating parameter row.
+
+        Evaluates on the training coordinates. Use :meth:`predict_at` to
+        evaluate on a different mesh or resolution.
+        """
+        if self._coords is None:
+            raise RuntimeError("PhysicsNeMoCFDFieldModel.fit_datasets() 먼저 호출")
+        return self.predict_at(self._coords, params)
+
+    def predict_at(
+        self,
+        coords: NDArray[np.float64],
+        params: NDArray[np.float64],
+    ) -> NDArray[np.float64]:
+        """Predict output fields at arbitrary coordinates.
+
+        The model is a neural field over ``(x, y, z, params)``, so it is not
+        tied to the training mesh — it can be evaluated on any point cloud
+        (a finer grid, a different mesh, probe points).
+
+        Args:
+            coords: ``(n_locations, 3)`` evaluation coordinates.
+            params: operating parameters, ``(n_rows, param_dim)`` or
+                ``(param_dim,)``.
+
+        Returns:
+            ``(n_locations * n_fields, n_rows)`` field-major stacked values,
+            the same layout :meth:`predict` returns.
+
+        Raises:
+            RuntimeError: model is not fitted.
+            ValueError: coordinate or parameter dimensions do not match.
+        """
+        if not self.is_fitted or self._model is None:
             raise RuntimeError("PhysicsNeMoCFDFieldModel.fit_datasets() 먼저 호출")
         params_arr = np.asarray(params, dtype=np.float64)
         if params_arr.ndim == 1:
@@ -263,12 +295,18 @@ class PhysicsNeMoCFDFieldModel:
                 f"parameter dimension mismatch: expected {self.param_dim}, "
                 f"got {params_arr.shape[1]}"
             )
+        coords_arr = np.asarray(coords, dtype=np.float64)
+        if coords_arr.ndim != 2 or coords_arr.shape[1] != self.coord_dim:
+            raise ValueError(
+                f"coords must be (n_locations, {self.coord_dim}), "
+                f"got shape {coords_arr.shape}"
+            )
 
         n_rows = params_arr.shape[0]
-        n_locations = self._coords.shape[0]
-        coords = np.tile(self._coords, (n_rows, 1))
+        n_locations = coords_arr.shape[0]
+        tiled = np.tile(coords_arr, (n_rows, 1))
         repeated = np.repeat(params_arr, n_locations, axis=0)
-        X = np.hstack([coords, repeated]).astype(np.float32, copy=False)
+        X = np.hstack([tiled, repeated]).astype(np.float32, copy=False)
         assert self._x_mean is not None
         assert self._x_std is not None
         assert self._y_mean is not None

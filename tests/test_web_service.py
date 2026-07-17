@@ -694,3 +694,78 @@ def test_build_physics_ai_twin_from_cases(tmp_path) -> None:
     assert result["engine"].training_metadata["problem_type"] == "steady_sweep"
     prediction = service.predict_twin(result["engine"], [2.5])
     assert prediction.shape[0] == loaded["datasets"][0].n_points
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 출력 격자 자유화 (M3) — 신경장은 학습 격자에 묶이지 않는다
+# ──────────────────────────────────────────────────────────────────────
+
+
+def test_predict_at_arbitrary_coords_is_resolution_free(tmp_path) -> None:
+    """학습 격자보다 촘촘한 격자에서 평가해도 참값을 따라가야 한다."""
+    import pyvista as pv
+
+    _write_case_set(tmp_path / "sweep", n_cases=5)
+    loaded = service.load_case_set(tmp_path / "sweep")
+    result = service.build_physics_ai_twin_from_cases(
+        loaded["datasets"],
+        "p",
+        loaded["params"],
+        param_names=loaded["param_names"],
+        hidden=48,
+        max_epochs=400,
+    )
+    model = result["engine"].model
+
+    # 학습 격자는 5×5, 평가 격자는 9×9 (학습에 없던 좌표 포함).
+    fine = pv.ImageData(dimensions=(9, 9, 1), spacing=(4 / 8, 4 / 8, 1))
+    coords = np.asarray(fine.points, dtype=float)[:, :3]
+    velocity = 3.0  # 학습된 케이스 조건 중 하나
+    values = np.asarray(model.predict_at(coords, [velocity]), dtype=float).reshape(-1)
+    assert values.shape[0] == coords.shape[0]  # 학습 격자(25) 가 아니라 81 점
+
+    truth = velocity * (coords[:, 0] + 2.0 * coords[:, 1])
+    # 신경망 근사라 느슨한 허용오차 — 값의 스케일 대비 상대 오차로 본다.
+    rel = np.linalg.norm(values - truth) / np.linalg.norm(truth)
+    assert rel < 0.15, f"미세 격자 예측이 참값에서 너무 벗어남: rel={rel:.3f}"
+
+
+def test_predict_to_mesh_attaches_fields_on_target(tmp_path) -> None:
+    """대상 메쉬에 예측 필드를 붙인 새 데이터셋을 돌려준다 (원본 불변)."""
+    import pyvista as pv
+
+    _write_case_set(tmp_path / "sweep", n_cases=4)
+    loaded = service.load_case_set(tmp_path / "sweep")
+    engine = service.build_physics_ai_twin_from_cases(
+        loaded["datasets"], ["p"], loaded["params"],
+        param_names=loaded["param_names"], hidden=8, max_epochs=3,
+    )["engine"]
+
+    fine = pv.ImageData(dimensions=(7, 7, 1), spacing=(4 / 6, 4 / 6, 1))
+    fine.save(tmp_path / "target.vtk")
+    target = service.load_dataset(tmp_path / "target.vtk")
+
+    dataset, attached = service.predict_to_mesh(engine, [2.0], target)
+    assert attached == ["twin_p"]
+    assert dataset.n_points == 49  # 학습 격자(25) 와 다른 해상도
+    assert "twin_p" in dataset.mesh.point_data
+    assert np.isfinite(dataset.mesh.point_data["twin_p"]).all()
+    # 원본 target 은 건드리지 않는다.
+    assert "twin_p" not in target.mesh.point_data
+
+
+def test_predict_to_mesh_rejects_rom_engine(demo) -> None:
+    """ROM 은 POD 모드가 학습 메쉬에 묶여 임의 격자 예측이 불가하다."""
+    rom = service.build_twin(demo, "p", n_modes=3)["engine"]
+    with pytest.raises(RuntimeError, match="Physics AI"):
+        service.predict_to_mesh(rom, [0.5], demo)
+
+
+def test_predict_at_rejects_bad_shapes(demo) -> None:
+    model = service.build_physics_ai_twin(
+        demo, "p", hidden=8, max_epochs=2
+    )["engine"].model
+    with pytest.raises(ValueError, match="coords"):
+        model.predict_at(np.zeros((4, 2)), [0.5])  # 3D 좌표가 아님
+    with pytest.raises(ValueError, match="parameter dimension"):
+        model.predict_at(np.zeros((4, 3)), [0.5, 1.5])  # 파라미터 1개인 모델

@@ -68,6 +68,8 @@ class NavierTwinWebApp:
         self.case_datasets: Optional[list[Any]] = None
         self.case_params: Optional[Any] = None
         self.case_param_names: list[str] = []
+        # 예측 격자 전환(M3) 중 원래 학습 데이터셋을 보관 — 복귀용.
+        self._origin_dataset: Optional[Any] = None
         self.reducer: Optional[Any] = None
         self.engine: Optional[Any] = None
         self._pod_result: Optional[dict[str, Any]] = None
@@ -215,6 +217,10 @@ class NavierTwinWebApp:
         st.nt_twin_maxs = []
         st.nt_twin_steps = []
         st.nt_twin_summary = ""
+        # 출력 격자 자유화(M3): 비어 있으면 학습 격자, 값이 있으면 그 파일의
+        # 메쉬 좌표에서 예측 중이라는 뜻 (Physics AI 전용 — 신경장이라 임의
+        # 좌표 평가가 가능하다). 근거: model-taxonomy-plan.md §14, M3.
+        st.nt_predict_mesh_name = ""
 
         # Compare (reducer×surrogate 벤치마크)
         st.nt_compare_dialog = False
@@ -271,10 +277,12 @@ class NavierTwinWebApp:
         # 파일 브라우저 (모달 열기/이동/선택은 즉시 반응 — 동기)
         ctrl.nt_fb_open = self.fb_open
         ctrl.nt_fb_open_case_set = self.fb_open_case_set
+        ctrl.nt_fb_open_predict_mesh = self.fb_open_predict_mesh
         ctrl.nt_fb_navigate = self.fb_navigate
         ctrl.nt_fb_pick = self.fb_pick
         ctrl.nt_fb_load_cwd = self.fb_load_cwd
         ctrl.nt_fb_load_case_set = self.fb_load_case_set
+        ctrl.nt_restore_training_mesh = self.restore_training_mesh
         ctrl.nt_run_analysis = A(self.run_analysis, "와류 식별 계산 중…", render_after=True)
         ctrl.nt_run_fft = A(self.run_fft, "FFT/PSD 계산 중…")
         ctrl.nt_run_pod = A(self.run_pod, "POD 계산 중…")
@@ -509,8 +517,17 @@ class NavierTwinWebApp:
         else:  # 테스트 등 루프 밖 컨텍스트
             worker()
 
+    def fb_open_predict_mesh(self) -> None:
+        """파일 브라우저를 "예측 격자 선택" 모드로 연다 (M3)."""
+        self.state.nt_fb_mode = "predict_mesh"
+        self._fb_refresh((self.state.nt_fb_cwd or "").strip() or None)
+        self.state.nt_fb_dialog = True
+
     def fb_pick(self, path: str) -> None:
-        """브라우저에서 파일을 선택 → 확장자에 따라 로드한다."""
+        """브라우저에서 파일을 선택 → 모드에 따라 로드/예측한다."""
+        if self.state.nt_fb_mode == "predict_mesh":
+            self._fb_dispatch_load(path, self.predict_on_mesh, "다른 격자에 예측 중…")
+            return
         self._fb_dispatch_load(path)
 
     def fb_load_cwd(self) -> None:
@@ -864,6 +881,13 @@ class NavierTwinWebApp:
         """
         if self.dataset is None:
             self._fail("데이터 없음", RuntimeError("먼저 데이터를 로드하세요."))
+            return
+        if self.state.nt_predict_mesh_name and not self.state.nt_case_mode:
+            # 뷰어가 예측 격자로 바뀐 상태라 self.dataset 이 학습 데이터가 아니다.
+            self._fail(
+                "예측 격자 모드",
+                RuntimeError("'학습 격자로 복귀' 후 재학습하세요."),
+            )
             return
         method = self.state.nt_model_method or "rom"
         surrogate = self.state.nt_surrogate or "rbf"
@@ -1323,6 +1347,22 @@ class NavierTwinWebApp:
         except Exception as exc:  # noqa: BLE001
             self._fail("샘플 평가 실패", exc)
 
+    def _twin_param_values(self) -> tuple[list[float], str]:
+        """현재 ③Twin 슬라이더의 입력 벡터와 사람이 읽을 라벨을 만든다.
+
+        문제 유형 A 면 시간 t 하나, 문제 유형 B(케이스 세트)면 운전조건 k 개.
+        """
+        if self.state.nt_case_mode:
+            values = [float(v) for v in (self.state.nt_twin_params or [])]
+            names = [str(n) for n in (self.state.nt_param_names or [])]
+            point = (
+                ", ".join(f"{n}={v:.4g}" for n, v in zip(names, values))
+                or "파라미터 없음"
+            )
+            return values, point
+        values = [float(self.state.nt_twin_param or 0.0)]
+        return values, f"t={values[0]:.4g}"
+
     def predict(self) -> None:
         """현재 입력 지점에서 필드를 예측하고 3D 뷰어에 표시한다.
 
@@ -1333,15 +1373,7 @@ class NavierTwinWebApp:
             self._fail("트윈 없음", RuntimeError("먼저 트윈을 학습하세요."))
             return
         try:
-            if self.state.nt_case_mode:
-                values = [float(v) for v in (self.state.nt_twin_params or [])]
-                names = [str(n) for n in (self.state.nt_param_names or [])]
-                point = ", ".join(
-                    f"{n}={v:.4g}" for n, v in zip(names, values)
-                ) or "파라미터 없음"
-            else:
-                values = [float(self.state.nt_twin_param or 0.0)]
-                point = f"t={values[0]:.4g}"
+            values, point = self._twin_param_values()
             prediction = service.predict_twin(self.engine, values)
             # 다중 출력(Physics AI) 이면 필드별로 잘라 각각 twin_<name> 으로 붙인다.
             parts = service.split_multi_prediction(self.engine, prediction)
@@ -1362,6 +1394,71 @@ class NavierTwinWebApp:
             self._set_status(f"예측 완료: {point} → {label} 3D 표시")
         except Exception as exc:  # noqa: BLE001
             self._fail("예측 실패", exc)
+
+    def predict_on_mesh(self) -> None:
+        """선택한 파일의 메쉬 좌표에서 예측하고 그 메쉬를 뷰어로 전환한다 (M3).
+
+        Physics AI 전용 — 신경장은 학습 격자에 묶이지 않아 임의 좌표에서
+        평가된다. 학습 상태(engine/케이스)는 그대로 두고 뷰어 대상만 바꾼다.
+        """
+        from pathlib import Path
+
+        path = (self.state.nt_path or "").strip()
+        if self.engine is None:
+            self._fail("트윈 없음", RuntimeError("먼저 트윈을 학습하세요."))
+            return
+        if not path:
+            self._fail("경로 필요", ValueError("예측할 메쉬 파일을 선택하세요."))
+            return
+        try:
+            target = service.load_dataset(path)
+            values, point = self._twin_param_values()
+            dataset, attached = service.predict_to_mesh(self.engine, values, target)
+            if self._origin_dataset is None:
+                self._origin_dataset = self.dataset
+            label = Path(path).name
+            self._swap_view_dataset(
+                dataset,
+                prefer=attached[0] if attached else "",
+                status=f"'{label}' 격자에 예측 완료: {point} → {', '.join(attached)}",
+            )
+            with self.state:
+                self.state.nt_predict_mesh_name = label
+        except Exception as exc:  # noqa: BLE001
+            self._fail("다른 격자 예측 실패", exc)
+
+    def restore_training_mesh(self) -> None:
+        """예측 격자에서 원래 학습 격자로 뷰어를 되돌린다."""
+        if self._origin_dataset is None:
+            return
+        dataset = self._origin_dataset
+        self._origin_dataset = None
+        self._swap_view_dataset(dataset, status="학습 격자로 복귀했습니다.")
+        with self.state:
+            self.state.nt_predict_mesh_name = ""
+
+    def _swap_view_dataset(
+        self, dataset: Any, *, status: str, prefer: str = ""
+    ) -> None:
+        """뷰어 대상 데이터셋만 교체한다 — 학습 상태(engine/케이스)는 보존.
+
+        :meth:`_set_dataset` 과 달리 모델/케이스/POD 상태를 리셋하지 않는다.
+        """
+        self.dataset = dataset
+        info = service.dataset_info(dataset)
+        n_steps = int(info["time_steps"])
+        with self.state:
+            self.state.nt_error = ""
+            self.state.nt_info_points = info["points"]
+            self.state.nt_info_cells = info["cells"]
+            self.state.nt_info_steps = n_steps
+            self.state.nt_info_fields = ", ".join(info["fields"]) or "-"
+            self.state.nt_nsteps = max(1, n_steps)
+            self.state.nt_has_timesteps = n_steps > 1
+            self.state.nt_timestep = 0
+        self._refresh_fields(prefer=prefer)
+        self._render(reset_camera=True)
+        self._set_status(status)
 
     def reset_view(self) -> None:
         """카메라를 기본 뷰로 리셋한다."""
@@ -1499,6 +1596,7 @@ class NavierTwinWebApp:
         self.case_datasets = None
         self.case_params = None
         self.case_param_names = []
+        self._origin_dataset = None
         self.reducer = None
         self.engine = None
         info = service.dataset_info(dataset)
@@ -1523,6 +1621,7 @@ class NavierTwinWebApp:
             self.state.nt_twin_mins = []
             self.state.nt_twin_maxs = []
             self.state.nt_twin_steps = []
+            self.state.nt_predict_mesh_name = ""
             self.state.nt_analysis_done = False
             self.state.nt_pod_done = False
             self.state.nt_pod_summary = ""
@@ -1888,8 +1987,9 @@ class NavierTwinWebApp:
                     with v3.VCardTitle(classes="text-subtitle-1 d-flex align-center"):
                         v3.VIcon("mdi-folder-open", classes="mr-2", color="primary")
                         html.Span(
-                            "{{ nt_fb_mode === 'caseset' "
-                            "? '케이스 세트 폴더 선택' : '파일 · 폴더 열기' }}"
+                            "{{ nt_fb_mode === 'caseset' ? '케이스 세트 폴더 선택' "
+                            ": (nt_fb_mode === 'predict_mesh' ? '예측할 격자 파일 선택' "
+                            ": '파일 · 폴더 열기') }}"
                         )
                     with v3.VCardSubtitle(classes="text-caption text-truncate pb-2"):
                         html.Span("{{ nt_fb_cwd }}")
@@ -1897,6 +1997,12 @@ class NavierTwinWebApp:
                         "케이스 파일들이 들어있는 폴더로 이동한 뒤 아래 버튼을 "
                         "누르세요 (파일 클릭 아님).",
                         v_if="nt_fb_mode === 'caseset'",
+                        classes="text-caption text-info px-4 pb-2",
+                    )
+                    html.Div(
+                        "예측 결과를 올릴 메쉬 파일을 클릭하세요 — 그 격자의 "
+                        "좌표에서 트윈을 평가합니다.",
+                        v_if="nt_fb_mode === 'predict_mesh'",
                         classes="text-caption text-info px-4 pb-2",
                     )
                     v3.VDivider()
@@ -1942,7 +2048,7 @@ class NavierTwinWebApp:
                             variant="tonal",
                             color="primary",
                             prepend_icon="mdi-folder-download-outline",
-                            v_if="nt_fb_mode !== 'caseset'",
+                            v_if="nt_fb_mode === 'single'",
                         )
                         v3.VBtn(
                             "이 폴더를 케이스 세트로 로드",
@@ -2377,6 +2483,40 @@ class NavierTwinWebApp:
                                 classes="mt-2",
                                 disabled=("nt_busy",),
                                 prepend_icon="mdi-play",
+                            )
+                            # 출력 격자 자유화(M3) — Physics AI(신경장)만 가능.
+                            v3.VDivider(classes="my-3")
+                            html.Div(
+                                "출력 격자",
+                                classes="text-caption text-disabled mb-1",
+                            )
+                            html.Div(
+                                "현재: {{ nt_predict_mesh_name || '학습 격자' }}",
+                                classes="text-caption mb-1",
+                            )
+                            v3.VBtn(
+                                "다른 격자에 예측",
+                                click=self.ctrl.nt_fb_open_predict_mesh,
+                                variant="tonal",
+                                block=True,
+                                disabled=("!nt_physics_ready || nt_busy",),
+                                prepend_icon="mdi-grid",
+                            )
+                            v3.VBtn(
+                                "학습 격자로 복귀",
+                                click=self.ctrl.nt_restore_training_mesh,
+                                variant="text",
+                                block=True,
+                                classes="mt-1",
+                                v_show=("nt_predict_mesh_name",),
+                                prepend_icon="mdi-undo",
+                            )
+                            html.Div(
+                                "신경장(Physics AI)은 좌표를 입력으로 받아 학습 "
+                                "격자에 묶이지 않습니다 — 더 촘촘한 격자나 다른 "
+                                "메쉬 파일에 그대로 예측할 수 있습니다. ROM 은 "
+                                "POD 모드가 학습 메쉬에 묶여 불가합니다.",
+                                classes="text-caption text-disabled mt-1",
                             )
 
             # 4) Export

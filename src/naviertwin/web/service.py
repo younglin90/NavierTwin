@@ -958,6 +958,59 @@ def build_physics_ai_twin(
     }
 
 
+def predict_to_mesh(
+    engine: Any,
+    param_value: float | Sequence[float],
+    target: CFDDataset,
+) -> tuple[CFDDataset, list[str]]:
+    """대상 메쉬 좌표에서 예측해 필드를 붙인 새 데이터셋을 반환한다 (출력 격자 자유).
+
+    Physics AI(신경장)는 (좌표, 파라미터) → 물리량이라 학습 메쉬에 묶이지
+    않는다 — 더 촘촘한 격자, 다른 형식의 메쉬, 프로브 점 어디서든 평가된다.
+    ROM 은 모드가 학습 메쉬 벡터라 이 경로를 쓸 수 없다.
+
+    Returns:
+        ``(예측 필드가 붙은 새 CFDDataset, 붙은 field 이름 목록)``.
+
+    Raises:
+        RuntimeError: Physics AI 트윈이 아닌 경우 (ROM 등).
+    """
+    from naviertwin.core.cfd_reader.base import CFDDataset as _CFDDataset
+
+    model = getattr(engine, "model", None)
+    if model is None or not hasattr(model, "predict_at"):
+        raise RuntimeError(
+            "다른 격자 예측은 Physics AI(직접 회귀) 트윈만 지원합니다 — "
+            "ROM 은 POD 모드가 학습 메쉬에 묶여 있습니다."
+        )
+
+    mesh = target.mesh.copy(deep=True)
+    coords = np.asarray(mesh.points, dtype=np.float64)[:, :3]
+    params = np.asarray(param_value, dtype=np.float64).reshape(-1)
+    values = np.asarray(model.predict_at(coords, params), dtype=np.float64).reshape(-1)
+
+    specs = list(getattr(model, "output_fields", []) or [])
+    labels = (
+        [str(spec["display_name"]) for spec in specs]
+        if specs
+        else [str(name) for name in model.field_names]
+    )
+    blocks = values.reshape(len(labels), coords.shape[0])
+
+    attached: list[str] = []
+    for label, block in zip(labels, blocks):
+        name = f"twin_{label}"
+        mesh.point_data[name] = np.asarray(block, dtype=np.float64)
+        attached.append(name)
+    dataset = _CFDDataset(
+        mesh=mesh,
+        time_steps=[0.0],
+        field_names=list(attached),
+        metadata={"source": "twin_prediction_on_mesh"},
+    )
+    return dataset, attached
+
+
 def split_multi_prediction(
     engine: Any,
     prediction: np.ndarray,
