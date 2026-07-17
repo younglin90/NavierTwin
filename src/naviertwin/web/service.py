@@ -10,6 +10,7 @@ state 나 PyVista 렌더 컨텍스트(GL)에 의존하지 않는다. 따라서 h
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -27,7 +28,8 @@ VORTEX_METHODS = ("q_criterion", "lambda2")
 RESULT_FIELD = {"q_criterion": "Q-criterion", "lambda2": "lambda2"}
 
 # 파생(분석/모드/예측) field 판정 — app/service 단일 출처(SSOT).
-DERIVED_PREFIXES = ("pod_mode", "twin_pred")
+DERIVED_PREFIXES = ("pod_mode", "twin_")  # twin_prediction + 다중출력 twin_<field>
+
 DERIVED_EXTRA = ("vorticity",)
 
 
@@ -634,7 +636,7 @@ def recommend_method(dataset: CFDDataset) -> dict[str, str]:
 
 def build_physics_ai_twin(
     dataset: CFDDataset,
-    field: str,
+    field: str | Sequence[str],
     *,
     hidden: int = 32,
     max_epochs: int = 150,
@@ -651,20 +653,27 @@ def build_physics_ai_twin(
 
     Args:
         dataset: 시계열 CFD 데이터셋.
-        field: 학습 대상 물리량 field.
+        field: 학습 대상 물리량 field — 문자열 하나 또는 목록(다중 출력).
+            다중 출력이면 한 신경망이 모든 필드를 동시에 학습한다 (예측은
+            :func:`split_multi_prediction` 으로 필드별로 분해).
         hidden: 은닉층 폭.
         max_epochs: 학습 epoch 수.
         max_train_points: (좌표×스냅샷) 학습 샘플 상한 — 초과 시 무작위 부분추출.
 
     Returns:
-        ``engine`` (PhysicsAITwinEngine), ``param_min``/``param_max``, 검증
-        지표(``validation_metrics``), 손실 곡선(``train_losses``) 등을 담은 dict.
+        ``engine`` (PhysicsAITwinEngine), ``fields`` (학습된 필드 목록),
+        ``param_min``/``param_max``, 검증 지표(``validation_metrics``), 손실
+        곡선(``train_losses``) 등을 담은 dict.
 
     Raises:
-        ValueError: 타임스텝이 2개 미만인 경우.
+        ValueError: 타임스텝이 2개 미만이거나 필드 목록이 빈 경우.
     """
     from naviertwin.core.digital_twin.physics_ai_engine import PhysicsAITwinEngine
     from naviertwin.core.physnemo.cfd_field_model import PhysicsNeMoCFDFieldModel
+
+    fields = [field] if isinstance(field, str) else [str(f) for f in field if str(f).strip()]
+    if not fields:
+        raise ValueError("학습할 출력 필드를 최소 1개 선택하세요.")
 
     n_steps = int(getattr(dataset, "n_time_steps", 0))
     if n_steps < 2:
@@ -672,9 +681,9 @@ def build_physics_ai_twin(
             f"Physics AI 학습에는 2개 이상의 타임스텝이 필요합니다. 현재: {n_steps}"
         )
 
-    model = PhysicsNeMoCFDFieldModel.from_dataset(
-        dataset,
-        field_name=field,
+    model = PhysicsNeMoCFDFieldModel.from_datasets(
+        [dataset],
+        field_names=fields,
         hidden=hidden,
         max_epochs=max_epochs,
         max_train_points=max_train_points,
@@ -685,7 +694,8 @@ def build_physics_ai_twin(
     param_max = float(meta["parameter_max"][0])
     engine.training_metadata.update(
         {
-            "field_name": field,
+            "field_name": ",".join(fields),
+            "field_names": list(fields),
             "reducer": "direct_physics_ai",
             "surrogate": "physicsnemo_cfd_field",
             "param_min": param_min,
@@ -694,14 +704,39 @@ def build_physics_ai_twin(
     )
     return {
         "engine": engine,
-        "field": field,
+        "field": ",".join(fields),
+        "fields": list(fields),
+        "output_fields": list(model.output_fields),
         "param_min": param_min,
         "param_max": param_max,
         "validation_metrics": dict(meta.get("validation_metrics", {})),
+        "per_field_metrics": dict(meta.get("per_field_metrics", {})),
         "n_locations": int(meta.get("n_locations", 0)),
         "n_snapshots": int(meta.get("n_snapshots", 0)),
         "train_losses": list(model.train_losses_),
     }
+
+
+def split_multi_prediction(
+    engine: Any,
+    prediction: np.ndarray,
+) -> list[tuple[str, np.ndarray]] | None:
+    """다중 출력 Physics AI 예측 벡터를 (표시명, 필드값) 목록으로 분해한다.
+
+    :class:`PhysicsNeMoCFDFieldModel` 은 다중 출력을 field-major 로 이어붙인
+    벡터를 반환한다 — ``output_fields`` spec(start/end)으로 자른다.
+    단일 출력 엔진(고전 TwinEngine 포함)은 None 을 반환해 기존 단일 필드
+    attach 경로를 그대로 쓰게 한다.
+    """
+    specs = getattr(getattr(engine, "model", None), "output_fields", None) or []
+    if len(specs) <= 1:
+        return None
+    values = np.asarray(prediction, dtype=np.float64).reshape(-1)
+    parts: list[tuple[str, np.ndarray]] = []
+    for spec in specs:
+        segment = values[int(spec["start"]) : int(spec["end"])]
+        parts.append((str(spec["display_name"]), segment))
+    return parts
 
 
 def export_physicsnemo_module(engine: Any, path: str | Path) -> str:

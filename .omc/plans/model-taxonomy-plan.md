@@ -328,3 +328,82 @@ arXiv:2504.06699 (산업 공력 CNN vs GNN 벤치마크)
   (②, index 1) → Twin 예측(③, index 2) → 연산자 랩 점프(⑥, index 5) 전체
   흐름을 실제 클릭/상태조작으로 실행해 인덱스 정합 확인. 웹 테스트 91개 통과
   (재배치는 패널 배치/텍스트만 바꿔 콜백 계약 불변이라 신규 테스트 불필요).
+
+---
+
+# v4 — 일반화된 입출력 데이터 모델 로드맵 (2026-07-17)
+
+사용자 제기: (a) 다중 출력 필드 동시 학습, (b) steady vs unsteady 분류,
+(c) 입력/출력 격자 분리, (d) 형상이 다른 케이스(자동차 공력 스타일) 지원,
+(e) 일반 N-입력/M-출력. 순서대로 판단과 로드맵.
+
+## 12. 현 데이터 모델의 근본 제약 진단
+
+웹 앱의 암묵적 가정: **"데이터셋 1개 = 케이스 1개 = 고정 메쉬 + 시계열"**.
+그래서 입력이 항상 시간(t) 하나였다. (b)~(e)는 전부 이 가정을 깨는 요구이며,
+모델 계열 문제가 아니라 **문제 정의(Problem) 계층**의 문제다 — PINA 의
+Problem/Model/Solver 분리(§7)에서 Problem 에 해당.
+
+코어가 이미 가진 것 (재사용 가능):
+- `PhysicsNeMoCFDFieldModel.from_datasets(datasets, field_names, params,
+  parameter_names)` — **다중 케이스 + 파라미터 테이블 + 다중 출력** 지원.
+  데스크톱 Model 패널은 이미 케이스 목록 + 파라미터 CSV 로 이 경로를 쓴다.
+- `TwinEngine.fit(snapshots, params)` — params 는 (n_samples, n_params)
+  임의 차원. ROM 도 다중 입력 파라미터를 이미 지원 (웹이 t 만 넣을 뿐).
+- 데스크톱 `twin_panel` 의 N-파라미터 스핀박스 (`_param_spins`) — ③Twin 의
+  다중 입력 슬라이더 UI 선례.
+- 제약: `cfd_field_model` 은 **모든 케이스가 동일 메쉬**를 요구
+  (`all CFD cases must share the same mesh coordinates/topology` 검사).
+  → 형상 가변은 이 경로로는 불가. GNN/GINO(§6 v2) 또는 SDF 인코딩 필요.
+
+## 13. 판단 — steady/unsteady 는 "문제 유형" 축이 맞다
+
+동의. 단, 모델 방식(ROM/Physics/연산자) 카드와 섞지 말고 **직교하는 상위
+축**으로: 문제 유형이 입력 공간을 정의하고, 모델 방식은 매핑 함수를 정의.
+
+| 문제 유형 | 입력 | 데이터 형태 | 현황 |
+|---|---|---|---|
+| A. 비정상 단일 케이스 | t | 1 케이스 × T 스텝 | ✅ 현재 유일 지원 |
+| B. 정상 파라미터 스윕 | μ = (μ₁..μₖ) | N 케이스 × 1 스텝 + 파라미터 표 | 코어 ✅ / 웹 ❌ |
+| C. 비정상 + 파라미터 | (μ, t) | N 케이스 × T 스텝 | 코어 부분 / 후순위 |
+| D. 형상 가변 (정상) | 형상 파라미터 or 기하 자체 | N 형상 × 1 스텝 | GNN/GINO or SDF 필요 |
+
+자동 판별 규칙: 케이스 1 + T>1 → A. 케이스 N + 파라미터 표 → B.
+①Import 에 "케이스 세트 로드"(여러 파일 + 파라미터 CSV)가 생기면 B 가 열린다.
+
+## 14. 입력/출력 격자 분리 판단
+
+- ROM/Physics 의 "입력"은 격자가 아니라 파라미터 벡터 → 입력 격자 개념은
+  연산자 학습(함수 입력)에서만 유효. 혼동 방지를 위해 UI 용어로 "입력
+  격자"는 연산자 방식에서만 노출할 것.
+- **출력 격자 분리는 Physics AI 가 공짜로 가능**: 신경장은 (x,y,z,μ)→u 라
+  임의 좌표에서 평가 가능. 현재 `predict()` 가 학습 좌표(self._coords)에
+  고정돼 있을 뿐 — `predict_at(coords, params)` 하나 추가하면 업로드한
+  다른 메쉬/해상도 재샘플 출력이 열린다 (M3).
+- ROM 출력은 학습 메쉬에 묶임(모드가 메쉬 벡터) — 분리하려면 보간 후처리.
+
+## 15. 형상 가변(자동차 스타일) 판단
+
+PhysicsNeMo 데모(DrivAerNet 등)가 하는 것: 형상별 정상 유동 → 기하 인지
+연산자(MeshGraphNet/DoMINO) 또는 SDF 조건화. 우리 로드맵:
+- 1단계 (현실적 중간 단계): **형상 파라미터화** — 사용자가 형상당 파라미터
+  벡터(CSV)를 주면 문제 유형 B 로 처리. 단, 동일 메쉬 제약 때문에 공통
+  배경 격자(바운딩 박스 균일 격자)에 재샘플 + SDF(x) 입력 피처 추가가 필요
+  — cfd_field_model 확장 (M4a).
+- 2단계 (정공법): GNN/MeshGraphNet·GINO 노출 (코어에 구현 존재, v2 §6 의
+  산업 채택 1위 트렌드) — 연산자 랩에서 검증 후 ②Model 로 승격 (M4b).
+
+## 16. 로드맵 (M-시리즈)
+
+- **M1 (완료)**: Physics AI 다중 출력 — `build_physics_ai_twin(fields=[...])`,
+  UI 복수 선택(physics 방식일 때), 예측을 `split_multi_prediction` 으로
+  필드별 `twin_<name>` 분해 표시. per-field 검증 지표 반환.
+- **M2 (다음, 최대 가치)**: 문제 유형 B — ①Import "케이스 세트 로드"
+  (다중 파일 + 파라미터 CSV, 데스크톱 패턴 이식) → 입력·출력 섹션에 입력
+  파라미터 표 표시 → ROM/Physics 양쪽 params=(N,k) 학습 → ③Twin 에
+  파라미터별 슬라이더 N개 (데스크톱 _param_spins 이식).
+- **M3**: 출력 격자 자유화 — `PhysicsNeMoCFDFieldModel.predict_at(coords)`
+  + ③Twin "다른 메쉬에 예측" (파일 선택 → 재샘플 표시/내보내기).
+- **M4a**: 형상 파라미터 + SDF 공통격자 인코딩 (cfd_field_model 확장).
+- **M4b**: 기하 인지 연산자 (MeshGraphNet/GINO) — 연산자 랩 검증 → 승격.
+- 교차: ②Model 입력·출력 섹션이 문제 유형을 표시/전환하는 허브가 된다.

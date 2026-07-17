@@ -165,6 +165,30 @@ def test_build_twin_dispatches_by_model_method() -> None:
     assert "연산자 랩" in st.nt_error
 
 
+def test_physics_multi_output_train_and_predict() -> None:
+    """Physics AI 다중 출력: p+U 동시 학습 → 예측 시 twin_p / twin_U_mag 로 분해 표시."""
+    app = _make_app("nt-test-multi-output")
+    st = app.server.state
+    app.load_demo()
+
+    st.nt_model_method = "physics"
+    st.nt_train_fields = ["p", "U"]
+    st.nt_physics_epochs = 3  # 테스트 속도용
+    st.nt_physics_hidden = 8
+    app.build_twin()
+    assert st.nt_error == ""
+    assert st.nt_physics_ready is True
+    assert "다중 출력 2개" in st.nt_model_summary
+
+    st.nt_twin_param = 0.5 * (st.nt_twin_min + st.nt_twin_max)
+    app.predict()
+    assert st.nt_error == ""
+    assert "twin_p" in st.nt_fields
+    assert "twin_U_mag" in st.nt_fields
+    # 다중 출력 파생 필드는 학습 대상 선택지에 새지 않는다.
+    assert "twin_p" not in st.nt_train_field_choices
+
+
 def test_build_twin_legacy_physicsnemo_surrogate_shim() -> None:
     """옛 상태값(surrogate='physicsnemo')도 physics 경로로 디스패치된다."""
     app = _make_app("nt-test-physicsnemo-shim")

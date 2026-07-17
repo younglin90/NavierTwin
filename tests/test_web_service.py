@@ -554,3 +554,36 @@ def test_compare_models_includes_physics_for_vector_field_via_magnitude(demo) ->
     combos = [r["combo"] for r in result["rows"]]
     assert "pod+rbf" in combos
     assert any("physicsnemo" in c for c in combos)
+
+
+def test_build_physics_ai_twin_multi_output(demo) -> None:
+    """다중 출력: 한 신경망이 p 와 U(크기)를 동시 학습하고 필드별로 분해된다."""
+    result = service.build_physics_ai_twin(
+        demo, ["p", "U"], hidden=8, max_epochs=3, max_train_points=300
+    )
+    assert result["fields"] == ["p", "U"]
+    engine = result["engine"]
+    n_points = demo.n_points
+
+    mid = 0.5 * (result["param_min"] + result["param_max"])
+    prediction = service.predict_twin(engine, mid)
+    assert prediction.shape[0] == n_points * 2  # field-major 로 이어붙은 벡터
+
+    parts = service.split_multi_prediction(engine, prediction)
+    assert parts is not None
+    names = [name for name, _ in parts]
+    assert names == ["p", "U_mag"]  # 벡터 U 는 크기(magnitude)로 학습
+    for _, segment in parts:
+        assert segment.shape[0] == n_points
+
+    # 필드별 검증 지표도 딸려 온다.
+    assert set(result["per_field_metrics"].keys()) == {"p", "U"}
+
+
+def test_split_multi_prediction_returns_none_for_single_output(demo) -> None:
+    """단일 출력 엔진(고전 TwinEngine 포함)은 기존 단일 attach 경로를 유지한다."""
+    rom = service.build_twin(demo, "p", n_modes=3)["engine"]
+    assert service.split_multi_prediction(rom, np.zeros(4)) is None
+    single = service.build_physics_ai_twin(demo, "p", hidden=8, max_epochs=2)["engine"]
+    prediction = service.predict_twin(single, 0.5)
+    assert service.split_multi_prediction(single, prediction) is None

@@ -154,7 +154,10 @@ class NavierTwinWebApp:
         # Model — 입출력 설정: 출력(예측 대상 필드)은 명시적으로 고른다 —
         # 3D 뷰어 컬러링용 nt_field 와 별개 (이전엔 몰래 재사용해 혼란을 줬다).
         # 입력은 항상 "시간(t)" — 단일 케이스 시계열이라 유일한 파라미터.
+        # ROM 은 단일 출력(nt_train_field), Physics AI 는 다중 출력
+        # (nt_train_fields — 한 신경망이 여러 필드를 동시 학습).
         st.nt_train_field = ""
+        st.nt_train_fields = []
         st.nt_train_field_choices = []
 
         # Model — 방식 우선(method-first) 2단 선택.
@@ -457,8 +460,10 @@ class NavierTwinWebApp:
         with self.state:
             if str(reducer) == "direct_physics_ai":
                 self.state.nt_model_method = "physics"
-            if field:
-                self.state.nt_train_field = field
+            restored_fields = meta.get("field_names") or ([field] if field else [])
+            if restored_fields:
+                self.state.nt_train_fields = list(restored_fields)
+                self.state.nt_train_field = str(restored_fields[0])
             self.state.nt_model_ready = True
             self.state.nt_twin_ready = True
             self.state.nt_twin_min = pmin
@@ -761,7 +766,7 @@ class NavierTwinWebApp:
                 self.state.nt_twin_param = 0.5 * (pmin + pmax)
                 self.state.nt_twin_step = max((pmax - pmin) / 100.0, 1e-6)
                 self.state.nt_twin_summary = summary
-            self._set_status(f"모델 학습 완료: {reducer}+{surrogate}. ④Twin 에서 예측하세요.")
+            self._set_status(f"모델 학습 완료: {reducer}+{surrogate}. ③Twin 에서 예측하세요.")
         except Exception as exc:  # noqa: BLE001
             self._fail("모델 학습 실패", exc)
 
@@ -772,11 +777,11 @@ class NavierTwinWebApp:
         결과 엔진은 ``predict()``만 노출하는 TwinEngine 과 같은 계약이라
         ③Twin/④Export 는 수정 없이 그대로 재사용된다.
         """
-        field = self._training_field()
+        fields = self._training_fields()
         try:
             result = service.build_physics_ai_twin(
                 self.dataset,
-                field,
+                fields,
                 hidden=int(self.state.nt_physics_hidden or 32),
                 max_epochs=int(self.state.nt_physics_epochs or 150),
                 max_train_points=int(self.state.nt_physics_max_samples or 20_000),
@@ -785,8 +790,10 @@ class NavierTwinWebApp:
             pmin, pmax = result["param_min"], result["param_max"]
             metrics = result["validation_metrics"]
             rmse = metrics.get("rmse", float("nan"))
+            label = ", ".join(fields)
             summary = (
-                f"field='{field}', PhysicsNeMo CFD Field (직접 예측), "
+                f"field(s)='{label}', PhysicsNeMo CFD Field (직접 예측"
+                f"{', 다중 출력 ' + str(len(fields)) + '개' if len(fields) > 1 else ''}), "
                 f"파라미터(t) ∈ [{pmin:.3g}, {pmax:.3g}] · RMSE {rmse:.3g}"
             )
             with self.state:
@@ -799,7 +806,7 @@ class NavierTwinWebApp:
                 self.state.nt_twin_param = 0.5 * (pmin + pmax)
                 self.state.nt_twin_step = max((pmax - pmin) / 100.0, 1e-6)
                 self.state.nt_twin_summary = summary
-            self._set_status("PhysicsNeMo 모델 학습 완료. ④Twin 에서 예측하세요.")
+            self._set_status("PhysicsNeMo 모델 학습 완료. ③Twin 에서 예측하세요.")
         except Exception as exc:  # noqa: BLE001
             self._fail("PhysicsNeMo 학습 실패", exc)
 
@@ -1080,10 +1087,23 @@ class NavierTwinWebApp:
         try:
             value = float(self.state.nt_twin_param or 0.0)
             prediction = service.predict_twin(self.engine, value)
-            field = service.attach_prediction(self.dataset, prediction)
-            self._refresh_fields(prefer=field)
+            # 다중 출력(Physics AI) 이면 필드별로 잘라 각각 twin_<name> 으로 붙인다.
+            parts = service.split_multi_prediction(self.engine, prediction)
+            if parts:
+                names = [
+                    service.attach_prediction(
+                        self.dataset, segment, field_name=f"twin_{display}"
+                    )
+                    for display, segment in parts
+                ]
+                shown = names[0]
+                label = ", ".join(f"'{n}'" for n in names)
+            else:
+                shown = service.attach_prediction(self.dataset, prediction)
+                label = f"'{shown}'"
+            self._refresh_fields(prefer=shown)
             self._render(reset_camera=False)
-            self._set_status(f"예측 완료: t={value:.4g} → '{field}' 3D 표시")
+            self._set_status(f"예측 완료: t={value:.4g} → {label} 3D 표시")
         except Exception as exc:  # noqa: BLE001
             self._fail("예측 실패", exc)
 
@@ -1240,8 +1260,10 @@ class NavierTwinWebApp:
             self.state.nt_model_summary = ""
             self.state.nt_physics_ready = False
             base_fields = [n for n in info["fields"] if not self._is_derived_field(n)]
+            default_field = render.preferred_field(base_fields)
             self.state.nt_train_field_choices = base_fields
-            self.state.nt_train_field = render.preferred_field(base_fields)
+            self.state.nt_train_field = default_field
+            self.state.nt_train_fields = [default_field] if default_field else []
             try:
                 self.state.nt_method_hint = service.recommend_method(dataset)["reason"]
             except Exception:  # noqa: BLE001 — 추천은 부가 정보, 로드를 막지 않는다
@@ -1303,6 +1325,16 @@ class NavierTwinWebApp:
         if chosen and chosen in choices:
             return chosen
         return self._base_field()
+
+    def _training_fields(self) -> list[str]:
+        """Physics AI 학습 대상(출력) 필드 목록 — 다중 선택을 지원한다.
+
+        ``nt_train_fields`` 의 유효한 선택만 남기고, 비어 있으면 단일 선택
+        (:meth:`_training_field`)으로 폴백한다.
+        """
+        choices = list(self.state.nt_train_field_choices or [])
+        selected = [str(f) for f in (self.state.nt_train_fields or []) if str(f) in choices]
+        return selected or [self._training_field()]
 
     # ------------------------------------------------------------------
     # Rendering
@@ -1751,12 +1783,26 @@ class NavierTwinWebApp:
                     # 를 명시한다. 이전엔 출력이 3D 뷰어 컬러링용 nt_field 에
                     # 몰래 종속돼 있어 사용자가 알아볼 수 없었다.
                     html.Div("입력 · 출력", classes="text-caption text-disabled mb-1")
+                    # ROM(POD)은 스냅샷 행렬 하나 = 출력 1개. Physics AI 는 한
+                    # 신경망이 여러 필드를 동시 학습(다중 출력) 가능.
                     v3.VSelect(
                         v_model=("nt_train_field",),
                         items=("nt_train_field_choices",),
                         label="출력 필드 (예측 대상)",
                         density="compact",
                         hide_details=True,
+                        v_show=("nt_model_method !== 'physics'",),
+                    )
+                    v3.VSelect(
+                        v_model=("nt_train_fields",),
+                        items=("nt_train_field_choices",),
+                        label="출력 필드 (복수 선택 가능)",
+                        density="compact",
+                        hide_details=True,
+                        multiple=True,
+                        chips=True,
+                        closable_chips=True,
+                        v_show=("nt_model_method === 'physics'",),
                     )
                     html.Div(
                         "입력 파라미터: 시간(t) — 단일 케이스 시계열의 유일한 "
