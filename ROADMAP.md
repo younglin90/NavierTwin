@@ -58,6 +58,16 @@
 - [x] 검토 canonical data model 1단계: `core/data_model/signature.py` —
       topology/coordinate sha256 해시로 동일 격자 O(1) 판정,
       `assign_geometry_ids()` → 그룹 스플릿 `group_ids` 자동 연결
+- [x] 검토 §6½ #6: Zarr 텐서 캐시(`core/storage/tensor_cache.py`) — 케이스
+      세트 텐서화(cases_to_grid_tensors) 결과를 시그니처 해시 키로 캐시,
+      재학습 시 재계산 생략(`build_geometry_fno_twin(use_tensor_cache=True)`)
+- [x] Route 2 스코핑 연구(`.omc/research/route2-mesh-native-wiring.md`) —
+      torch_geometric 2.7.0 실증, physicsnemo 는 torch 2.11 비호환으로 차단,
+      mesh_gnn 을 첫 타깃으로 추천
+- [x] **Route 2 첫 배선: `mesh_gnn`** — 메쉬 네이티브(재샘플 없음) 케이스 세트
+      트윈, `varying_mesh` 덕타이핑으로 원본 케이스 메쉬(진짜 구멍) 위에
+      그대로 표시(앱 예측 경로 수정 0). tier="experimental". karman_shapes
+      헤드리스 플로우로 검증
 
 ## 직전 단계: v4.2.0 + 17 rounds — 연구 플랫폼 + 전영역 성숙화 ✅
 
