@@ -174,7 +174,20 @@ class MainWindow(QMainWindow):
 
     def _apply_theme(self) -> None:
         qss = _load_stylesheet(self._config.theme)
-        QApplication.instance().setStyleSheet(qss)  # type: ignore[union-attr]
+        app = QApplication.instance()
+        if app is None:
+            return
+        # QApplication.setStyleSheet() re-polishes every live widget in the
+        # whole application (not just this window), so it is O(total widget
+        # count). Guard against redundant re-application with an unchanged
+        # stylesheet — this is a no-op in normal single-window usage but
+        # matters when many MainWindow instances are constructed in the same
+        # process (e.g. GUI test suites), where each construction would
+        # otherwise re-polish an ever-growing widget tree and slow down
+        # quadratically.
+        if app.styleSheet() == qss:
+            return
+        app.setStyleSheet(qss)
 
     def _install_combo_close_fix(self) -> None:
         """QSS 적용 후에도 QComboBox popup 이 클릭 선택 시 닫히도록 보정한다."""
