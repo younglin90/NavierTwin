@@ -18,6 +18,44 @@ pytest.importorskip("pyvista", reason="웹 서비스 테스트에는 pyvista 가
 
 from naviertwin.web import service  # noqa: E402
 
+
+class _FakeEngine:
+    """support_status 판정용 최소 엔진 — param 범위만 필요."""
+
+    def __init__(self, mins, maxs, names):
+        self.training_metadata = {
+            "param_mins": mins,
+            "param_maxs": maxs,
+            "param_names": names,
+        }
+
+
+def test_support_status_three_levels() -> None:
+    """OOD 3단계 (v5.6): 범위 내부/경계 근처/범위 밖을 축별 최악값으로 판정."""
+    eng = _FakeEngine([10.0, 0.0], [30.0, 8.0], ["inlet_velocity", "aoa"])
+
+    inside = service.support_status(eng, [20.0, 4.0])
+    assert inside["status"] == "IN_SUPPORT"
+
+    # aoa 범위(0~8, span 8)에서 0.9 벗어남 = 11% → 경계 근처(≤15%).
+    near = service.support_status(eng, [20.0, 8.9])
+    assert near["status"] == "NEAR_BOUNDARY"
+    assert near["worst_axis"] == "aoa"
+
+    # inlet_velocity 범위(10~30, span 20)에서 10 벗어남 = 50% → 범위 밖.
+    out = service.support_status(eng, [40.0, 4.0])
+    assert out["status"] == "OUT_OF_SUPPORT"
+    assert out["worst_axis"] == "inlet_velocity"
+    assert out["margin_frac"] == pytest.approx(0.5)
+
+    # 경계 정확히 위 = 내부(초과량 0).
+    assert service.support_status(eng, [30.0, 8.0])["status"] == "IN_SUPPORT"
+
+
+def test_support_status_unknown_without_ranges() -> None:
+    eng = _FakeEngine([], [], [])
+    assert service.support_status(eng, [1.0])["status"] == "UNKNOWN"
+
 # ──────────────────────────────────────────────────────────────────────
 # compute_error_field — 손으로 검산 가능한 수치
 # ──────────────────────────────────────────────────────────────────────

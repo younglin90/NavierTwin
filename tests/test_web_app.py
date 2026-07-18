@@ -830,6 +830,32 @@ def test_unsteady_sweep_demo_end_to_end() -> None:
     assert np.isfinite(forecast).all()
 
 
+def test_support_status_ood_levels_in_app() -> None:
+    """③Twin OOD 3단계(v5.6): 학습 범위 내부/밖 예측이 상태에 반영된다."""
+    app = _make_app("nt-test-support")
+    st = app.server.state
+    st.nt_demo_kind = "sweep"
+    app.load_demo()
+    st.nt_model_method = "rom"
+    app.build_twin()
+    assert st.nt_error == ""
+
+    # 학습 범위 중앙 예측 → IN_SUPPORT.
+    lo = list(st.nt_twin_mins)
+    hi = list(st.nt_twin_maxs)
+    st.nt_twin_params = [0.5 * (a + b) for a, b in zip(lo, hi)]
+    app.predict()
+    assert st.nt_error == ""
+    assert st.nt_support_status == "IN_SUPPORT"
+
+    # 범위를 크게 벗어난 예측 → OUT_OF_SUPPORT.
+    st.nt_twin_params = [b + (b - a) for a, b in zip(lo, hi)]
+    app.predict()
+    assert st.nt_error == ""
+    assert st.nt_support_status == "OUT_OF_SUPPORT"
+    assert st.nt_support_label  # 한국어 라벨 존재
+
+
 def test_device_badge_reflects_training_backend() -> None:
     """학습 디바이스 배지(v5.6): ROM=CPU, 신경망=GPU/CPU(가용성 따라).
 

@@ -288,6 +288,9 @@ class NavierTwinWebApp:
         st.nt_truth_available = False  # 학습 샘플 일치 → 오차장 계산됨
         st.nt_error_summary = ""  # "RMSE … · rel-L2 … · max …"
         st.nt_extrapolating = False  # 외삽/보간 — 실제 결과 없음
+        # OOD 3단계 지지집합 상태 (v5.6, 검토 §6½ #4) — 외삽 신뢰도 신호.
+        st.nt_support_status = ""  # IN_SUPPORT | NEAR_BOUNDARY | OUT_OF_SUPPORT
+        st.nt_support_label = ""
 
         # Compare (reducer×surrogate 벤치마크)
         st.nt_compare_dialog = False
@@ -1743,6 +1746,7 @@ class NavierTwinWebApp:
         try:
             values, point = self._twin_param_values()
             self._reset_truth_state()  # v5.4 — 직전 예측의 비교 상태 초기화
+            self._update_support_status(values)  # v5.6 — OOD 3단계 (모든 경로 공통)
             # GeometryFNO 는 보고 있는 케이스 메쉬가 아니라 학습에 쓴 "공통
             # 격자" 위에서 예측한다 — 엔진이 들고 있는 공통 격자 데이터셋
             # 사본에 예측을 붙여 뷰어를 교체한다 (varying_mesh 경로와 대칭).
@@ -1878,6 +1882,8 @@ class NavierTwinWebApp:
             self.state.nt_truth_available = False
             self.state.nt_error_summary = ""
             self.state.nt_extrapolating = False
+            self.state.nt_support_status = ""
+            self.state.nt_support_label = ""
         dataset = self.dataset
         if dataset is None:
             return
@@ -1916,6 +1922,22 @@ class NavierTwinWebApp:
         if not field:
             return "", None
         return field, np.asarray(prediction, dtype=np.float64).reshape(-1)
+
+    def _update_support_status(self, values: list[float]) -> None:
+        """OOD 3단계 지지집합 상태를 갱신한다 (v5.6) — 모든 예측 경로 공통.
+
+        질의가 학습 파라미터 범위 안/경계/밖 어디인지를 표시해, 실제값이 없는
+        외삽 예측을 얼마나 믿을지 신호를 준다. 실패는 예측을 막지 않는다.
+        """
+        try:
+            support = service.support_status(self.engine, values)
+            with self.state:
+                self.state.nt_support_status = support["status"]
+                self.state.nt_support_label = support["label"]
+        except Exception:  # noqa: BLE001 — 부가 정보
+            with self.state:
+                self.state.nt_support_status = ""
+                self.state.nt_support_label = ""
 
     def _update_truth_comparison(
         self, values: list[float], prediction: Any, parts: Any
@@ -3449,6 +3471,25 @@ class NavierTwinWebApp:
                                 v_show=("nt_predicted && nt_extrapolating",),
                                 classes="text-caption text-warning mt-2",
                             )
+                            # OOD 3단계 지지집합 배지 (v5.6) — 외삽 신뢰도 신호.
+                            # 초록=범위 내부, 주황=경계 근처, 빨강=범위 밖.
+                            with html.Div(
+                                classes="mt-2",
+                                v_show=("nt_predicted && nt_support_status",),
+                            ):
+                                v3.VChip(
+                                    "{{ nt_support_label }}",
+                                    size="small",
+                                    color=(
+                                        "nt_support_status === 'IN_SUPPORT' ? 'success' "
+                                        ": (nt_support_status === 'NEAR_BOUNDARY' "
+                                        "? 'warning' : 'error')",
+                                    ),
+                                    prepend_icon=(
+                                        "nt_support_status === 'IN_SUPPORT' "
+                                        "? 'mdi-check-circle' : 'mdi-alert'",
+                                    ),
+                                )
                             # 출력 격자 자유화(M3) — Physics AI(신경장)만 가능.
                             v3.VDivider(classes="my-3")
                             self._tip_row(

@@ -2726,3 +2726,54 @@ def truth_for_params(
 
     step = _truth_match_index(float(query[k_base]), _times(dataset))
     return None if step is None else _snapshot(dataset, step)
+
+
+def support_status(engine: Any, params: Sequence[float]) -> dict[str, Any]:
+    """예측 질의가 학습 파라미터 지지집합(support) 안/경계/밖 중 어디인지 판정한다.
+
+    외부 검토 반영(로드맵 §6½ #4): 외삽 결과를 일반 결과처럼 보여주면 안 되므로,
+    질의 파라미터를 학습 범위(각 축 min/max)와 대조해 3단계로 나눈다. 실제값이
+    없어 에러를 못 재는 구간에서, 예측을 얼마나 믿을지의 1차 신호다.
+
+    판정(축별 최악값 채택):
+        - IN_SUPPORT: 모든 축이 학습 [min, max] 안.
+        - NEAR_BOUNDARY: 범위를 벗어났지만 한 축이라도 여유(축 범위의 15%)
+          이내 — 가벼운 외삽.
+        - OUT_OF_SUPPORT: 어느 축이 여유를 넘어 벗어남 — 신뢰 낮음.
+
+    Args:
+        engine: training_metadata 에 param_mins/param_maxs 를 가진 엔진.
+        params: 질의 파라미터 벡터 (③Twin 슬라이더 값).
+
+    Returns:
+        status(위 3값), label(한국어), worst_axis(가장 벗어난 축 이름),
+        margin_frac(그 축이 범위 대비 얼마나 벗어났나, 0=경계) 를 담은 dict.
+        범위 정보가 없으면 status="UNKNOWN".
+    """
+    meta = getattr(engine, "training_metadata", {}) or {}
+    mins = meta.get("param_mins")
+    maxs = meta.get("param_maxs")
+    names = meta.get("param_names") or []
+    query = np.asarray(params, dtype=np.float64).reshape(-1)
+    if not mins or not maxs or query.size == 0:
+        return {"status": "UNKNOWN", "label": "지지집합 정보 없음",
+                "worst_axis": "", "margin_frac": 0.0}
+    lo = np.asarray(mins, dtype=np.float64)
+    hi = np.asarray(maxs, dtype=np.float64)
+    n = min(query.size, lo.size, hi.size)
+    lo, hi, q = lo[:n], hi[:n], query[:n]
+    span = np.maximum(hi - lo, 1e-12)
+    # 축별 정규화 초과량: 범위 안이면 0, 밖이면 (벗어난 거리 / 범위) > 0.
+    over = np.maximum(np.maximum(lo - q, q - hi), 0.0) / span
+    worst = int(np.argmax(over))
+    worst_frac = float(over[worst])
+    worst_name = str(names[worst]) if worst < len(names) else f"param_{worst}"
+    if worst_frac <= 1e-9:
+        status, label = "IN_SUPPORT", "학습 범위 내부 (보간)"
+    elif worst_frac <= 0.15:
+        status, label = "NEAR_BOUNDARY", f"학습 범위 경계 근처 — {worst_name} 축 가벼운 외삽"
+    else:
+        status = "OUT_OF_SUPPORT"
+        label = f"학습 범위 밖 — {worst_name} 축 {worst_frac:.0%} 외삽, 신뢰 낮음"
+    return {"status": status, "label": label,
+            "worst_axis": worst_name, "margin_frac": worst_frac}
