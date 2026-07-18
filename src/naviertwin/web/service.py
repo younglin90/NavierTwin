@@ -939,7 +939,9 @@ def build_geometry_fno_twin(
         epochs=int(epochs),
         backend=backend,
     )
-    operator.fit(tensors["inputs"], tensors["targets"])
+    # 마스크 손실 (v5.6, 검토 §6½ #1) — 고체/무효 셀(0-채움)을 loss 에서 제외.
+    # 0 이 물리값인지 결측인지 모델이 헷갈리지 않게 한다. builtin backend 전용.
+    operator.fit(tensors["inputs"], tensors["targets"], sample_masks=tensors["valid_mask"])
 
     grid_summary = str(tensors["meta"]["grid_summary"])
     engine = GeometryFNOTwinEngine(
