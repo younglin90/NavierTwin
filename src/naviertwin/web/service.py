@@ -3620,3 +3620,255 @@ def dataset_signatures(datasets: Sequence[Any]) -> list[dict[str, Any]]:
     from naviertwin.core.data_model.signature import compute_signature
 
     return [asdict(compute_signature(ds)) for ds in datasets]
+
+
+# ──────────────────────────────────────────────────────────────────────
+# GINO 케이스 세트 트윈 — Route 2 두 번째 배선 (점군, 재샘플 없음)
+#
+# mesh_gnn(build_mesh_gnn_twin_from_cases, 위쪽)과 나란한 전략이다 —
+# mesh_gnn 코드는 건드리지 않고 이 구역에 새로 추가한다.
+# ──────────────────────────────────────────────────────────────────────
+
+
+def build_gino_twin_from_cases(
+    datasets: Sequence[CFDDataset],
+    field: str | Sequence[str],
+    params: np.ndarray,
+    *,
+    param_names: Sequence[str] | None = None,
+    in_gno_radius: float = 0.25,
+    out_gno_radius: float = 0.25,
+    fno_n_modes: tuple[int, int, int] = (4, 4, 4),
+    fno_hidden_channels: int = 16,
+    fno_n_layers: int = 2,
+    latent_resolution: int = 6,
+    max_epochs: int = 100,
+    device: str = "auto",
+    input_field_names: Sequence[str] = (),
+    group_split: bool = False,
+    group_ids: Sequence[int] | None = None,
+    val_frac: float = 0.15,
+    test_frac: float = 0.15,
+    split_seed: int = 0,
+) -> dict[str, Any]:
+    """케이스 세트에서 GINO(점군 신경 연산자) 트윈을 학습한다 (Route 2, 2번째 배선).
+
+    정상(steady) 파라미터 스윕 전용 — 케이스마다 **자기 점군을 그대로**
+    (:func:`~naviertwin.core.operator_learning.gino.gino_wrapper.
+    case_to_pointcloud`) 학습에 쓴다. ``mesh_gnn``(GCN, 고정 그래프)과 달리
+    GINO 는 고정 연결이 없어 예측 좌표가 학습 케이스와 달라도 그래프 재구성
+    없이 동작한다. 결과 엔진은 ``training_metadata["varying_mesh"]=True`` 라
+    앱 예측이 기존 형상 가변 분기(:func:`predict_to_mesh` — 보고 있는 케이스
+    메쉬 위 표시)를 그대로 탄다.
+
+    Args:
+        datasets: 정상 케이스 목록 (메쉬가 서로 달라도, 같아도 된다).
+        field: 학습 대상 필드 — 문자열 하나 또는 목록(다중 출력). 벡터
+            필드는 성분 채널(U_x 등)로 전개된다.
+        params: 케이스별 운전조건 (N, k) 또는 (N,).
+        param_names: 운전조건 이름. None 이면 ``param_i``.
+        in_gno_radius/out_gno_radius: 입력/출력 GNO 반경 이웃 탐색 반경
+            (좌표가 [0,1]^3 로 정규화되므로 이 스케일 기준값).
+        fno_n_modes: 잠재 격자 FNO 유지 모드 수 (3튜플, gno_coord_dim=3 고정).
+        fno_hidden_channels: 잠재 FNO 은닉 채널 폭.
+        fno_n_layers: 잠재 FNO 층 수.
+        latent_resolution: 잠재 격자 해상도(축당 격자점 수).
+        max_epochs: 학습 epoch 수.
+        device: 학습 디바이스 ("auto" | "cpu" | "cuda") — 테스트는 "cpu" 로
+            결정성(save/load bit-동일)을 보장한다.
+        input_field_names: 점 피처로 함께 넣을 point 필드
+            (예: ``wall_distance`` — ``attach_wall_features`` 산출물).
+        group_split: True 면 케이스(그룹) 단위 train/val/test 분할 후 train
+            만 학습 — 정규화 상수도 train 케이스로만 계산한다(누수 방지).
+        group_ids: 케이스별 그룹 id. None 이면 케이스 하나 = 그룹 하나.
+        val_frac: validation 그룹 비율 (``group_split=True`` 일 때만).
+        test_frac: test 그룹 비율 (``group_split=True`` 일 때만).
+        split_seed: 그룹 셔플 시드.
+
+    Returns:
+        ``engine``, ``field``, ``fields``, ``n_cases``, ``param_names``,
+        ``param_mins``, ``param_maxs``, ``target_names``, ``train_loss``,
+        ``eval_split`` (held-out rel-L2 — ``group_split=True`` 일 때만 의미)
+        를 담은 dict.
+
+    Raises:
+        ValueError: 케이스 2개 미만, 필드 미선택, 파라미터 행 수 불일치,
+            또는 비정상(시계열) 케이스가 섞여 있는 경우.
+        RuntimeError: neuraloperator 미설치.
+    """
+    from naviertwin.core.digital_twin.gino_engine import GINOTwinEngine
+    from naviertwin.core.operator_learning.gino.gino_wrapper import (
+        GINOCaseSetOperator,
+        case_to_pointcloud,
+        pointcloud_norm_from_cases,
+    )
+    from naviertwin.core.preprocessing.group_split import (
+        classify_query_split,
+        group_train_val_test_split,
+    )
+
+    fields = [field] if isinstance(field, str) else [str(f) for f in field if str(f).strip()]
+    if not fields:
+        raise ValueError("학습할 출력 필드를 최소 1개 선택하세요.")
+    cases = list(datasets)
+    if len(cases) < 2:
+        raise ValueError(f"트윈 학습에는 케이스가 2개 이상 필요합니다. 현재: {len(cases)}")
+    if any(max(1, int(getattr(case, "n_time_steps", 1))) > 1 for case in cases):
+        # GINO 타깃도 케이스당 스냅샷 1장(시간축 없음)을 전제한다 — mesh_gnn/
+        # GeometryFNO 와 동일 게이트.
+        raise ValueError(
+            "비정상(시계열) 케이스 세트의 GINO 는 아직 미지원입니다 — "
+            "정상 해(스텝 1개) 케이스만 학습할 수 있습니다. 비정상 스윕은 "
+            "ROM/Physics AI/ParametricDMD 를 쓰세요."
+        )
+
+    params_arr = np.asarray(params, dtype=np.float64)
+    if params_arr.ndim == 1:
+        params_arr = params_arr.reshape(-1, 1)
+    if params_arr.shape[0] != len(cases):
+        raise ValueError(
+            f"파라미터 행 수({params_arr.shape[0]})와 케이스 수({len(cases)})가 다릅니다."
+        )
+    names = (
+        [str(n) for n in param_names]
+        if param_names
+        else [f"param_{i}" for i in range(params_arr.shape[1])]
+    )
+    inputs = [str(n) for n in input_field_names if str(n).strip()]
+
+    # 그룹 스플릿 (검토 §6½ #2) — train 케이스로만 정규화 상수를 계산하고
+    # val/test 점군에 주입한다 (train-only 원칙).
+    n_cases_total = len(cases)
+    if group_split:
+        split = group_train_val_test_split(
+            n_cases_total,
+            group_ids,
+            val_frac=float(val_frac),
+            test_frac=float(test_frac),
+            seed=int(split_seed),
+        )
+        train_idx, val_idx, test_idx = split.train_idx, split.val_idx, split.test_idx
+    else:
+        train_idx = np.arange(n_cases_total, dtype=np.int64)
+        val_idx = np.zeros(0, dtype=np.int64)
+        test_idx = np.zeros(0, dtype=np.int64)
+
+    norm = pointcloud_norm_from_cases(
+        [cases[i] for i in train_idx.tolist()],
+        params_arr[train_idx],
+        input_field_names=inputs,
+    )
+    pointclouds = [
+        case_to_pointcloud(
+            case, params_arr[i], fields, input_field_names=inputs, norm=norm
+        )
+        for i, case in enumerate(cases)
+    ]
+    target_names = list(pointclouds[0]["target_names"])
+    for i, pc in enumerate(pointclouds[1:], start=1):
+        if list(pc["target_names"]) != target_names:
+            raise ValueError(
+                f"케이스 {i} 의 타깃 채널({pc['target_names']})이 첫 케이스"
+                f"({target_names})와 다릅니다."
+            )
+
+    in_dim = int(pointclouds[0]["x"].shape[1])
+    operator = GINOCaseSetOperator(
+        in_channels=in_dim,
+        out_channels=len(target_names),
+        in_gno_radius=float(in_gno_radius),
+        out_gno_radius=float(out_gno_radius),
+        fno_n_modes=tuple(int(m) for m in fno_n_modes),
+        fno_hidden_channels=int(fno_hidden_channels),
+        fno_n_layers=int(fno_n_layers),
+        latent_resolution=int(latent_resolution),
+        max_epochs=int(max_epochs),
+        device=str(device),
+    )
+    operator.fit({"cases": [pointclouds[i] for i in train_idx.tolist()]})
+
+    # 엔진에는 train 케이스 점군만 담는다 — predict()(대표 케이스)와
+    # predict_at 의 좌표 일치 재사용 경로 모두 학습에 쓴 형상이 기준이다.
+    engine_cases = [
+        {
+            "points": pointclouds[i]["points"],
+            "coords01": pointclouds[i]["coords01"],
+            # μ 채널을 뺀 점 피처 — 예측 시 질의 μ 로 다시 붙인다.
+            "base_x": pointclouds[i]["x"][:, : in_dim - params_arr.shape[1]]
+            if params_arr.shape[1]
+            else pointclouds[i]["x"],
+        }
+        for i in train_idx.tolist()
+    ]
+    engine = GINOTwinEngine(
+        operator,
+        cases=engine_cases,
+        train_params=params_arr[train_idx],
+        param_names=names,
+        field_names=fields,
+        target_names=target_names,
+        norm=norm,
+        input_field_names=inputs,
+    )
+
+    eval_split: dict[str, Any] = {"enabled": bool(group_split)}
+    if group_split:
+        train_params_used = params_arr[train_idx]
+        geometry_ids_arr = np.asarray(group_ids) if group_ids is not None else None
+        holdout: list[dict[str, Any]] = []
+        for split_name, idx_array in (("val", val_idx), ("test", test_idx)):
+            for case_idx in idx_array.tolist():
+                pc = pointclouds[case_idx]
+                truth = np.asarray(pc["y"], dtype=np.float64)
+                pred = np.asarray(operator.predict_case(pc), dtype=np.float64)
+                metrics = compute_error_field(truth.ravel(), pred.ravel())
+                query_geometry_id = (
+                    int(geometry_ids_arr[case_idx]) if geometry_ids_arr is not None else None
+                )
+                holdout.append(
+                    {
+                        "case_index": int(case_idx),
+                        "split": split_name,
+                        "query_split_class": classify_query_split(
+                            params_arr[case_idx],
+                            train_params_used,
+                            geometry_ids=(
+                                geometry_ids_arr[train_idx]
+                                if geometry_ids_arr is not None
+                                else None
+                            ),
+                            query_geometry_id=query_geometry_id,
+                        ),
+                        "rel_l2": float(metrics["rel_l2"]),
+                        "rmse": float(metrics["rmse"]),
+                        "max_error": float(metrics["max_error"]),
+                    }
+                )
+        val_scores = [h["rel_l2"] for h in holdout if h["split"] == "val"]
+        test_scores = [h["rel_l2"] for h in holdout if h["split"] == "test"]
+        eval_split.update(
+            {
+                "train_idx": train_idx.tolist(),
+                "val_idx": val_idx.tolist(),
+                "test_idx": test_idx.tolist(),
+                "holdout": holdout,
+                "val_rel_l2_mean": float(np.mean(val_scores)) if val_scores else None,
+                "test_rel_l2_mean": float(np.mean(test_scores)) if test_scores else None,
+            }
+        )
+
+    meta = engine.training_metadata
+    return {
+        "engine": engine,
+        "field": ",".join(fields),
+        "fields": list(fields),
+        "n_cases": len(cases),
+        "param_names": names,
+        "param_mins": list(meta["param_mins"]),
+        "param_maxs": list(meta["param_maxs"]),
+        "target_names": target_names,
+        "eval_split": eval_split,
+        "train_loss": (
+            float(operator.train_losses_[-1]) if operator.train_losses_ else float("nan")
+        ),
+    }

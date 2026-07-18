@@ -269,6 +269,14 @@ class NavierTwinWebApp:
         st.nt_mesh_gnn_epochs = 200
         st.nt_mesh_gnn_hidden = 64
 
+        # Model — GINO (gino, Route 2 두 번째 배선 · 케이스 세트 전용).
+        # mesh_gnn 과 달리 고정 그래프가 없는 점군 신경 연산자
+        # (neuraloperator GINO) — 재샘플 없이 원본 격자 예측, 임의 좌표에서도
+        # 그래프 재구성 없이 동작한다.
+        st.nt_gino_epochs = 100
+        st.nt_gino_hidden = 16
+        st.nt_gino_radius = 0.25
+
         # Model — 계열 Ⓓ 동역학 예보 (PyDMD). 학습 구간 밖 외삽이 가능한 유일
         # 계열. 적합도(재구성 오차)를 반드시 노출한다 — DMD 는 데이터가 안 맞으면
         # 조용히 크게 빗나간다. 근거: model-taxonomy-plan.md §20.
@@ -1181,6 +1189,19 @@ class NavierTwinWebApp:
                 ),
             )
             return
+        if method == "gino":
+            if self.state.nt_case_mode:
+                # 케이스 세트 → GINO (Route 2 두 번째 배선, 재샘플 없는 점군).
+                self._build_gino_twin()
+                return
+            self._fail(
+                "GINO",
+                RuntimeError(
+                    "GINO 는 케이스 세트(정상 파라미터 스윕) 전용입니다 — "
+                    "케이스 폴더나 데모 케이스 세트를 로드하세요."
+                ),
+            )
+            return
         if method == "dynamics":
             if self.state.nt_case_mode:
                 # 비정상 케이스 세트 → ParametricDMD (v5.2). 뷰어 데이터셋(첫
@@ -1583,6 +1604,60 @@ class NavierTwinWebApp:
             )
         except Exception as exc:  # noqa: BLE001
             self._fail("메쉬 GNN 학습 실패", exc)
+
+    def _build_gino_twin(self) -> None:
+        """②Model — 케이스 세트에서 GINO(점군 신경 연산자) 트윈을 학습한다.
+
+        정상 파라미터 스윕 전용 (Route 2 두 번째 배선) — mesh_gnn 과 달리
+        고정 그래프가 없는 순수 점군 학습이라 재샘플이 없다. 결과 엔진은
+        ``varying_mesh=True`` 라 :meth:`predict` 의 기존 형상 가변 분기
+        (``predict_to_mesh`` — 보고 있는 원본 케이스 메쉬 위 표시)를 그대로
+        탄다.
+        """
+        if not self.case_datasets:
+            self._fail(
+                "케이스 없음",
+                RuntimeError(
+                    "복원된 프로젝트는 케이스 1개만 담아 재학습할 수 없습니다 — "
+                    "케이스 폴더를 다시 로드하세요."
+                ),
+            )
+            return
+        fields = self._training_fields()
+        try:
+            result = service.build_gino_twin_from_cases(
+                self.case_datasets,
+                fields,
+                self.case_params,
+                param_names=self.case_param_names,
+                fno_hidden_channels=int(self.state.nt_gino_hidden or 16),
+                max_epochs=int(self.state.nt_gino_epochs or 100),
+                in_gno_radius=float(self.state.nt_gino_radius or 0.25),
+                out_gno_radius=float(self.state.nt_gino_radius or 0.25),
+            )
+            self.engine = result["engine"]
+            names = result["param_names"]
+            loss = float(result.get("train_loss", float("nan")))
+            multi = f", 다중 출력 {len(fields)}개" if len(fields) > 1 else ""
+            summary = (
+                f"field(s)='{', '.join(fields)}', GINO (점군 신경 연산자{multi}) · "
+                f"케이스 {result['n_cases']}개 · 입력 파라미터 {len(names)}개 "
+                f"({', '.join(names)}) · train loss {loss:.3g}"
+            )
+            with self.state:
+                self.state.nt_model_ready = True
+                self.state.nt_model_summary = summary
+                self.state.nt_physics_ready = False
+                self.state.nt_dmd_ready = False
+                self.state.nt_twin_ready = True
+                self.state.nt_twin_summary = summary
+            self._set_twin_param_ranges(names, result["param_mins"], result["param_maxs"])
+            self._set_status(
+                f"GINO 학습 완료 — 케이스 {result['n_cases']}개, 재샘플 없음. "
+                "③Twin 에서 예측하세요 (보고 있는 형상 위에 표시됩니다)."
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._fail("GINO 학습 실패", exc)
 
     @staticmethod
     def _format_holdout_summary(eval_split: dict[str, Any] | None) -> str:
@@ -3841,6 +3916,12 @@ class NavierTwinWebApp:
                             "mdi-graph-outline",
                         ),
                         (
+                            "gino",
+                            "GINO (점군 신경 연산자)",
+                            "고정 그래프 없는 점군 연산자 · 재샘플 없음 · 임의 좌표 예측",
+                            "mdi-dots-hexagon",
+                        ),
+                        (
                             "dynamics",
                             "동역학 예보 (DMD)",
                             "시간 전이 규칙 학습 · 학습 구간 밖 외삽 가능 · PyDMD",
@@ -4066,6 +4147,54 @@ class NavierTwinWebApp:
                                     classes="mt-1",
                                 )
 
+                    # Ⓕ GINO (gino, Route 2 두 번째 배선) — 케이스 세트 전용,
+                    # 재샘플 없는 점군(고정 그래프 없음) 신경 연산자 학습.
+                    with html.Div(v_show=("nt_model_method === 'gino'",)):
+                        with html.Div(v_show=("!nt_case_mode",)):
+                            self._tip_row(
+                                "케이스 세트 전용",
+                                "GINO 는 케이스 세트(정상 파라미터 스윕)에서만 "
+                                "학습할 수 있습니다 — ①Import 에서 케이스 폴더나 "
+                                "데모 케이스 세트를 로드하세요.",
+                                warn=True,
+                            )
+                        with html.Div(v_show=("nt_case_mode",)):
+                            self._tip_row(
+                                "점군 신경 연산자 — 재샘플 없음, 고정 그래프 없음",
+                                "케이스마다 자기 점군을 그대로(neuraloperator "
+                                "GINO: 반경 이웃 적분 GNO + 잠재 격자 FNO)으로 "
+                                "[좌표, 운전조건] → 필드를 학습합니다. mesh_gnn 과 "
+                                "달리 고정 그래프(edge_index)가 없어 예측 좌표가 "
+                                "학습 케이스와 달라도 그대로 동작합니다. 소수 "
+                                "케이스는 정성적 데모로 보세요.",
+                                warn=True,
+                            )
+                            with html.Div(classes="d-flex"):
+                                v3.VTextField(
+                                    v_model=("nt_gino_epochs",),
+                                    label="Epochs",
+                                    type="number",
+                                    density="compact",
+                                    hide_details=True,
+                                    classes="mt-1 mr-2",
+                                )
+                                v3.VTextField(
+                                    v_model=("nt_gino_hidden",),
+                                    label="Hidden width",
+                                    type="number",
+                                    density="compact",
+                                    hide_details=True,
+                                    classes="mt-1 mr-2",
+                                )
+                                v3.VTextField(
+                                    v_model=("nt_gino_radius",),
+                                    label="이웃 반경",
+                                    type="number",
+                                    density="compact",
+                                    hide_details=True,
+                                    classes="mt-1",
+                                )
+
                     # Ⓓ 동역학 예보 (PyDMD) — 학습 구간 밖 외삽이 가능한 유일 계열.
                     with html.Div(v_show=("nt_model_method === 'dynamics'",)):
                         # DMD 는 부적합해도 조용히 학습에 "성공"한다 — 못 보면
@@ -4113,13 +4242,14 @@ class NavierTwinWebApp:
 
                     # 라벨은 입력 종류에 따라 바뀐다 (t vs 운전조건). VBtn 의
                     # 첫 위치 인자는 텍스트 child 라 바인딩이 안 되므로 mustache 로.
-                    # operator/mesh_gnn 은 케이스 세트일 때만 학습 버튼이 뜬다
-                    # (단일 케이스는 각 카드의 안내가 대신 뜬다).
+                    # operator/mesh_gnn/gino 는 케이스 세트일 때만 학습 버튼이
+                    # 뜬다 (단일 케이스는 각 카드의 안내가 대신 뜬다).
                     with html.Div(
                         classes="d-flex align-center mt-2",
                         v_show=(
                             "(nt_model_method !== 'operator' && "
-                            "nt_model_method !== 'mesh_gnn') || nt_case_mode",
+                            "nt_model_method !== 'mesh_gnn' && "
+                            "nt_model_method !== 'gino') || nt_case_mode",
                         ),
                     ):
                         with v3.VBtn(

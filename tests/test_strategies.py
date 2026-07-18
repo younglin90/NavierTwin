@@ -17,7 +17,7 @@ from naviertwin.web import service, strategies  # noqa: E402
 def test_registry_covers_all_wired_methods() -> None:
     """앱의 nt_model_method 값과 레지스트리 키가 일치해야 카드 표시가 성립한다."""
     keys = {spec.key for spec in strategies.STRATEGIES}
-    assert keys == {"rom", "physics", "dynamics", "operator", "mesh_gnn"}
+    assert keys == {"rom", "physics", "dynamics", "operator", "mesh_gnn", "gino"}
 
 
 def test_single_snapshot_nothing_trainable() -> None:
