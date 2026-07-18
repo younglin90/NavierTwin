@@ -74,6 +74,20 @@
 - [x] 검토 §6½ #6: MLflow 실험 추적(`core/experiment/tracking.py`) — 학습
       실행마다 strategy/params/metrics 기록, mlflow 미설치/실패는 조용한
       no-op(학습 흐름을 절대 막지 않음)
+- [x] canonical data model 마무리: `strategies._same_mesh_points()` 를
+      DatasetSignature 해시 기반으로 배선(해시 불일치 시 기존 allclose
+      허용오차 로직으로 폴백 — 판정 결과 100% 하위 호환, 빠른 경로만 추가)
+- [x] MeshGraphNets `predict()` stale edge_features 버그 수정 — 그래프
+      override 시 edge_features 를 재계산하지 않고 재사용하던 결함
+      (Route 2 연구가 발견, 재현 테스트로 고정)
+- [x] 검토 §6½ #5 후속: 보존량 volume-weighted 재샘플 옵션
+      (`conservative_resample_to_grid`) — 체커보드 밀도장 기준 점 보간
+      오차 100% → 부피가중 오차 0.002%로 실측 검증. 기본값(미지정)은
+      기존 동작과 bit-동일
+- [x] GUI 테스트 스위트 행(hang) 수정 — `QApplication.setStyleSheet()` 가
+      매 `MainWindow` 생성마다 프로세스 내 살아있는 모든 위젯을 재폴리시해
+      테스트가 누적될수록 선형으로 느려지던 근본 원인 수정 (36개 테스트
+      무한대기 → 43초 완주)
 
 ## 직전 단계: v4.2.0 + 17 rounds — 연구 플랫폼 + 전영역 성숙화 ✅
 
