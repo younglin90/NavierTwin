@@ -54,6 +54,10 @@ def test_steady_sweep_enables_rom_and_physics_not_dmd() -> None:
     assert report["rom"]["ok"] and report["physics"]["ok"]
     assert not report["dynamics"]["ok"]
     assert "ParametricDMD" in report["dynamics"]["reason"]
+    # v5.2: 정상 스윕은 GeometryFNO(FNO+SDF)도 가능 — few-shot 경고가 남아야 한다.
+    assert report["operator"]["ok"]
+    assert "수백 장이 문헌 기준" in report["operator"]["reason"]
+    assert "정성적" in report["operator"]["reason"]
     assert strategies.recommend(profile)["method"] == "rom"
 
 
@@ -76,6 +80,9 @@ def test_varying_mesh_only_physics_and_recommends_it() -> None:
     assert report["physics"]["ok"]
     assert not report["rom"]["ok"]
     assert "격자가 달라" in report["rom"]["reason"]
+    # GeometryFNO 는 케이스 3개 미만이면 거절한다 (여긴 2개).
+    assert not report["operator"]["ok"]
+    assert "최소 3개" in report["operator"]["reason"]
     rec = strategies.recommend(profile)
     assert rec["method"] == "physics"
     assert "형상 가변" in rec["reason"]
@@ -94,6 +101,9 @@ def test_unsteady_sweep_rom_physics_ok_with_time_note() -> None:
     # v5.2: 비정상 스윕은 ParametricDMD 로 동역학 예보도 가능하다.
     assert report["dynamics"]["ok"]
     assert "ParametricDMD" in report["dynamics"]["reason"]
+    # GeometryFNO 는 정상 스윕 전용 — 시간축이 있으면 거절한다.
+    assert not report["operator"]["ok"]
+    assert "미지원" in report["operator"]["reason"]
     rec = strategies.recommend(profile)
     assert rec["method"] == "rom"
     assert "(μ, t)" in rec["reason"]

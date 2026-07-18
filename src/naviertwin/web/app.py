@@ -239,6 +239,12 @@ class NavierTwinWebApp:
         st.nt_physics_hidden = 32
         st.nt_physics_max_samples = 20_000
 
+        # Model — 계열 Ⓒ 신경 연산자 (GeometryFNO, 케이스 세트 전용). 케이스들을
+        # 공통 균일 격자로 텐서화하고 [sdf, mask, μ...] 채널을 입력으로 FNO 를
+        # 학습한다 — 형상이 케이스마다 달라도 SDF 채널이 형상을 알려준다.
+        st.nt_operator_epochs = 200
+        st.nt_operator_resolution = 48
+
         # Model — 계열 Ⓓ 동역학 예보 (PyDMD). 학습 구간 밖 외삽이 가능한 유일
         # 계열. 적합도(재구성 오차)를 반드시 노출한다 — DMD 는 데이터가 안 맞으면
         # 조용히 크게 빗나간다. 근거: model-taxonomy-plan.md §20.
@@ -720,7 +726,9 @@ class NavierTwinWebApp:
         field = meta.get("field_name", "")
         reducer = meta.get("reducer", getattr(engine, "reducer_type", "pod"))
         surrogate = meta.get("surrogate", getattr(engine, "surrogate_type", "rbf"))
-        if meta.get("problem_type") == "steady_sweep":
+        # "steady_sweep" + "steady_sweep_operator"(GeometryFNO) 둘 다 파라미터
+        # 스윕 복원 경로를 탄다 — 슬라이더가 k 개(운전조건)라는 점이 같다.
+        if str(meta.get("problem_type", "")).startswith("steady_sweep"):
             self._restore_sweep_engine(engine, meta, reducer, surrogate, field)
             return
         meta_min = meta.get("param_min")
@@ -780,6 +788,8 @@ class NavierTwinWebApp:
         with self.state:
             if str(reducer) == "direct_physics_ai":
                 self.state.nt_model_method = "physics"
+            elif str(reducer) == "geometry_fno":
+                self.state.nt_model_method = "operator"
             restored_fields = meta.get("field_names") or ([field] if field else [])
             if restored_fields:
                 self.state.nt_train_fields = list(restored_fields)
@@ -1062,6 +1072,11 @@ class NavierTwinWebApp:
             self._build_physics_twin()
             return
         if method == "operator":
+            if self.state.nt_case_mode:
+                # 정상 케이스 세트 → GeometryFNO(FNO+SDF). 단일 케이스 직접
+                # 학습은 여전히 미배선이라 아래 ⑥랩 안내가 그대로 남는다.
+                self._build_geometry_fno_twin()
+                return
             self._fail(
                 "신경 연산자",
                 RuntimeError("신경 연산자(FNO) 학습은 ⑥연산자 랩 패널에서 실행하세요."),
@@ -1347,6 +1362,56 @@ class NavierTwinWebApp:
             )
         except Exception as exc:  # noqa: BLE001
             self._fail("PhysicsNeMo 학습 실패", exc)
+
+    def _build_geometry_fno_twin(self) -> None:
+        """②Model — 케이스 세트에서 형상 인지 FNO(GeometryFNO) 트윈을 학습한다.
+
+        정상 파라미터 스윕 전용 — 케이스들을 공통 균일 격자로 텐서화하고
+        ``[sdf, mask, μ...]`` 채널을 입력으로 FNO 를 학습한다. 예측은 공통
+        격자 위에서 이뤄지므로 :meth:`predict` 가 ``common_grid`` 표시를 보고
+        뷰어를 ``engine.grid_dataset`` 으로 교체한다.
+        """
+        if not self.case_datasets:
+            self._fail(
+                "케이스 없음",
+                RuntimeError(
+                    "복원된 프로젝트는 케이스 1개만 담아 재학습할 수 없습니다 — "
+                    "케이스 폴더를 다시 로드하세요."
+                ),
+            )
+            return
+        field = self._training_field()
+        try:
+            result = service.build_geometry_fno_twin(
+                self.case_datasets,
+                field,
+                self.case_params,
+                param_names=self.case_param_names,
+                resolution=int(self.state.nt_operator_resolution or 48),
+                epochs=int(self.state.nt_operator_epochs or 200),
+            )
+            self.engine = result["engine"]
+            names = result["param_names"]
+            summary = (
+                f"field='{field}', GeometryFNO(SDF 채널) · 케이스 "
+                f"{result['n_cases']}개 · 공통 격자 해상도 {result['resolution']} · "
+                f"입력 파라미터 {len(names)}개 ({', '.join(names)})"
+            )
+            with self.state:
+                self.state.nt_model_ready = True
+                self.state.nt_model_summary = summary
+                self.state.nt_physics_ready = False
+                self.state.nt_dmd_ready = False
+                self.state.nt_twin_ready = True
+                self.state.nt_twin_summary = summary
+            self._set_twin_param_ranges(names, result["param_mins"], result["param_maxs"])
+            self._set_status(
+                f"GeometryFNO 학습 완료 — 케이스 {result['n_cases']}개, "
+                f"공통 격자 해상도 {result['resolution']}. ③Twin 에서 예측하세요 "
+                "(결과는 공통 격자 위에 표시됩니다)."
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._fail("GeometryFNO 학습 실패", exc)
 
     def run_compare(self) -> None:
         """모든 reducer×surrogate 조합을 학습/평가해 순위표를 표시한다."""
@@ -1654,6 +1719,12 @@ class NavierTwinWebApp:
             return
         try:
             values, point = self._twin_param_values()
+            # GeometryFNO 는 보고 있는 케이스 메쉬가 아니라 학습에 쓴 "공통
+            # 격자" 위에서 예측한다 — 엔진이 들고 있는 공통 격자 데이터셋
+            # 사본에 예측을 붙여 뷰어를 교체한다 (varying_mesh 경로와 대칭).
+            if self.engine.training_metadata.get("common_grid"):
+                self._predict_on_common_grid(values, point)
+                return
             # 형상 가변 케이스에는 "학습 격자" 가 없다(케이스마다 자기 격자를 가짐)
             # → 지금 보고 있는 형상 위에 예측한다. 신경장이라 좌표만 있으면 된다.
             if self.engine.training_metadata.get("varying_mesh"):
@@ -1686,6 +1757,44 @@ class NavierTwinWebApp:
             self._set_status(f"예측 완료: {point} → {label} 3D 표시")
         except Exception as exc:  # noqa: BLE001
             self._fail("예측 실패", exc)
+
+    def _predict_on_common_grid(self, values: list[float], point: str) -> None:
+        """공통 격자 엔진(GeometryFNO)의 예측을 격자 사본에 붙여 뷰어를 바꾼다.
+
+        엔진의 ``grid_dataset`` (sdf/mask 포함)을 deep copy 해 예측 필드를
+        붙인다 — 원본을 두고 사본에 붙이므로 반복 예측이 엔진 상태를 더럽히지
+        않고, ``select_case`` 로 언제든 원본 케이스 뷰로 돌아갈 수 있다.
+        """
+        from naviertwin.core.cfd_reader.base import CFDDataset
+
+        source = self.engine.grid_dataset
+        target = CFDDataset(
+            mesh=source.mesh.copy(deep=True),
+            time_steps=[0.0],
+            field_names=list(source.field_names),
+            metadata={
+                **dict(getattr(source, "metadata", {}) or {}),
+                "source": "twin_prediction_common_grid",
+            },
+        )
+        prediction = service.predict_twin(self.engine, values)
+        # 다중 채널이면 twin_<채널> 로 각각, 단일 채널이면 twin_prediction 으로.
+        parts = service.split_multi_prediction(self.engine, prediction)
+        if parts:
+            names = [
+                service.attach_prediction(target, segment, field_name=f"twin_{display}")
+                for display, segment in parts
+            ]
+        else:
+            names = [service.attach_prediction(target, prediction)]
+        self._swap_view_dataset(
+            target,
+            status=(
+                f"예측 완료: {point} → 공통 격자 위에 표시 "
+                f"({', '.join(names)}) — 형상(SDF)은 최근접 학습 케이스 것"
+            ),
+            prefer=names[0],
+        )
 
     def predict_on_mesh(self) -> None:
         """선택한 파일의 메쉬 좌표에서 예측하고 그 메쉬를 뷰어로 전환한다 (M3).
@@ -2883,25 +2992,61 @@ class NavierTwinWebApp:
                             classes="mt-2",
                         )
 
-                    # Ⓒ 신경 연산자: ⑥연산자 랩으로 안내 (로드 데이터 직학습은 P4)
+                    # Ⓒ 신경 연산자: 케이스 세트는 GeometryFNO(FNO+SDF) 직학습,
+                    # 단일 케이스는 ⑥연산자 랩으로 안내 (직학습은 P4).
                     with html.Div(v_show=("nt_model_method === 'operator'",)):
-                        # 로드한 데이터로는 아직 학습 불가 — 제약이라 ⚠.
-                        self._tip_row(
-                            "내 데이터 직접 학습은 아직 미지원",
-                            "신경 연산자는 다수 샘플(수백+)·균일 격자 데이터에 "
-                            "적합합니다 (균일 격자: FNO — 탑재됨 · 기하 인지: "
-                            "GNN/GINO — 예정). 현재는 ⑥연산자 랩의 표준 벤치마크 "
-                            "문제로만 학습할 수 있습니다.",
-                            warn=True,
-                        )
-                        v3.VBtn(
-                            "⑥ 연산자 랩 열기",
-                            click="nt_open_panels = [5]",
-                            variant="tonal",
-                            block=True,
-                            classes="mt-1",
-                            prepend_icon="mdi-open-in-app",
-                        )
+                        with html.Div(v_show=("!nt_case_mode",)):
+                            # 단일 케이스 로드 데이터로는 아직 학습 불가 — 제약이라 ⚠.
+                            self._tip_row(
+                                "내 데이터 직접 학습은 아직 미지원",
+                                "신경 연산자는 다수 샘플(수백+)·균일 격자 데이터에 "
+                                "적합합니다 (균일 격자: FNO — 탑재됨 · 기하 인지: "
+                                "GNN/GINO — 예정). 현재는 ⑥연산자 랩의 표준 벤치마크 "
+                                "문제로만 학습할 수 있습니다. 케이스 세트(정상 "
+                                "파라미터 스윕)를 로드하면 GeometryFNO 로 직접 "
+                                "학습할 수 있습니다.",
+                                warn=True,
+                            )
+                            v3.VBtn(
+                                "⑥ 연산자 랩 열기",
+                                click="nt_open_panels = [5]",
+                                variant="tonal",
+                                block=True,
+                                classes="mt-1",
+                                prepend_icon="mdi-open-in-app",
+                            )
+                        with html.Div(v_show=("nt_case_mode",)):
+                            # SDF 채널 접근 + few-shot 한계는 학습 전에 알아야
+                            # 하는 정보라 ⚠ 로 남긴다.
+                            self._tip_row(
+                                "형상 인지 FNO — SDF 채널 (GeometryFNO)",
+                                "케이스들을 공통 균일 격자로 텐서화하고 "
+                                "[sdf(부호거리), mask, 운전조건] 채널을 입력으로 "
+                                "FNO 를 학습합니다 — 형상이 케이스마다 달라도 SDF "
+                                "채널이 형상을 알려줍니다 (DeepCFD 계열). 문헌의 "
+                                "정량 성능은 수백~수천 케이스 기준 — 소수 케이스는 "
+                                "정성적 데모로 보세요. 예측은 공통 격자 위에 "
+                                "표시되며, 새 운전조건의 형상(SDF)은 최근접 학습 "
+                                "케이스 것을 재사용합니다.",
+                                warn=True,
+                            )
+                            with html.Div(classes="d-flex"):
+                                v3.VTextField(
+                                    v_model=("nt_operator_epochs",),
+                                    label="Epochs",
+                                    type="number",
+                                    density="compact",
+                                    hide_details=True,
+                                    classes="mt-1 mr-2",
+                                )
+                                v3.VTextField(
+                                    v_model=("nt_operator_resolution",),
+                                    label="공통격자 해상도",
+                                    type="number",
+                                    density="compact",
+                                    hide_details=True,
+                                    classes="mt-1",
+                                )
 
                     # Ⓓ 동역학 예보 (PyDMD) — 학습 구간 밖 외삽이 가능한 유일 계열.
                     with html.Div(v_show=("nt_model_method === 'dynamics'",)):
@@ -2950,9 +3095,11 @@ class NavierTwinWebApp:
 
                     # 라벨은 입력 종류에 따라 바뀐다 (t vs 운전조건). VBtn 의
                     # 첫 위치 인자는 텍스트 child 라 바인딩이 안 되므로 mustache 로.
+                    # operator 는 케이스 세트일 때만 학습 버튼이 뜬다 (단일
+                    # 케이스는 ⑥연산자 랩 안내가 대신 뜬다).
                     with html.Div(
                         classes="d-flex align-center mt-2",
-                        v_show=("nt_model_method !== 'operator'",),
+                        v_show=("nt_model_method !== 'operator' || nt_case_mode",),
                     ):
                         with v3.VBtn(
                             click=self.ctrl.nt_model_train,
@@ -2980,7 +3127,7 @@ class NavierTwinWebApp:
                     html.Div(
                         "케이스 {{ nt_case_count }}개로 학습합니다.",
                         classes="text-caption text-disabled mt-1",
-                        v_show=("nt_model_method !== 'operator' && nt_case_mode",),
+                        v_show=("nt_case_mode",),
                     )
                     with v3.VCard(variant="tonal", classes="mt-3", v_show=("nt_model_ready",)):
                         with v3.VCardText(classes="text-caption"):
