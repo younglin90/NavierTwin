@@ -266,14 +266,18 @@ def test_energy_chart_requires_pod() -> None:
 
 
 def test_compare_dashboard() -> None:
+    from naviertwin.web import service
+
     app = _make_app("nt-test-compare")
     st = app.server.state
     app.load_demo()
     app.run_compare()
     assert st.nt_error == ""
     assert st.nt_compare_dialog is True
-    # ROM 4조합 + Physics AI(직접 회귀) 1행 = 5행 리더보드.
-    assert len(st.nt_compare_rows) == 5
+    # ROM (reducer × 리더보드 surrogate) 조합 + Physics AI(직접 회귀) 1행.
+    # ezyrb_ann 은 느려서 기본 리더보드에서 빠진다 (LEADERBOARD_SURROGATES).
+    n_rom = len(service.REDUCERS) * len(service.LEADERBOARD_SURROGATES)
+    assert len(st.nt_compare_rows) == n_rom + 1
     assert any("physicsnemo" in r["combo"] for r in st.nt_compare_rows)
     assert "최우수" in st.nt_compare_summary
     # 표시용 메트릭은 문자열로 포맷된다 (inf/nan JSON 안전).

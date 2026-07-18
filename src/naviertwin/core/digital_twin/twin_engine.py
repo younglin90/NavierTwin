@@ -52,7 +52,7 @@ def _build_surrogate(surrogate_type: str) -> BaseSurrogate:
     """surrogate_type 문자열로 서로게이트 모델을 생성한다.
 
     Args:
-        surrogate_type: "kriging" | "rbf".
+        surrogate_type: "kriging" | "rbf" | "ezyrb_gpr" | "ezyrb_ann".
 
     Returns:
         BaseSurrogate 구체 인스턴스.
@@ -68,10 +68,18 @@ def _build_surrogate(surrogate_type: str) -> BaseSurrogate:
         from naviertwin.core.surrogate.rbf_surrogate import RBFSurrogate
 
         return RBFSurrogate()
+    elif surrogate_type == "ezyrb_gpr":
+        from naviertwin.core.surrogate.ezyrb_surrogate import EzyRBGPRSurrogate
+
+        return EzyRBGPRSurrogate()
+    elif surrogate_type == "ezyrb_ann":
+        from naviertwin.core.surrogate.ezyrb_surrogate import EzyRBANNSurrogate
+
+        return EzyRBANNSurrogate()
     else:
         raise ValueError(
             f"지원되지 않는 surrogate_type: '{surrogate_type}'. "
-            f"지원 목록: ['kriging', 'rbf']"
+            f"지원 목록: ['kriging', 'rbf', 'ezyrb_gpr', 'ezyrb_ann']"
         )
 
 
@@ -116,7 +124,8 @@ class TwinEngine:
 
         Args:
             reducer_type: 차원 축소 방법. "pod" | "randomized_pod".
-            surrogate_type: 서로게이트 모델 종류. "kriging" | "rbf".
+            surrogate_type: 서로게이트 모델 종류.
+                "kriging" | "rbf" | "ezyrb_gpr" | "ezyrb_ann".
             n_modes: 보존할 POD 모드 수.
         """
         self.reducer_type = reducer_type

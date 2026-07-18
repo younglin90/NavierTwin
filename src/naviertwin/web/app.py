@@ -224,6 +224,8 @@ class NavierTwinWebApp:
         st.nt_surrogate_choices = [
             {"title": "RBF", "value": "rbf"},
             {"title": "Kriging (GP)", "value": "kriging"},
+            {"title": "GPR (EZyRB · 불확실성)", "value": "ezyrb_gpr"},
+            {"title": "POD-NN (EZyRB 신경망)", "value": "ezyrb_ann"},
         ]
         st.nt_model_ready = False
         st.nt_model_summary = ""

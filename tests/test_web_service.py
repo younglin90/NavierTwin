@@ -230,11 +230,15 @@ def test_attach_pod_mode(demo) -> None:
 
 
 def test_compare_models_ranks_all_combos() -> None:
-    """ROM 조합 역학만 검증 — Physics AI 행은 전용 테스트에서 다룬다."""
+    """ROM 조합 역학만 검증 — Physics AI 행은 전용 테스트에서 다룬다.
+
+    기본 조합은 LEADERBOARD_SURROGATES — ezyrb_ann(POD-NN)은 학습이 느려
+    자동 비교 기본에서 제외된다 (combos 인자로는 여전히 지정 가능).
+    """
     ds = service.make_demo_dataset(nx=12, ny=12, n_steps=8)
     result = service.compare_models(ds, "U", 4, include_physics=False)
     rows = result["rows"]
-    assert len(rows) == len(service.REDUCERS) * len(service.SURROGATES)
+    assert len(rows) == len(service.REDUCERS) * len(service.LEADERBOARD_SURROGATES)
     # RMSE 오름차순 정렬.
     rmses = [r["rmse"] for r in rows]
     assert rmses == sorted(rmses)
