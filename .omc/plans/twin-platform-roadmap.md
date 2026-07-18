@@ -337,6 +337,19 @@ AIAA'20) — 둘 다 "0-채움 = 형상 인코딩" 전제를 검증. FNO는 `in_
 - 외삽 모드(에러 N/A) 전 전략 일반화.
 - 검증: 학습에 없던 조건 예측 → 좌우 비교 → 차이장; 외삽 → 에러 숨김.
 
+### v5.1/v5.4/v5.6-P1 — 2026-07-18 두 번째 병렬 사이클 완료
+- ✅ **wall face 픽킹**: ①Import "경계(Wall) 지정" 카드 — trame server 픽킹
+  (`enable_cell_picking`) + `service.attach_wall_distance_from_picks`(mesh_features
+  재사용). raw VTU/STL 등 patch 메타 없는 파일의 폴백. seed+region growing은 후속.
+- ✅ **분할 뷰어**: 독립 Plotter 2개(`plotter`/`plotter_right`) — 같은 Plotter 를
+  두 view 에 중복 바인딩하는 미검증 경로 대신 안전한 설계 채택. `_render_split`
+  이 좌우 필드 값을 합쳐 **공통 clim** 강제(검토 §11.1 준수). 카메라는 수동
+  동기화 버튼(진짜 실시간 드래그 연동은 이벤트 포워딩 추가 필요 — 정직히 문서화).
+- ✅ **케이스 로드 병렬화**: `load_case_set`/`resample_cases_to_common_grid` 에
+  `thread_map`(GIL 해제 구간이라 스레드가 정답 — CFDDataset 의 VTK 객체는
+  프로세스 피클링에 부적합, 카르만 데모의 ProcessPoolExecutor 와는 다른 이유로
+  다른 선택). 순서·수치 동일성 테스트로 보장. 실측 ~4.6배(10케이스).
+
 ### v5.6 — 성능/병렬 계층 (§4.4½, 사용자 추가 요구)
 - P0: 학습 디바이스 배지+토글(②Model), 케이스 로드/재샘플/텐서화 process_map 병렬.
 - P1: AMP+미니배치 학습 루프(Physics AI·GeometryFNO), 리더보드 조합 병렬.
