@@ -62,6 +62,10 @@ class NavierTwinWebApp:
         self.state = self.server.state
         self.ctrl = self.server.controller
         self.plotter: Optional[Any] = None
+        # 분할 뷰(v5.4) 우측 패널용 독립 Plotter — 좌측(self.plotter)은 실제
+        # 필드, 우측은 트윈 예측을 보여준다. 둘 다 build_ui 시점에 미리
+        # plotter_ui 로 붙여두고 v_show 로 토글한다(trame UI 는 1회만 빌드).
+        self.plotter_right: Optional[Any] = None
         self.dataset: Optional[Any] = None
         # 케이스 세트(문제 유형 B) 로드 시에만 채워진다 — dataset 은 뷰어용
         # 첫 케이스를 가리키고, 학습은 case_datasets 전체 + case_params 로 한다.
@@ -291,6 +295,8 @@ class NavierTwinWebApp:
         # OOD 3단계 지지집합 상태 (v5.6, 검토 §6½ #4) — 외삽 신뢰도 신호.
         st.nt_support_status = ""  # IN_SUPPORT | NEAR_BOUNDARY | OUT_OF_SUPPORT
         st.nt_support_label = ""
+        # 분할 뷰(좌 실제/우 트윈) — 두 Plotter 를 나란히, 컬러 범위 공유 (v5.4).
+        st.nt_split_view = False
 
         # Compare (reducer×surrogate 벤치마크)
         st.nt_compare_dialog = False
@@ -377,6 +383,9 @@ class NavierTwinWebApp:
         # 즉시 끝나거나 GL 을 메인 스레드에서 만져야 하는 콜백은 동기 유지.
         ctrl.nt_show_energy = self.show_energy_chart
         ctrl.nt_reset_view = self.reset_view
+        # 분할 뷰(v5.4) — GL Plotter 를 직접 만지므로 메인 스레드 동기 콜백.
+        ctrl.nt_toggle_split_view = self.toggle_split_view
+        ctrl.nt_sync_split_camera = self.sync_split_camera
         ctrl.nt_export_screenshot = self.export_screenshot
         ctrl.nt_export_csv = self.export_csv
         ctrl.nt_export_vtk = self.export_vtk
@@ -1789,6 +1798,8 @@ class NavierTwinWebApp:
             self._update_truth_comparison(values, prediction, parts)
             self._refresh_fields(prefer=shown)
             self._render(reset_camera=False)
+            if self.state.nt_split_view:
+                self._render_split()
             self._set_status(f"예측 완료: {point} → {label} 3D 표시")
         except Exception as exc:  # noqa: BLE001
             self._fail("예측 실패", exc)
@@ -2364,6 +2375,28 @@ class NavierTwinWebApp:
                 pass
         return self.plotter
 
+    def _ensure_plotter_right(self) -> Any:
+        """분할 뷰 우측(트윈) Plotter — 좌측(`_ensure_plotter`)과 완전히 독립.
+
+        같은 배경/축 설정을 복제한다. 좌측 로직을 바꾸지 않도록 별도 메서드로
+        분리했다(v5.4 분할 뷰어).
+        """
+        if self.plotter_right is None:
+            import pyvista as pv
+
+            self.plotter_right = pv.Plotter(off_screen=True)
+            try:
+                self.plotter_right.set_background(
+                    theme.VIEWER_BG_BOTTOM, top=theme.VIEWER_BG_TOP
+                )
+            except Exception:  # noqa: BLE001
+                self.plotter_right.background_color = theme.VIEWER_BG_BOTTOM
+            try:
+                self.plotter_right.show_axes()
+            except Exception:  # noqa: BLE001
+                pass
+        return self.plotter_right
+
     def _flush_render(self) -> None:
         """비동기 워커가 표시한 보류 렌더를 메인 스레드에서 수행한다 (GL 안전)."""
         if self._render_pending:
@@ -2453,6 +2486,126 @@ class NavierTwinWebApp:
         if callable(update):
             update()
 
+    def toggle_split_view(self) -> None:
+        """분할 뷰(좌 실제/우 트윈) 켜기/끄기 (v5.4).
+
+        켤 때 즉시 한 번 렌더한다 — 데이터/예측이 없으면 빈 패널로 안내만 뜬다.
+        """
+        with self.state:
+            self.state.nt_split_view = not bool(self.state.nt_split_view)
+        if self.state.nt_split_view:
+            self._render_split()
+
+    def sync_split_camera(self) -> None:
+        """우측(트윈) 카메라를 좌측(실제) 카메라에 맞춘다 (v5.4, 수동 동기화).
+
+        두 패널은 독립된 Plotter 라 드래그 실시간 연동은 안 되고, 이 버튼으로
+        스냅샷 동기화한다 — 회전/줌 비교가 필요할 때 누른다.
+        """
+        if self.plotter is None or self.plotter_right is None:
+            return
+        try:
+            self.plotter_right.camera_position = self.plotter.camera_position
+        except Exception:  # noqa: BLE001
+            pass
+        update = getattr(self.ctrl, "view_update_right", None)
+        if callable(update):
+            try:
+                update()
+            except Exception:  # noqa: BLE001 — build_ui 없이(테스트) 미등록일 수 있음
+                pass
+
+    def _split_field_names(self) -> tuple[str, str]:
+        """분할 뷰의 (좌=실제, 우=트윈) 필드 이름을 고른다.
+
+        좌측은 학습에 쓴 필드(``nt_train_field``), 우측은 그 필드의 예측
+        (``twin_<field>`` 또는 다중출력 없으면 ``twin_prediction``)을 우선한다.
+        둘 다 없으면 현재 뷰어 필드/첫 twin_* 필드로 폴백한다.
+        """
+        fields = list(self.state.nt_fields or [])
+        train_field = str(self.state.nt_train_field or "")
+        left = train_field if train_field in fields else ""
+        if not left:
+            left = next((f for f in fields if not f.startswith("twin_")), "")
+        right_candidates = [f"twin_{left}", "twin_prediction"] if left else []
+        right = next((c for c in right_candidates if c in fields), "")
+        if not right:
+            right = next((f for f in fields if f.startswith("twin_")), "")
+        return left, right
+
+    def _render_split(self) -> None:
+        """분할 뷰 두 패널을 함께 렌더한다 — **공통 컬러 범위** 강제 (v5.4).
+
+        좌우에 다른 컬러 범위를 자동 적용하면 오차가 시각적으로 숨겨질 수 있어
+        (검토 §11.1), 두 필드의 값 범위를 합쳐 ``clim`` 을 공유한다.
+        """
+        if self.dataset is None or not self.state.nt_split_view:
+            return
+        left_name, right_name = self._split_field_names()
+        if not left_name or not right_name:
+            return  # 예측이 아직 없으면 조용히 대기 (안내는 UI 캡션이 담당)
+        try:
+            plotter_l = self._ensure_plotter()
+            plotter_r = self._ensure_plotter_right()
+            mesh_l, scalar_l = render.prepare_render_mesh(
+                self.dataset, left_name, int(self.state.nt_timestep or 0)
+            )
+            mesh_r, scalar_r = render.prepare_render_mesh(
+                self.dataset, right_name, int(self.state.nt_timestep or 0)
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._fail("분할 뷰 렌더 실패", exc)
+            return
+
+        clim = None
+        try:
+            import numpy as np
+
+            arr_l = np.asarray(mesh_l.point_data[scalar_l]) if scalar_l else None
+            arr_r = np.asarray(mesh_r.point_data[scalar_r]) if scalar_r else None
+            values = [a for a in (arr_l, arr_r) if a is not None and a.size]
+            if values:
+                combined = np.concatenate([v.ravel() for v in values])
+                finite = combined[np.isfinite(combined)]
+                if finite.size:
+                    clim = (float(finite.min()), float(finite.max()))
+        except Exception:  # noqa: BLE001
+            clim = None
+
+        for plotter, mesh, scalar, name in (
+            (plotter_l, mesh_l, scalar_l, "nt_split_left"),
+            (plotter_r, mesh_r, scalar_r, "nt_split_right"),
+        ):
+            plotter.clear()
+            kwargs: dict[str, Any] = {
+                "show_edges": bool(self.state.nt_show_edges),
+                "name": name,
+            }
+            if scalar:
+                kwargs.update(scalars=scalar, cmap=self.state.nt_cmap, nan_color="#8b949e")
+                if clim is not None:
+                    kwargs["clim"] = clim
+            else:
+                kwargs.update(color=render.SOLID_COLOR)
+            plotter.add_mesh(mesh, **kwargs)
+            try:
+                plotter.show_axes()
+                if render.mesh_is_flat(mesh):
+                    plotter.view_xy()
+                else:
+                    plotter.view_isometric()
+                plotter.reset_camera()
+            except Exception:  # noqa: BLE001
+                pass
+
+        for ctrl_name in ("view_update", "view_update_right"):
+            update = getattr(self.ctrl, ctrl_name, None)
+            if callable(update):
+                try:
+                    update()
+                except Exception:  # noqa: BLE001 — build_ui 없이(테스트) 미등록일 수 있음
+                    pass
+
     # ------------------------------------------------------------------
     # Status helpers
     # ------------------------------------------------------------------
@@ -2538,6 +2691,7 @@ class NavierTwinWebApp:
         from trame.widgets import vuetify3 as v3
 
         self._ensure_plotter()
+        self._ensure_plotter_right()  # 분할 뷰(v5.4) — UI 는 1회만 빌드되므로 미리 준비.
 
         # 다크 테마 주입 (VAppLayout 이 state.trame__vuetify3_config 로 읽음)
         self.server.state.trame__vuetify3_config = theme.vuetify_config()
@@ -2589,6 +2743,26 @@ class NavierTwinWebApp:
                     classes="ml-2",
                     disabled=("!nt_has_dataset",),
                 )
+                # 분할 뷰 토글 (v5.4) — 예측이 있을 때만 의미가 있어 비활성 조건에
+                # nt_predicted 도 건다. 켜져 있으면 강조색.
+                v3.VBtn(
+                    "{{ nt_split_view ? '분할 끄기' : '실제|트윈 분할' }}",
+                    click=self.ctrl.nt_toggle_split_view,
+                    variant=("nt_split_view ? 'flat' : 'tonal'",),
+                    color=("nt_split_view ? 'primary' : undefined",),
+                    size="small",
+                    classes="ml-2",
+                    disabled=("!nt_predicted",),
+                    prepend_icon="mdi-compare-horizontal",
+                )
+                v3.VBtn(
+                    icon="mdi-camera-sync-outline",
+                    click=self.ctrl.nt_sync_split_camera,
+                    variant="text",
+                    size="small",
+                    classes="ml-1",
+                    v_show=("nt_split_view",),
+                )
                 # 결정형(nt_progress>=0)/비결정형(nt_busy && nt_progress<0) 겸용 진행바
                 v3.VProgressLinear(
                     active=("nt_busy",),
@@ -2611,8 +2785,35 @@ class NavierTwinWebApp:
                 # 전용 <trame-style>(client.Style) 로 <head> 에 런타임 주입한다.
                 client.Style(theme.CUSTOM_CSS)
                 with v3.VContainer(fluid=True, classes="pa-0 fill-height"):
-                    view = plotter_ui(self.plotter, default_server_rendering=True)
-                    self.ctrl.view_update = view.update
+                    # 분할 뷰(v5.4): 좌측(self.plotter)은 항상 이 자리 하나뿐이고
+                    # 폭만 12→6 으로 줄어든다(같은 Plotter 를 두 view 에 중복
+                    # 바인딩하지 않는다 — 지원 여부가 불확실해 안전한 쪽을 택함).
+                    # 우측(self.plotter_right)은 분할일 때만 나타나는 별도 패널.
+                    with v3.VRow(no_gutters=True, classes="fill-height ma-0"):
+                        with v3.VCol(
+                            cols=("nt_split_view ? 6 : 12",),
+                            classes="fill-height pa-0",
+                        ):
+                            view = plotter_ui(self.plotter, default_server_rendering=True)
+                            self.ctrl.view_update = view.update
+                        with v3.VCol(
+                            cols=6,
+                            v_show=("nt_split_view",),
+                            classes="fill-height pa-0",
+                        ):
+                            view_right = plotter_ui(
+                                self.plotter_right, default_server_rendering=True
+                            )
+                            self.ctrl.view_update_right = view_right.update
+                    html.Div(
+                        "예측을 실행하면 실제(좌) · 트윈(우) 필드가 표시됩니다 — "
+                        "컬러 범위를 공유합니다.",
+                        v_show=("nt_split_view && !nt_predicted",),
+                        classes=(
+                            "text-caption text-disabled position-absolute "
+                            "top-0 left-0 ma-2"
+                        ),
+                    )
 
             # 상태 / 오류 표시줄
             with layout.footer as footer:

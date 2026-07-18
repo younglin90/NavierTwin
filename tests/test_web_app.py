@@ -506,6 +506,36 @@ def test_live_status_stays_visible_outside_tooltips() -> None:
             )
 
 
+def test_split_view_toggle_and_field_selection() -> None:
+    """분할 뷰(v5.4): 토글 상태 + 좌(실제)/우(트윈) 필드 선택 로직."""
+    app = _make_app("nt-test-split-view")
+    st = app.server.state
+    st.nt_demo_kind = "sweep"
+    app.load_demo()
+    st.nt_model_method = "rom"
+    app.build_twin()
+    assert st.nt_error == ""
+
+    # 예측 전: 분할 필드가 없으므로 (빈, 빈).
+    left, right = app._split_field_names()
+    assert left and not right  # 실제 필드는 있지만 트윈 필드는 아직 없음
+
+    st.nt_twin_params = [0.5 * (a + b) for a, b in zip(st.nt_twin_mins, st.nt_twin_maxs)]
+    app.predict()
+    assert st.nt_error == ""
+
+    left, right = app._split_field_names()
+    assert left == st.nt_train_field
+    assert right.startswith("twin_")
+
+    # 토글: 켜면 nt_split_view True, 다시 누르면 False.
+    assert st.nt_split_view is False
+    app.toggle_split_view()
+    assert st.nt_split_view is True
+    app.toggle_split_view()
+    assert st.nt_split_view is False
+
+
 def test_build_ui_if_gl_available() -> None:
     """전체 UI(PyVista 뷰어) 빌드 — GL 미지원 환경에서만 skip.
 
