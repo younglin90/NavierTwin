@@ -408,9 +408,19 @@ patch 메타 보존, 외삽 시 에러 미계산, 재샘플/네이티브 이중 
 **수정된 실행 순서(검토 §16 대비 현재 위치):**
 - ✅ 이미 확보: 전략 레지스트리(#3에 해당), ROM/DMD 기준선(#4), FNO 정렬격자(#5
   부분 — GeometryFNO), patch/wall-distance 백엔드(#2 부분)
-- ▶ 다음(P0): 마스크 손실(1) → OOD 상태(4) → 그룹 스플릿(2) → remap 오차 분리(3)
+- ✅ P0 완료(2026-07-18): 마스크 손실(1) → OOD 상태(4) → 그룹 스플릿(2, primitive
+  `group_split.py` + `build_geometry_fno_twin(group_split=True)` 학습 경로 배선
+  — held-out 케이스 4-way 라벨 평가) → remap 오차 분리(3, `estimate_remap_floor`
+  — vtkValidPointMask 0-채움 함정 주의, 회귀 테스트 있음)
+- ✅ v5.1 후속(2026-07-18): seed+region growing(`grow_wall_selection` — edge-connected
+  BFS). CGNS ZoneBC 는 리더가 셀 연결성부터 미파싱이라 리더 고도화 선행 필요(보류).
+- ✅ 병렬 에이전트 3건 머지(2026-07-18): MPI 배치 CLI(7 — `batch-train`
+  서브커맨드, mpirun -n 2 실증), 모델 등급제(8) + 차원 분리(10 — tier 뱃지),
+  DatasetSignature 해시(canonical data model 첫 조각 — `assign_geometry_ids`
+  → 그룹 스플릿 group_ids 연결. 주의: shapes 데모는 공통 격자 재샘플 후라
+  메쉬가 동일해져 id 가 전부 0 — 원시 메쉬 단계에서 부여해야 형상 구분됨)
 - 그 후: Transolver/GINO 배선(#6), MeshGraphNet(#7), 대형 3D/HPC(#8), 운영형
-  트윈 계층(#10 = 단계 6)
+  트윈 계층(#10 = 단계 6), Zarr ML 캐시/MLflow(6), conservative remap(5)
 
 ## §7. 리스크 · 결정 필요
 

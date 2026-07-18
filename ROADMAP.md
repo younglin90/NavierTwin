@@ -47,6 +47,11 @@
 - [x] v5.6 P1+: MPI 배치 CLI(클러스터) — `naviertwin batch-train --config jobs.json`,
       `jobs[rank::size]` 라운드로빈 분배, mpi4py 없거나 단독 실행 시 rank 0/size 1
       순차 폴백, MPI 초기화는 헤드리스 CLI 전용(GUI 이벤트 루프 금지)
+- [x] 검토 §6½ #8+#10: 모델 등급제(production/domain/experimental tier —
+      ②Model 카드에 "실험적" 뱃지) + DataProfile topological/embedding 차원 분리
+- [x] 검토 canonical data model 1단계: `core/data_model/signature.py` —
+      topology/coordinate sha256 해시로 동일 격자 O(1) 판정,
+      `assign_geometry_ids()` → 그룹 스플릿 `group_ids` 자동 연결
 
 ## 직전 단계: v4.2.0 + 17 rounds — 연구 플랫폼 + 전영역 성숙화 ✅
 
