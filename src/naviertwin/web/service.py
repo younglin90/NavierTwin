@@ -10,6 +10,7 @@ state 나 PyVista 렌더 컨텍스트(GL)에 의존하지 않는다. 따라서 h
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -46,6 +47,24 @@ def _warn_overwrite(mesh: Any, name: str) -> None:
     has_field = name in getattr(mesh, "point_data", {}) or name in getattr(mesh, "cell_data", {})
     if has_field and not is_derived_field(name):
         logger.warning("기존 사용자 field '%s' 를 분석/예측 결과로 덮어씁니다.", name)
+
+
+# 파일 I/O·VTK 리샘플·scipy EDT 모두 C++/Fortran 확장 호출 구간에서 GIL 을
+# 풀어준다 — 따라서 스레드로 충분히 병렬화된다. 반대로 ``CFDDataset`` 은 살아
+# 있는 VTK 객체(``pyvista.DataSet``)를 들고 있어 프로세스 경계를 넘는 pickle
+# 이 안전하지 않다(일부 VTK 객체는 아예 picklable 하지 않거나, 되더라도 매
+# 케이스마다 전체 메쉬를 직렬화/역직렬화하는 비용이 스레드 오버헤드보다 훨씬
+# 크다) — 그래서 ``ProcessPoolExecutor`` 대신 ``thread_map`` 을 쓴다
+# (참고: demo_karman.py 의 ``_solve_caseset`` 은 순수 배열만 오가는 LBM 스텝을
+# 프로세스로 병렬화하는데, 그건 입출력이 numpy 배열뿐이라 pickle 이 싸기
+# 때문이다 — 이 파일의 케이스는 다르다).
+_DEFAULT_MAX_WORKERS = min(8, os.cpu_count() or 4)
+
+
+def _resolve_workers(n_items: int, max_workers: int | None) -> int:
+    """병렬 작업자 수를 정한다 — 항목 수 이상으로 늘리지 않는다."""
+    workers = max_workers if max_workers else _DEFAULT_MAX_WORKERS
+    return max(1, min(int(workers), n_items))
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -153,6 +172,8 @@ def resample_cases_to_common_grid(
     *,
     resolution: int = 32,
     fields: Sequence[str] | None = None,
+    parallel: bool = True,
+    max_workers: int | None = None,
 ) -> dict[str, Any]:
     """형상이 다른 케이스들을 공통 배경 격자로 재샘플한다 (형상 가변 지원).
 
@@ -165,10 +186,18 @@ def resample_cases_to_common_grid(
     2D/3D·열린/닫힌 형상 어디서나 동작한다. 고체 내부 격자점의 물리량은 0 으로
     채워진다(``sample`` 기본) — sdf 가 그 영역을 식별해준다.
 
+    케이스별 ``grid.sample()`` + EDT 는 서로 독립이라 스레드로 병렬화한다
+    (``_resolve_workers`` 옆 주석 참고 — VTK/scipy 호출 구간에서 GIL 이
+    풀리고, ``grid.sample()`` 은 매 호출마다 새 필터 객체를 만들 뿐 공유
+    ``grid`` 를 변형하지 않아 동시 호출이 안전하다).
+
     Args:
         datasets: 케이스 목록 (메쉬가 서로 달라도 됨).
         resolution: 최장 축 방향 격자 분할 수.
         fields: 옮길 field 목록. None 이면 첫 케이스의 field 전체.
+        parallel: 케이스별 재샘플을 스레드로 병렬화할지 여부. 케이스가 3개
+            미만이면 오버헤드를 피하려 항상 순차 실행한다.
+        max_workers: 최대 스레드 수. None 이면 ``min(8, cpu_count)``.
 
     Returns:
         ``datasets``(공통 격자 위 케이스 목록), ``grid_summary``,
@@ -180,6 +209,7 @@ def resample_cases_to_common_grid(
     from scipy.ndimage import distance_transform_edt
 
     from naviertwin.core.cfd_reader.base import CFDDataset as _CFDDataset
+    from naviertwin.utils.parallel import thread_map
 
     cases = list(datasets)
     if not cases:
@@ -207,8 +237,7 @@ def resample_cases_to_common_grid(
     # 두께 0 축(2D)은 거리가 항상 0 이라 값이 무의미하지만 길이는 맞춰야 한다.
     edt_sampling = list(reversed(spacing))
 
-    out: list[CFDDataset] = []
-    for case in cases:
+    def _resample_one(case: CFDDataset) -> CFDDataset:
         sampled = grid.sample(case.mesh)
         mask = np.asarray(
             sampled.point_data.get("vtkValidPointMask", np.ones(grid.n_points)),
@@ -225,17 +254,23 @@ def resample_cases_to_common_grid(
             if name in sampled.point_data:
                 mesh.point_data[name] = np.asarray(sampled.point_data[name])
         mesh.point_data["sdf"] = sdf.astype(np.float64)
-        out.append(
-            _CFDDataset(
-                mesh=mesh,
-                time_steps=[float((getattr(case, "time_steps", None) or [0.0])[-1])],
-                field_names=[*names, "sdf"],
-                metadata={
-                    "source": "resampled_common_grid",
-                    "resample_resolution": int(resolution),
-                },
-            )
+        return _CFDDataset(
+            mesh=mesh,
+            time_steps=[float((getattr(case, "time_steps", None) or [0.0])[-1])],
+            field_names=[*names, "sdf"],
+            metadata={
+                "source": "resampled_common_grid",
+                "resample_resolution": int(resolution),
+            },
         )
+
+    if parallel and len(cases) >= 3:
+        workers = _resolve_workers(len(cases), max_workers)
+        logger.info("공통 격자 재샘플: %d 케이스, %d 스레드", len(cases), workers)
+        # thread_map 은 ThreadPoolExecutor.map 기반 → 입력 순서 그대로 반환.
+        out: list[CFDDataset] = thread_map(_resample_one, cases, workers=workers)
+    else:
+        out = [_resample_one(case) for case in cases]
 
     summary = (
         f"공통 격자 {'×'.join(str(d) for d in dims)} ({grid.n_points:,}점)"
@@ -506,6 +541,8 @@ def load_case_set(
     param_columns: Sequence[str] | None = None,
     resample: bool | str = "auto",
     resolution: int = 32,
+    parallel: bool = True,
+    max_workers: int | None = None,
 ) -> dict[str, Any]:
     """폴더의 CFD 파일들을 "정상 파라미터 스윕" 케이스 세트로 로드한다.
 
@@ -521,6 +558,13 @@ def load_case_set(
     폴더에 ``.pvd`` 가 하나라도 있으면 **pvd 만** 케이스로 센다 — pvd 가 참조하는
     개별 .vtk 들이 각각 케이스로 잘못 세어지는 것을 막는다.
 
+    파일 읽기(``load_dataset``)는 케이스마다 독립이라 스레드로 병렬화한다 —
+    pyvista/VTK 의 C++ 읽기 호출은 GIL 을 풀어주므로 스레드로 충분하다.
+    ``ProcessPoolExecutor`` 는 쓰지 않는다: 살아있는 VTK 객체를 담은
+    ``CFDDataset`` 은 프로세스 경계를 안전하게 pickle 할 수 없고(일부는 아예
+    불가), 되더라도 메쉬 전체를 매번 직렬화하는 비용이 스레드 오버헤드보다
+    훨씬 크다.
+
     Args:
         directory: 케이스 파일들이 있는 폴더.
         params_path: 파라미터 CSV 경로 (None 이면 폴더 안에서 자동 탐색).
@@ -532,6 +576,9 @@ def load_case_set(
             0 으로 채운 값)가 되므로 ``False`` 를 쓴다. 대신 케이스마다 점 수가
             달라 POD/ROM 은 불가하고 좌표 기반인 Physics AI 만 학습할 수 있다.
         resolution: 재샘플 격자의 최장 축 분할 수.
+        parallel: 파일 읽기 + 공통 격자 재샘플을 스레드로 병렬화할지 여부.
+            파일이 3개 미만이면 오버헤드를 피하려 항상 순차 실행한다.
+        max_workers: 최대 스레드 수. None 이면 ``min(8, cpu_count)``.
 
     Returns:
         ``datasets``(단일 스냅샷 CFDDataset 목록), ``params`` (N, k),
@@ -545,6 +592,7 @@ def load_case_set(
     """
     from naviertwin.core.cfd_reader import ReaderFactory
     from naviertwin.core.physnemo.cfd_field_model import load_parameter_table
+    from naviertwin.utils.parallel import thread_map
 
     base = Path(directory).expanduser()
     if not base.is_dir():
@@ -571,7 +619,14 @@ def load_case_set(
         )
 
     # 시간축 보존 (v5.0) — 비정상 결과는 케이스당 시계열 그대로 싣는다.
-    datasets: list[CFDDataset] = [load_dataset(target) for target in files]
+    if parallel and len(files) >= 3:
+        workers = _resolve_workers(len(files), max_workers)
+        logger.info("케이스 세트 파일 읽기: %d 파일, %d 스레드", len(files), workers)
+        # thread_map 은 ThreadPoolExecutor.map 기반 → 입력 순서 그대로 반환
+        # (완료 순서가 아니라 files 순서 = 케이스 순서 보존).
+        datasets: list[CFDDataset] = thread_map(load_dataset, files, workers=workers)
+    else:
+        datasets = [load_dataset(target) for target in files]
 
     csv: Path | None = Path(params_path).expanduser() if params_path else None
     if csv is None:
@@ -605,7 +660,9 @@ def load_case_set(
             "정상 해(스텝 1개)로 저장하세요."
         )
     if resample is True or (resample == "auto" and not identical):
-        result = resample_cases_to_common_grid(datasets, resolution=resolution)
+        result = resample_cases_to_common_grid(
+            datasets, resolution=resolution, parallel=parallel, max_workers=max_workers
+        )
         datasets = result["datasets"]
         grid_summary = str(result["grid_summary"])
         resampled = True
