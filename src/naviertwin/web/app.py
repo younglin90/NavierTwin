@@ -251,6 +251,11 @@ class NavierTwinWebApp:
         # 학습한다 — 형상이 케이스마다 달라도 SDF 채널이 형상을 알려준다.
         st.nt_operator_epochs = 200
         st.nt_operator_resolution = 48
+        # 그룹 스플릿 (검토 §6½ #2) — 켜면 케이스 일부를 held-out(val/test)으로
+        # 남기고 train 만 학습한다. 같은 형상(geometry_id)은 분할 경계를 넘지
+        # 않는다(누수 방지). geometry_id 는 케이스 메쉬 시그니처로 자동 부여.
+        st.nt_operator_group_split = False
+        st.nt_operator_holdout_summary = ""
 
         # Model — 계열 Ⓓ 동역학 예보 (PyDMD). 학습 구간 밖 외삽이 가능한 유일
         # 계열. 적합도(재구성 오차)를 반드시 노출한다 — DMD 는 데이터가 안 맞으면
@@ -1450,7 +1455,20 @@ class NavierTwinWebApp:
             )
             return
         field = self._training_field()
+        group_split = bool(self.state.nt_operator_group_split)
         try:
+            # 그룹 스플릿 (검토 §6½ #2): geometry_id 는 케이스 메쉬의
+            # 시그니처(topology/coordinate hash)로 자동 부여 — 같은 형상은
+            # 같은 그룹이 되어 train/val/test 경계를 넘지 않는다(누수 방지).
+            # 단, 로드 시 공통 격자로 재샘플된 세트는 메쉬가 전부 같아
+            # 시그니처가 한 그룹으로 뭉친다(형상 정보는 sdf 필드에만 남는다).
+            # 그룹 1개로는 held-out 을 만들 수 없으므로 케이스=그룹(표준
+            # 케이스 단위 분할, group_ids=None)으로 되돌린다.
+            group_ids: list[int] | None = None
+            if group_split:
+                ids = service.assign_geometry_ids(self.case_datasets)
+                if len(set(ids)) > 1:
+                    group_ids = ids
             result = service.build_geometry_fno_twin(
                 self.case_datasets,
                 field,
@@ -1458,8 +1476,11 @@ class NavierTwinWebApp:
                 param_names=self.case_param_names,
                 resolution=int(self.state.nt_operator_resolution or 48),
                 epochs=int(self.state.nt_operator_epochs or 200),
+                group_split=group_split,
+                group_ids=group_ids,
             )
             self.engine = result["engine"]
+            holdout_summary = self._format_holdout_summary(result.get("eval_split"))
             names = result["param_names"]
             # v5.6 — 재샘플 오차 바닥(모델과 무관한 왕복 오차)을 함께 보여준다.
             # 이게 크면 모델을 아무리 개선해도 그 밑으로는 못 내려간다.
@@ -1477,6 +1498,7 @@ class NavierTwinWebApp:
                 self.state.nt_dmd_ready = False
                 self.state.nt_twin_ready = True
                 self.state.nt_twin_summary = summary
+                self.state.nt_operator_holdout_summary = holdout_summary
             self._set_twin_param_ranges(names, result["param_mins"], result["param_maxs"])
             self._set_status(
                 f"GeometryFNO 학습 완료 — 케이스 {result['n_cases']}개, "
@@ -1485,6 +1507,44 @@ class NavierTwinWebApp:
             )
         except Exception as exc:  # noqa: BLE001
             self._fail("GeometryFNO 학습 실패", exc)
+
+    @staticmethod
+    def _format_holdout_summary(eval_split: dict[str, Any] | None) -> str:
+        """held-out 평가 결과(``eval_split``)를 한 줄 요약 문자열로 만든다.
+
+        group_split 이 꺼져 있으면 빈 문자열(요약 Div 숨김). 켜져 있는데
+        holdout 이 비었으면(케이스가 적어 val/test 그룹이 0개) 그 사실을
+        정직하게 알린다 — "검증했다"고 오해하지 않게.
+
+        Args:
+            eval_split: :func:`service.build_geometry_fno_twin` 반환값의
+                ``eval_split`` — ``enabled``/``holdout``/``val_rel_l2_mean``/
+                ``test_rel_l2_mean`` 를 읽는다.
+
+        Returns:
+            UI 에 그대로 표시할 요약 문자열 (비활성이면 "").
+        """
+        split = eval_split or {}
+        if not split.get("enabled"):
+            return ""
+        holdout = list(split.get("holdout") or [])
+        if not holdout:
+            return "케이스가 적어 held-out 없이 전체 학습"
+        parts: list[str] = []
+        val_mean = split.get("val_rel_l2_mean")
+        test_mean = split.get("test_rel_l2_mean")
+        if val_mean is not None:
+            parts.append(f"val rel-L2 {float(val_mean):.1%}")
+        if test_mean is not None:
+            parts.append(f"test rel-L2 {float(test_mean):.1%}")
+        # 4-way 일반화 라벨(condition_interpolation 등)을 중복 제거해 병기 —
+        # "이 점수가 어떤 종류의 일반화 시험인지"를 함께 보여준다.
+        classes = sorted({str(h.get("query_split_class", "")) for h in holdout} - {""})
+        class_note = f", {', '.join(classes)}" if classes else ""
+        return (
+            f"held-out 검증: {' · '.join(parts)} "
+            f"(케이스 {len(holdout)}개 평가{class_note})"
+        )
 
     def run_compare(self) -> None:
         """모든 reducer×surrogate 조합을 학습/평가해 순위표를 표시한다."""
@@ -2432,6 +2492,7 @@ class NavierTwinWebApp:
             self.state.nt_pod_max_mode = 0
             self.state.nt_model_ready = False
             self.state.nt_model_summary = ""
+            self.state.nt_operator_holdout_summary = ""
             self.state.nt_physics_ready = False
             self.state.nt_dmd_ready = False
             self.state.nt_dmd_fit_error = 0.0
@@ -3827,6 +3888,25 @@ class NavierTwinWebApp:
                                     hide_details=True,
                                     classes="mt-1",
                                 )
+                            with html.Div(classes="d-flex align-center"):
+                                v3.VSwitch(
+                                    v_model=("nt_operator_group_split",),
+                                    label="검증 분할 (held-out)",
+                                    color="primary",
+                                    density="compact",
+                                    hide_details=True,
+                                )
+                                self._tip(
+                                    "케이스 일부를 학습에서 제외해 순수 평가용으로 "
+                                    "남깁니다. 형상이 같은 케이스는 같은 그룹으로 "
+                                    "묶여 분할 경계를 넘지 않습니다(데이터 누수 "
+                                    "방지)."
+                                )
+                            html.Div(
+                                "{{ nt_operator_holdout_summary }}",
+                                v_show=("nt_operator_holdout_summary",),
+                                classes="text-caption mt-1",
+                            )
 
                     # Ⓓ 동역학 예보 (PyDMD) — 학습 구간 밖 외삽이 가능한 유일 계열.
                     with html.Div(v_show=("nt_model_method === 'dynamics'",)):

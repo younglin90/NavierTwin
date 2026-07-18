@@ -234,6 +234,60 @@ def test_app_operator_case_set_flow() -> None:
     assert app.engine is not None
 
 
+def test_app_operator_group_split_holdout_summary() -> None:
+    """검증 분할 스위치 ON → held-out 요약 표시 + 학습 케이스 수 < 전체.
+
+    geometry_id 는 케이스 메쉬 시그니처로 자동 부여된다. shapes 데모는 로드
+    시 공통 격자로 재샘플돼 메쉬 시그니처가 하나로 뭉치므로, 앱이 케이스=그룹
+    분할로 되돌린다 — 그룹 5개, 기본 val/test 비율(15%/15%)로 val 1개 +
+    test 1개가 held-out 이 된다 (train 3개).
+    """
+    app = _make_app("nt-test-geometry-fno-group-split")
+    st = app.server.state
+
+    st.nt_demo_kind = "shapes"
+    app.load_demo()
+    assert st.nt_error == ""
+    # 데이터 로드가 이전 학습의 요약을 리셋한다 (스모크 — 초기값도 "").
+    assert st.nt_operator_holdout_summary == ""
+
+    st.nt_model_method = "operator"
+    st.nt_operator_epochs = 30  # 테스트 속도용
+    st.nt_operator_resolution = 20
+    st.nt_operator_group_split = True
+    app.build_twin()
+    assert st.nt_error == ""
+    assert st.nt_model_ready is True
+    # held-out 요약이 채워진다 — 평가 케이스 수와 rel-L2 가 담긴다.
+    summary = st.nt_operator_holdout_summary
+    assert summary != ""
+    assert "held-out 검증" in summary
+    assert "rel-L2" in summary
+    # 엔진은 train 케이스만으로 학습됐다 — 전체 5개보다 적다.
+    n_train = int(app.engine.training_metadata["n_cases"])
+    assert n_train < 5
+    assert n_train >= 1
+
+
+def test_app_operator_default_keeps_all_cases() -> None:
+    """기본값(스위치 OFF) → 요약 없음 + 전체 5케이스 학습 (하위 호환)."""
+    app = _make_app("nt-test-geometry-fno-no-split")
+    st = app.server.state
+
+    st.nt_demo_kind = "shapes"
+    app.load_demo()
+    assert st.nt_error == ""
+
+    st.nt_model_method = "operator"
+    st.nt_operator_epochs = 30  # 테스트 속도용
+    st.nt_operator_resolution = 20
+    assert st.nt_operator_group_split is False  # 기본값
+    app.build_twin()
+    assert st.nt_error == ""
+    assert st.nt_operator_holdout_summary == ""
+    assert int(app.engine.training_metadata["n_cases"]) == 5
+
+
 def test_app_single_case_operator_keeps_lab_error() -> None:
     """단일 케이스 + operator 는 여전히 ⑥연산자 랩 안내 에러다."""
     app = _make_app("nt-test-geometry-fno-single")
