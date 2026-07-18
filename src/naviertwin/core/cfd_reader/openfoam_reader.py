@@ -115,22 +115,28 @@ class OpenFOAMReader(BaseReader):
         reader = pv.POpenFOAMReader(str(foam_file))
         reader.enable_all_cell_arrays()
         reader.enable_all_point_arrays()
+        try:
+            # 경계 패치 블록도 함께 읽는다 (internalMesh 는 기본 활성).
+            reader.enable_all_patch_arrays()
+        except Exception:  # noqa: BLE001 — 패치 미지원 리더/파일 보호
+            logger.debug("패치 배열 활성화 실패 — 경계 패치 없이 진행합니다.")
 
         time_steps = self._detect_time_steps(case_dir)
         field_names: list[str] = []
         mesh: Any = None
+        multi_block: Any = None
 
         if time_steps:
             # 마지막 타임스텝으로 메쉬 로드
             reader.set_active_time_value(time_steps[-1])
             multi_block = reader.read()
-            mesh = _extract_unstructured_grid(multi_block)
+            mesh = _extract_internal_mesh(multi_block)
             if mesh is not None:
                 field_names = _collect_field_names(mesh)
         else:
             # 타임스텝 없으면 그냥 읽기
             multi_block = reader.read()
-            mesh = _extract_unstructured_grid(multi_block)
+            mesh = _extract_internal_mesh(multi_block)
             if mesh is not None:
                 field_names = _collect_field_names(mesh)
             time_steps = [0.0]
@@ -139,15 +145,38 @@ class OpenFOAMReader(BaseReader):
             # 빈 UnstructuredGrid 반환
             mesh = pv.UnstructuredGrid()
 
+        metadata: dict[str, Any] = {
+            "reader": "pyvista.POpenFOAMReader",
+            "foam_file": str(foam_file),
+            "case_dir": str(case_dir),
+        }
+
+        try:
+            patch_meshes = _extract_boundary_patches(multi_block)
+        except Exception:  # noqa: BLE001 — 경계 정보 없는 파일 보호
+            logger.debug("경계 패치 추출 실패 — 패치 메타데이터를 생략합니다.")
+            patch_meshes = {}
+
+        if patch_meshes:
+            metadata["boundary_patches"] = {
+                name: {
+                    "n_cells": int(patch.n_cells),
+                    "n_points": int(patch.n_points),
+                }
+                for name, patch in patch_meshes.items()
+            }
+            metadata["boundary_patch_meshes"] = patch_meshes
+            logger.info(
+                "경계 패치 %d개 보존: %s",
+                len(patch_meshes),
+                sorted(patch_meshes),
+            )
+
         return CFDDataset(
             mesh=mesh,
             time_steps=time_steps,
             field_names=field_names,
-            metadata={
-                "reader": "pyvista.POpenFOAMReader",
-                "foam_file": str(foam_file),
-                "case_dir": str(case_dir),
-            },
+            metadata=metadata,
         )
 
     # ------------------------------------------------------------------
@@ -324,6 +353,92 @@ class OpenFOAMReader(BaseReader):
 # ---------------------------------------------------------------------------
 # 모듈 수준 헬퍼 함수 (pyvista MultiBlock 처리)
 # ---------------------------------------------------------------------------
+
+
+def _extract_internal_mesh(multi_block: Any) -> Any:
+    """MultiBlock 에서 internalMesh 블록을 우선 추출한다.
+
+    패치 배열이 활성화된 상태에서는 ``combine()`` 이 경계 표면까지 병합해
+    버리므로, ``internalMesh`` 블록이 있으면 그것만 UnstructuredGrid 로
+    반환한다. 없으면 기존 :func:`_extract_unstructured_grid` 동작으로
+    폴백한다.
+
+    Args:
+        multi_block: pyvista MultiBlock 또는 DataSet 객체.
+
+    Returns:
+        UnstructuredGrid 또는 None.
+    """
+    try:
+        import pyvista as pv
+    except ImportError:
+        return None
+
+    if isinstance(multi_block, pv.MultiBlock):
+        try:
+            keys = list(multi_block.keys())
+        except Exception:  # noqa: BLE001 — 이름 없는 블록 보호
+            keys = []
+        if "internalMesh" in keys:
+            internal = multi_block["internalMesh"]
+            if internal is not None:
+                if isinstance(internal, pv.UnstructuredGrid):
+                    return internal
+                try:
+                    return internal.cast_to_unstructured_grid()
+                except Exception:  # noqa: BLE001 — 캐스팅 불가 시 폴백
+                    logger.debug("internalMesh 캐스팅 실패 — combine 으로 폴백")
+
+    return _extract_unstructured_grid(multi_block)
+
+
+def _extract_boundary_patches(multi_block: Any) -> dict[str, Any]:
+    """MultiBlock 의 boundary 블록에서 패치별 표면 메쉬를 추출한다.
+
+    pyvista.POpenFOAMReader 가 패치 배열을 활성화한 채 읽으면 결과
+    MultiBlock 에 ``boundary`` 라는 중첩 MultiBlock 이 생기고, 그 안에
+    패치 이름별 표면(PolyData)이 담긴다.
+
+    Args:
+        multi_block: pyvista MultiBlock 또는 DataSet 객체.
+
+    Returns:
+        {패치 이름: PolyData 표면} 딕셔너리. 경계 정보가 없으면 빈 dict.
+    """
+    try:
+        import pyvista as pv
+    except ImportError:
+        return {}
+
+    if not isinstance(multi_block, pv.MultiBlock):
+        return {}
+
+    try:
+        keys = list(multi_block.keys())
+    except Exception:  # noqa: BLE001 — 이름 없는 블록 보호
+        return {}
+    if "boundary" not in keys:
+        return {}
+
+    boundary = multi_block["boundary"]
+    if not isinstance(boundary, pv.MultiBlock):
+        return {}
+
+    patches: dict[str, Any] = {}
+    for name in boundary.keys():
+        if name is None:
+            continue
+        block = boundary[name]
+        if block is None or int(getattr(block, "n_points", 0)) == 0:
+            continue
+        if not isinstance(block, pv.PolyData):
+            try:
+                block = block.extract_surface()
+            except Exception:  # noqa: BLE001 — 표면 추출 불가 패치는 생략
+                logger.debug("패치 '%s' 표면 추출 실패 — 생략", name)
+                continue
+        patches[str(name)] = block
+    return patches
 
 
 def _extract_unstructured_grid(multi_block: Any) -> Any:
