@@ -11,6 +11,7 @@ import pytest
 
 pytest.importorskip("pyvista", reason="프로파일 계산에 pyvista 가 필요합니다.")
 
+from naviertwin.core.digital_twin import strategies as core_strategies  # noqa: E402
 from naviertwin.web import service, strategies  # noqa: E402
 
 
@@ -184,3 +185,71 @@ def test_profile_separates_topological_and_embedding_dims() -> None:
     assert profile.embedding_dim == 3
     # 하위 호환: 기존 dims 는 topological_dim 과 같은 값을 유지한다.
     assert profile.dims == profile.topological_dim
+
+
+# ---------------------------------------------------------------------------
+# DatasetSignature 통합 (canonical data model) — _same_mesh_points 가 실제로
+# signature.same_mesh 와 일관된 판정을 내리는지.
+# ---------------------------------------------------------------------------
+
+
+def test_same_mesh_points_agrees_with_dataset_signature_for_identical_mesh() -> None:
+    """동일 격자 스윕(sweep): _same_mesh_points 와 signature.same_mesh 가 일치해야 한다."""
+    from naviertwin.core.data_model.signature import same_mesh
+
+    result = service.make_demo_case_set("sweep")
+    datasets = result["datasets"]
+    assert core_strategies._same_mesh_points(datasets) is True
+    # 케이스 세트의 모든 쌍이 시그니처 기준으로도 같은 격자여야 fast path 가
+    # 실제로 True 를 낸 것이 (허용오차 폴백이 아니라) 해시 일치 때문임을 보인다.
+    for other in datasets[1:]:
+        assert same_mesh(datasets[0], other) is True
+
+
+def test_same_mesh_points_agrees_with_dataset_signature_for_varying_mesh() -> None:
+    """형상 가변 케이스(진짜 다른 격자): 둘 다 False 로 일치해야 한다."""
+    import pyvista as pv
+
+    from naviertwin.core.cfd_reader.base import CFDDataset
+    from naviertwin.core.data_model.signature import same_mesh
+
+    cases = []
+    for side in (5, 6):
+        grid = pv.ImageData(dimensions=(side, side, 1)).cast_to_unstructured_grid()
+        grid.point_data["p"] = np.linspace(0.0, 1.0, grid.n_points)
+        cases.append(
+            CFDDataset(mesh=grid, time_steps=[0.0], field_names=["p"], metadata={})
+        )
+    assert core_strategies._same_mesh_points(cases) is False
+    assert same_mesh(cases[0], cases[1]) is False
+
+
+def test_same_mesh_points_tolerant_fallback_matches_legacy_allclose_semantics() -> None:
+    """해시가 갈리는 미세 부동소수점 오차: 허용오차 폴백이 기존 동작(True)을 유지해야 한다.
+
+    ``compute_signature`` 는 반올림 없이 좌표 바이트를 그대로 해싱하므로 1 ULP
+    차이도 다른 해시를 낸다 — 그래서 fast path 만 쓰면 "거의 같은 격자"가
+    다르다고 오판(회귀)할 수 있다. ``_same_mesh_points`` 는 해시 불일치 시
+    ``_same_mesh_points_tolerant`` (np.allclose) 로 폴백해 기존 계약을 지킨다.
+    """
+    import pyvista as pv
+
+    from naviertwin.core.cfd_reader.base import CFDDataset
+    from naviertwin.core.data_model.signature import same_mesh
+
+    grid_a = pv.ImageData(dimensions=(6, 6, 1)).cast_to_unstructured_grid()
+    grid_a.point_data["p"] = np.linspace(0.0, 1.0, grid_a.n_points)
+    grid_b = grid_a.copy(deep=True)
+    # 허용오차 이내의 미세 섭동 (np.allclose 기본 atol=1e-8 보다 훨씬 작음) —
+    # 해시는 갈리지만 기존 allclose 판정은 "같은 격자"로 봐야 한다.
+    grid_b.points = grid_b.points + 1e-12
+
+    case_a = CFDDataset(mesh=grid_a, time_steps=[0.0], field_names=["p"], metadata={})
+    case_b = CFDDataset(mesh=grid_b, time_steps=[0.0], field_names=["p"], metadata={})
+
+    # 시그니처(완전일치 해시) 기준으로는 다른 격자 — fast path 는 이 케이스에서
+    # 폴백을 타야 한다는 전제 확인.
+    assert same_mesh(case_a, case_b) is False
+    # 그럼에도 _same_mesh_points 최종 판정은 기존 np.allclose 의미론대로 True.
+    assert core_strategies._same_mesh_points([case_a, case_b]) is True
+    assert core_strategies._same_mesh_points_tolerant([case_a, case_b]) is True
