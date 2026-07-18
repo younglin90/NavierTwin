@@ -419,8 +419,20 @@ patch 메타 보존, 외삽 시 에러 미계산, 재샘플/네이티브 이중 
   DatasetSignature 해시(canonical data model 첫 조각 — `assign_geometry_ids`
   → 그룹 스플릿 group_ids 연결. 주의: shapes 데모는 공통 격자 재샘플 후라
   메쉬가 동일해져 id 가 전부 0 — 원시 메쉬 단계에서 부여해야 형상 구분됨)
-- 그 후: Transolver/GINO 배선(#6), MeshGraphNet(#7), 대형 3D/HPC(#8), 운영형
-  트윈 계층(#10 = 단계 6), Zarr ML 캐시/MLflow(6), conservative remap(5)
+- ✅ Route 2 완료(2026-07-18): mesh_gnn(GCN, 첫 배선) + GINO(점군, 두 번째 배선)
+  둘 다 tier=experimental 로 머지. 저장 계층(#6): Zarr ML 캐시 + MLflow 실험
+  추적 완료. conservative remap(#5): 진짜 ESMPy/MEDCoupling 대신 가벼운
+  volume-weighted 근사로 구현(점보간 대비 오차 100%→0.002%). canonical data
+  model(DatasetSignature)을 strategies._same_mesh_points 에도 통합 완료.
+  MeshGraphNets predict() 의 stale edge_features 버그도 수정(Route 2 연구가
+  발견) — 아직 시계열 롤아웃 전용이라 case-set 파라메트릭 배선은 미완.
+- 남은 것: MeshGraphNet 을 mesh_gnn/gino 처럼 케이스 세트 파라메트릭
+  트윈으로 배선(Route 2 세 번째, 버그 수정 완료로 이제 가능), 분할 뷰어
+  슬라이스/시간 동기(#9 카메라 동기는 이미 완료·문서화, 슬라이스·시간은
+  미완), canonical VTKHDF 저장 계층(4계층 중 원본 불변·Zarr·MLflow 는
+  완료, canonical 중간 포맷만 남음), 대형 3D/HPC(#8) 와 운영형 트윈
+  계층(#10 = 단계 6)은 별도 제품 설계 결정이 선행돼야 하는 큰 범위 —
+  이번 자율 실행 배치에서는 스코프 확정 가능한 항목까지만 진행.
 
 ## §7. 리스크 · 결정 필요
 
