@@ -33,7 +33,7 @@ from naviertwin.utils.verification_report import build_report, to_markdown  # no
 def _load(path: Path, default):
     if not path.exists():
         return default
-    return json.loads(path.read_text())
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def main(root: str = "verify_artifacts") -> int:
@@ -68,8 +68,10 @@ def main(root: str = "verify_artifacts") -> int:
         security_findings=int(security.get("security_findings", 0)),
     )
 
-    (p / "verification_report.json").write_text(json.dumps(report, indent=2))
-    (p / "verification_report.md").write_text(to_markdown(report))
+    (p / "verification_report.json").write_text(
+        json.dumps(report, indent=2), encoding="utf-8"
+    )
+    (p / "verification_report.md").write_text(to_markdown(report), encoding="utf-8")
     print(f"verdict: {report['overall']}")
     return 0 if report["overall"] == "PASS" else 1
 

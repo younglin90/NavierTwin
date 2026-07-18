@@ -20,6 +20,7 @@ class TestMilestoneVerify:
 
         r = build_report(
             smoke={
+                "installer_smoke_pass": True,
                 "release_smoke_pass": True,
                 "wheel_smoke_pass": True,
                 "sdist_smoke_pass": True,
