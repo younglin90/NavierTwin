@@ -459,6 +459,12 @@ class NavierTwinWebApp:
         self.state.change("nt_field", "nt_cmap", "nt_show_edges", "nt_timestep")(
             self._on_view_state_change
         )
+        # 분할 뷰 시간 동기(검토 §6½ #9) — nt_timestep(좌측 실제 데이터 시간)이
+        # 바뀌면, 트윈이 시간 파라미터를 쓰는 엔진(ParametricDMD 등)이고 분할
+        # 뷰가 켜져 있을 때 우측(트윈) 예측도 같은 시간으로 재계산한다. 별도
+        # 콜백으로 분리한 이유: nt_field/nt_cmap/nt_show_edges 변경에는 반응할
+        # 필요가 없다(재예측은 값비싸고 무관하다).
+        self.state.change("nt_timestep")(self._on_split_timestep_sync)
         # 케이스 슬라이더 — 시간축이 없는 케이스 세트의 "타임스텝" 역할.
         self.state.change("nt_case_index")(self.select_case)
         # 해상도를 고르는 동안 결과 크기를 계속 보여준다.
@@ -3068,7 +3074,10 @@ class NavierTwinWebApp:
 
         update = getattr(self.ctrl, "view_update", None)
         if callable(update):
-            update()
+            try:
+                update()
+            except Exception:  # noqa: BLE001 — build_ui 없이(테스트) 미등록일 수 있음
+                pass
 
     def toggle_split_view(self) -> None:
         """분할 뷰(좌 실제/우 트윈) 켜기/끄기 (v5.4).
@@ -3098,6 +3107,59 @@ class NavierTwinWebApp:
                 update()
             except Exception:  # noqa: BLE001 — build_ui 없이(테스트) 미등록일 수 있음
                 pass
+
+    def _on_split_timestep_sync(self, **_kwargs: Any) -> None:
+        """분할 뷰(우측 트윈)를 좌측 타임스텝과 같은 시간으로 재예측한다 (검토 #9).
+
+        트윈이 시간 파라미터를 받는지는 두 경로로 판단한다:
+
+        - 문제 유형 A(단일 데이터셋, ``nt_case_mode=False``): 예측 파라미터
+          ``nt_twin_param`` 자체가 "시간 t" 다(:meth:`_twin_param_values`
+          참조, DMD 등).
+        - 문제 유형 B(케이스 세트, ``nt_case_mode=True``): 비정상(unsteady)
+          스윕이면 ``nt_param_names`` 마지막 원소가 ``"t"`` 다(ParametricDMD/
+          비정상 ROM, :func:`service` 의 ``[*names, "t"]`` 패턴 참조) — 이때는
+          ``nt_twin_params`` 벡터에서 그 위치만 갱신한다.
+
+        두 경로 모두 해당 안 되면(정상 케이스 세트처럼 트윈이 애초에 시간을
+        입력받지 않는 steady 엔진) 아무 것도 하지 않는다 — 조용한 no-op 이지
+        에러가 아니다. 분할 뷰가 꺼져 있거나 아직 예측을 한 번도 안 했으면도
+        마찬가지로 손대지 않는다(자동으로 새 예측을 "시작"하지는 않는다).
+        """
+        if not self.state.nt_split_view:
+            return
+        if self.engine is None or self.dataset is None:
+            return
+        if not self.state.nt_predicted:
+            return  # 아직 한 번도 예측 안 함 — 자동 예측을 새로 시작하지 않는다
+        times = [float(t) for t in (getattr(self.dataset, "time_steps", []) or [])]
+        idx = int(self.state.nt_timestep or 0)
+        if len(times) < 2 or idx < 0 or idx >= len(times):
+            return
+        t = times[idx]
+
+        if self.state.nt_case_mode:
+            names = [str(n) for n in (self.state.nt_param_names or [])]
+            if "t" not in names:
+                return  # 정상(steady) 파라미터 스윕 — 시간 파라미터 없음, no-op
+            t_index = names.index("t")
+            params = [float(v) for v in (self.state.nt_twin_params or [])]
+            if t_index >= len(params):
+                return
+            if abs(params[t_index] - t) < 1e-12:
+                return  # 이미 같은 시간 — 재예측 불필요
+            params[t_index] = t
+            with self.state:
+                self.state.nt_twin_params = params
+        else:
+            if abs(float(self.state.nt_twin_param or 0.0) - t) < 1e-12:
+                return  # 이미 같은 시간 — 재예측 불필요
+            with self.state:
+                self.state.nt_twin_param = t
+        try:
+            self.predict()
+        except Exception as exc:  # noqa: BLE001 — 자동 동기화는 조용히 실패해도 무방
+            log.warning("분할 뷰 시간 동기 재예측 실패: %s", exc)
 
     def _split_field_names(self) -> tuple[str, str]:
         """분할 뷰의 (좌=실제, 우=트윈) 필드 이름을 고른다.
@@ -3346,6 +3408,16 @@ class NavierTwinWebApp:
                     size="small",
                     classes="ml-1",
                     v_show=("nt_split_view",),
+                )
+                # 시간 동기 안내(검토 #9) — 버튼 없이 항상 자동 동기(no manual
+                # toggle): 타임스텝 슬라이더를 움직이면 시간 파라미터 트윈은
+                # 자동 재예측된다. 정적(steady) 트윈이면 조용히 무시된다.
+                self._tip(
+                    "시간 동기: 타임스텝 슬라이더를 움직이면 트윈(우) 예측도 "
+                    "같은 시간으로 자동 재계산됩니다(DMD/비정상 스윕 등 시간을 "
+                    "입력받는 트윈에 한함). 시간 파라미터가 없는 정상(steady) "
+                    "트윈이면 우측은 그대로 유지됩니다.",
+                    v_show_expr="nt_split_view",
                 )
                 # 결정형(nt_progress>=0)/비결정형(nt_busy && nt_progress<0) 겸용 진행바
                 v3.VProgressLinear(
