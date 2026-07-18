@@ -940,7 +940,9 @@ def build_geometry_fno_twin(
     Returns:
         ``engine``, ``field``, ``fields``, ``n_cases``, ``param_names``,
         ``param_mins``, ``param_maxs``, ``resolution``, ``grid_summary``,
-        ``target_names``, ``train_loss`` 를 담은 dict.
+        ``target_names``, ``train_loss``, ``remap_floor_rel_l2``(대표 케이스
+        1개로 잰 재샘플 왕복 오차 — 모델 오차와 분리해 보는 바닥값, 검토 §11.2)
+        를 담은 dict.
 
     Raises:
         ValueError: 케이스 2개 미만, 필드 미선택, 파라미터 행 수 불일치,
@@ -1001,6 +1003,10 @@ def build_geometry_fno_twin(
     operator.fit(tensors["inputs"], tensors["targets"], sample_masks=tensors["valid_mask"])
 
     grid_summary = str(tensors["meta"]["grid_summary"])
+    # 재샘플 오차 바닥 (v5.6, 검토 §11.2) — 대표 케이스 1개로 왕복 시험해,
+    # "예측이 틀렸다"의 얼마만큼이 모델이 아니라 공통 격자 재샘플 자체 때문인지
+    # 미리 보여준다. 전 케이스×필드를 다 재는 건 학습 시간 대비 낭비라 대표값.
+    remap_floor = estimate_remap_floor(cases[0], fields[0], resolution=int(resolution))
     engine = GeometryFNOTwinEngine(
         operator,
         train_inputs=tensors["inputs"],
@@ -1013,6 +1019,7 @@ def build_geometry_fno_twin(
         metadata={
             "resolution": int(resolution),
             "grid_summary": grid_summary,
+            "remap_floor_rel_l2": remap_floor["rel_l2"],
         },
     )
     meta = engine.training_metadata
@@ -1030,6 +1037,7 @@ def build_geometry_fno_twin(
         "train_loss": (
             float(operator.train_losses_[-1]) if operator.train_losses_ else float("nan")
         ),
+        "remap_floor_rel_l2": remap_floor["rel_l2"],
     }
 
 
@@ -3045,3 +3053,96 @@ def list_boundary_patches(dataset: CFDDataset) -> list[dict]:
             }
         )
     return result
+
+
+def estimate_remap_floor(
+    dataset: CFDDataset,
+    field: str,
+    *,
+    resolution: int = 48,
+    timestep: int = -1,
+) -> dict[str, Any]:
+    """공통 격자로 옮겼다 되돌리는 왕복(reconstruction test)으로 **재샘플 자체의
+    오차 바닥**을 잰다 — 모델은 전혀 관여하지 않는다 (검토 §11.2).
+
+    형상 가변 전략(GeometryFNO 등)은 케이스를 공통 격자로 재샘플해 학습하므로,
+    "예측이 진짜와 다르다"는 관측에는 항상 두 성분이 섞여 있다: (1) 재샘플이
+    이미 잃어버린 정보(격자가 성길수록·구배가 급할수록 커짐), (2) 모델이 진짜로
+    잘못 배운 것. 이 둘을 분리하지 않으면 모델 탓이 아닌 오차까지 모델 탓으로
+    돌리게 된다. 원본 field 를 공통 격자로 보냈다가 원본 좌표로 되돌려서(왕복),
+    **원본과 왕복 결과의 차이**를 재면 (1)만 순수하게 분리된다.
+
+    Args:
+        dataset: 원본(네이티브 메쉬) 케이스 데이터셋.
+        field: 대상 물리량 field 이름.
+        resolution: 왕복에 쓸 공통 격자 해상도 — 실제 학습에 쓰는 값과 맞춰야
+            의미가 있다(build_geometry_fno_twin 의 resolution 과 동일하게).
+        timestep: 비교할 타임스텝 (기본 -1 = 마지막/정상해).
+
+    Returns:
+        rel_l2(왕복 상대 오차 — 이게 "바닥"), rmse, max_error,
+        resolution 을 담은 dict. field 가 없거나 왕복이 불가능하면
+        rel_l2=0.0 과 함께 note 에 이유를 남긴다(호출을 막지 않는다).
+    """
+    try:
+        mesh = dataset.mesh
+        if field not in mesh.point_data and field not in mesh.cell_data:
+            # 시계열 전용 field(스텝별로만 존재)면 해당 스텝 값을 임시로 얹는다.
+            series = (dataset.metadata or {}).get("time_series_fields", {})
+            if field not in series:
+                return {
+                    "rel_l2": 0.0, "rmse": 0.0, "max_error": 0.0,
+                    "resolution": int(resolution),
+                    "note": f"field {field} 를 찾을 수 없어 오차 바닥을 생략합니다.",
+                }
+            arr = np.asarray(series[field])
+            mesh = mesh.copy(deep=True)
+            mesh.point_data[field] = arr[timestep]
+
+        original = np.asarray(mesh.point_data[field], dtype=np.float64)
+        grid = _uniform_grid_over(mesh.bounds, resolution)
+        forward = grid.sample(mesh)
+        if field not in forward.point_data:
+            return {
+                "rel_l2": 0.0, "rmse": 0.0, "max_error": 0.0,
+                "resolution": int(resolution),
+                "note": "공통 격자로 보내는 중 field 가 사라졌습니다(도메인 밖).",
+            }
+        # 되돌리기: 공통 격자 위의 (보간된) 값을 다시 원본 점으로 샘플.
+        back = mesh.sample(forward)
+        if field not in back.point_data:
+            return {
+                "rel_l2": 0.0, "rmse": 0.0, "max_error": 0.0,
+                "resolution": int(resolution),
+                "note": "원본 좌표로 되돌리는 중 field 가 사라졌습니다.",
+            }
+        roundtrip = np.asarray(back.point_data[field], dtype=np.float64)
+        # 도메인 경계 근처 점은 VTK 가 "무효"로 표시하고 0/이전값으로 채운다
+        # (NaN 이 아니다!) — vtkValidPointMask 로 걸러야 한다. 이걸 놓치면
+        # 무효점의 0-채움 값을 진짜 오차처럼 세어 바닥을 심하게 부풀린다
+        # (실측: 60×60 데모에서 필터 없이는 res→∞ 에도 rel_l2 가 0.31 에 고정
+        # 되던 버그 — 236/3600 경계 무효점이 원인이었다).
+        valid = np.isfinite(roundtrip)
+        vtk_mask = back.point_data.get("vtkValidPointMask")
+        if vtk_mask is not None:
+            valid = valid & (np.asarray(vtk_mask).astype(bool))
+        if original.shape != roundtrip.shape or not valid.any():
+            return {
+                "rel_l2": 0.0, "rmse": 0.0, "max_error": 0.0,
+                "resolution": int(resolution),
+                "note": "왕복 배열 형태가 달라 오차 바닥을 생략합니다.",
+            }
+        result = compute_error_field(original[valid], roundtrip[valid])
+        return {
+            "rel_l2": result["rel_l2"],
+            "rmse": result["rmse"],
+            "max_error": result["max_error"],
+            "resolution": int(resolution),
+            "note": "",
+        }
+    except Exception as exc:  # noqa: BLE001 — 오차 바닥은 부가 진단, 학습을 막지 않는다
+        return {
+            "rel_l2": 0.0, "rmse": 0.0, "max_error": 0.0,
+            "resolution": int(resolution),
+            "note": f"오차 바닥 계산 실패: {exc}",
+        }

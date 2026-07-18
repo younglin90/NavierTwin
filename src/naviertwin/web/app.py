@@ -1457,10 +1457,14 @@ class NavierTwinWebApp:
             )
             self.engine = result["engine"]
             names = result["param_names"]
+            # v5.6 — 재샘플 오차 바닥(모델과 무관한 왕복 오차)을 함께 보여준다.
+            # 이게 크면 모델을 아무리 개선해도 그 밑으로는 못 내려간다.
+            floor = float(result.get("remap_floor_rel_l2", 0.0))
             summary = (
                 f"field='{field}', GeometryFNO(SDF 채널) · 케이스 "
                 f"{result['n_cases']}개 · 공통 격자 해상도 {result['resolution']} · "
-                f"입력 파라미터 {len(names)}개 ({', '.join(names)})"
+                f"입력 파라미터 {len(names)}개 ({', '.join(names)}) · "
+                f"재샘플 오차 바닥 rel-L2 {floor:.1%}"
             )
             with self.state:
                 self.state.nt_model_ready = True
