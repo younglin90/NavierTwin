@@ -77,7 +77,18 @@ class PhysicsNeMoCFDFieldModel:
         max_train_points: int = 20_000,
         device: str = "auto",
         seed: int | None = 0,
+        batch_size: int | None = None,
+        use_amp: bool = False,
     ) -> None:
+        """초기화.
+
+        Args:
+            batch_size: 미니배치 크기 (v5.6). ``None`` 이면 기존과 동일한
+                full-batch 학습 — 기본 numerics 가 그대로 보존된다. 값을 주면
+                epoch 마다 셔플된 미니배치로 학습한다 (GPU 메모리 절약).
+            use_amp: AMP(자동 혼합정밀) 사용 여부 (v5.6). CUDA 에서만 켜지고
+                CPU 에서는 조용한 no-op — 기본 numerics 불변.
+        """
         self.hidden = hidden
         self.n_layers = n_layers
         self.max_epochs = max_epochs
@@ -85,6 +96,8 @@ class PhysicsNeMoCFDFieldModel:
         self.max_train_points = max_train_points
         self.device = device
         self.seed = seed
+        self.batch_size = batch_size
+        self.use_amp = use_amp
 
         self.input_dim: int = 1
         self.output_dim: int = 0
@@ -116,6 +129,15 @@ class PhysicsNeMoCFDFieldModel:
         self._y_std: NDArray[np.float32] | None = None
         self._model: Any = None
         self._device: Any = None
+
+    @property
+    def device_used(self) -> str | None:
+        """학습에 실제 사용된 torch 디바이스 문자열 ("cuda:0"/"cpu").
+
+        :meth:`fit_datasets` 전에는 ``None``. UI 의 디바이스 배지가 읽는 값과
+        같은 문자열이 ``training_metadata["device_used"]`` 에도 기록된다.
+        """
+        return str(self._device) if self._device is not None else None
 
     @classmethod
     def from_dataset(
@@ -149,16 +171,22 @@ class PhysicsNeMoCFDFieldModel:
         hidden: int = 32,
         max_epochs: int = 150,
         max_train_points: int = 20_000,
+        batch_size: int | None = None,
+        use_amp: bool = False,
     ) -> "PhysicsNeMoCFDFieldModel":
         """Build and fit a model from multiple CFD cases.
 
         Args:
             allow_varying_mesh: 케이스마다 격자가 달라도 학습한다 (형상 가변).
+            batch_size: 미니배치 크기 (None = full-batch, 기존 동작).
+            use_amp: CUDA 에서 AMP 사용 (CPU 는 no-op).
         """
         model = cls(
             hidden=hidden,
             max_epochs=max_epochs,
             max_train_points=max_train_points,
+            batch_size=batch_size,
+            use_amp=use_amp,
         )
         model.fit_datasets(
             datasets,
@@ -259,15 +287,43 @@ class PhysicsNeMoCFDFieldModel:
         tx = torch.tensor(X_train_n, dtype=torch.float32, device=self._device)
         ty = torch.tensor(y_train_n, dtype=torch.float32, device=self._device)
 
+        # AMP 는 CUDA 에서만 켠다 (v5.6). enabled=False 인 autocast/GradScaler
+        # 는 연산을 전혀 바꾸지 않으므로 기본 경로(use_amp=False 또는 CPU)의
+        # numerics 는 비트 단위로 보존된다. utils.mixed_precision.amp_context
+        # 는 GradScaler(fp16 기울기 언더플로 방지)를 다루지 않아 학습 루프에는
+        # 부족하다 — torch.autocast + torch.amp.GradScaler 를 직접 쓴다.
+        amp_on = bool(self.use_amp) and self._device.type == "cuda"
+        scaler = torch.amp.GradScaler("cuda", enabled=amp_on)
+
+        def _train_step(xb: Any, yb: Any) -> float:
+            optim.zero_grad()
+            with torch.autocast(device_type="cuda", enabled=amp_on):
+                loss = mse(self._model(xb), yb)
+            scaler.scale(loss).backward()
+            scaler.step(optim)
+            scaler.update()
+            return float(loss.item())
+
+        n_fit_rows = int(tx.shape[0])
         self.train_losses_ = []
         epoch = 0
         while epoch < self.max_epochs:
-            optim.zero_grad()
-            pred = self._model(tx)
-            loss = mse(pred, ty)
-            loss.backward()
-            optim.step()
-            self.train_losses_.append(float(loss.item()))
+            if self.batch_size is None:
+                # full-batch — 기존 기본 경로 그대로 (numerics 불변).
+                self.train_losses_.append(_train_step(tx, ty))
+            else:
+                # 미니배치 (v5.6): epoch 마다 셔플, 손실은 행 가중 평균 기록.
+                perm = torch.randperm(n_fit_rows, device=self._device)
+                size = max(1, int(self.batch_size))
+                epoch_loss = 0.0
+                start = 0
+                while start < n_fit_rows:
+                    batch_idx = perm[start : start + size]
+                    epoch_loss += _train_step(tx[batch_idx], ty[batch_idx]) * int(
+                        batch_idx.numel()
+                    )
+                    start += size
+                self.train_losses_.append(epoch_loss / max(n_fit_rows, 1))
             epoch += 1
 
         pred_val = self._predict_matrix(X_val_n)
@@ -301,6 +357,10 @@ class PhysicsNeMoCFDFieldModel:
             "n_snapshots": int(data.params.shape[0]),
             "n_train_rows": int(train_idx.size),
             "n_validation_rows": int(val_idx.size),
+            # v5.6: UI 디바이스 배지가 읽는 실제 학습 디바이스/가속 설정.
+            "device_used": str(self._device),
+            "use_amp": bool(amp_on),
+            "batch_size": self.batch_size,
             "parameter_names": list(self.parameter_names),
             "parameter_min": self._param_min.astype(float).tolist(),
             "parameter_max": self._param_max.astype(float).tolist(),

@@ -45,6 +45,12 @@ def _build_spectral_conv_1d(in_c: int, out_c: int, modes: int) -> Any:
             self.out_c = out_c
 
         def forward(self, x: Any) -> Any:  # (B, C_in, N)
+            if x.dtype in (torch.float16, torch.bfloat16):
+                # AMP 안전장치: cuFFT half 는 2^n 크기 전용이고 복소(cfloat)
+                # 가중치와 half 의 einsum 은 지원되지 않는다 — 스펙트럴 경로는
+                # fp32 로 승격한다 (AMP 는 lift/pointwise conv 만 가속).
+                # fp32 입력(기본 경로)에는 완전한 no-op 이다.
+                x = x.float()
             B, _, N = x.shape
             x_ft = torch.fft.rfft(x, norm="forward")
             out_ft = torch.zeros(
@@ -78,6 +84,9 @@ def _build_spectral_conv_2d(in_c: int, out_c: int, modes1: int, modes2: int) -> 
             self.out_c = out_c
 
         def forward(self, x: Any) -> Any:  # (B, C_in, H, W)
+            if x.dtype in (torch.float16, torch.bfloat16):
+                # AMP 안전장치 — 1D 버전과 동일한 이유로 fp32 승격.
+                x = x.float()
             B, _, H, W = x.shape
             x_ft = torch.fft.rfft2(x, norm="forward")
             out_ft = torch.zeros(
@@ -267,6 +276,7 @@ class FNO2D(BaseOperator):
         device: str = "auto",
         seed: int | None = 0,
         epoch_callback: Optional[Callable[[int, float], None]] = None,
+        use_amp: bool = False,
     ) -> None:
         super().__init__(device=device)
         self.in_channels = in_channels
@@ -280,9 +290,13 @@ class FNO2D(BaseOperator):
         self.lr = lr
         self.seed = seed
         self.epoch_callback = epoch_callback
+        # v5.6: CUDA 에서만 AMP 를 켠다 (CPU 는 조용한 no-op, numerics 불변).
+        self.use_amp = use_amp
 
         self._model: Any = None
         self._device: Any = None
+        # fit 후 실제로 AMP 가 켜졌는지 (CUDA + bf16 지원일 때만 True).
+        self._amp_used: bool = False
         self.train_losses_: list[float] = []
 
     def _resolve_device(self) -> Any:
@@ -354,6 +368,18 @@ class FNO2D(BaseOperator):
         optim = torch.optim.Adam(self._model.parameters(), lr=self.lr)
         loss_fn = torch.nn.MSELoss()
 
+        # AMP (v5.6): FNO 의 스펙트럴 가중치는 복소(cfloat) 파라미터라
+        # GradScaler 의 unscale 커널이 지원하지 않는다 (fp16 경로 불가:
+        # "_amp_foreach_non_finite_check_and_unscale_cuda" not implemented
+        # for 'ComplexFloat'). bfloat16 은 지수 범위가 fp32 와 같아 기울기
+        # 스케일링이 필요 없다 → autocast(bfloat16) 만 쓴다. enabled=False
+        # 면 no-op 이라 기본 경로 numerics 가 보존된다.
+        amp_on = bool(self.use_amp) and self._device.type == "cuda"
+        if amp_on and not torch.cuda.is_bf16_supported():
+            logger.warning("FNO2D: GPU 가 bfloat16 을 지원하지 않아 AMP 를 끕니다.")
+            amp_on = False
+        self._amp_used = amp_on
+
         loader = DataLoader(
             TensorDataset(torch.tensor(X), torch.tensor(Y)),
             batch_size=min(self.batch_size, len(X)),
@@ -372,8 +398,11 @@ class FNO2D(BaseOperator):
                 xb = xb.to(self._device)
                 yb = yb.to(self._device)
                 optim.zero_grad()
-                pred = self._model(xb)
-                loss = loss_fn(pred, yb)
+                with torch.autocast(
+                    device_type="cuda", dtype=torch.bfloat16, enabled=amp_on
+                ):
+                    pred = self._model(xb)
+                    loss = loss_fn(pred, yb)
                 loss.backward()
                 optim.step()
                 epoch_loss += float(loss.item()) * xb.shape[0]

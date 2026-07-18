@@ -62,6 +62,8 @@ class GeometryFNO2D:
         is_fitted: :meth:`fit` 완료 여부.
         input_mean_ / input_std_: 입력 채널별 표준화 통계. shape = (C_in,).
         output_mean_ / output_std_: 출력 채널별 표준화 통계. shape = (C_out,).
+        training_metadata: 학습 요약 (v5.6) — ``device_used``("cuda:0"/"cpu"),
+            ``use_amp``, ``batch_size``, ``backend`` 등. UI 디바이스 배지가 읽는다.
     """
 
     def __init__(
@@ -77,6 +79,8 @@ class GeometryFNO2D:
         seed: int | None = 0,
         backend: str = "builtin",
         epoch_callback: Optional[Callable[[int, float], None]] = None,
+        batch_size: int | None = None,
+        use_amp: bool = False,
     ) -> None:
         """초기화.
 
@@ -93,6 +97,11 @@ class GeometryFNO2D:
             seed: 난수 시드. None 이면 고정하지 않는다.
             backend: "builtin"(자체 FNO2D) | "neuralop"(레퍼런스 FNO).
             epoch_callback: ``(epoch_idx, epoch_loss)`` 라이브 진행 콜백.
+            batch_size: 미니배치 크기 (v5.6). ``None`` 이면 백엔드 기본값을
+                그대로 쓴다 — 기존 동작과 동일.
+            use_amp: AMP(자동 혼합정밀) 사용 (v5.6). builtin 백엔드에서 CUDA
+                일 때만 켜지고 CPU 는 조용한 no-op. "neuralop" 백엔드는 자체
+                학습 루프가 AMP 를 지원하지 않아 무시된다.
 
         Raises:
             ValueError: ``n_params`` 가 음수이거나 ``backend`` 가 지원 목록에
@@ -115,9 +124,12 @@ class GeometryFNO2D:
         self.seed = seed
         self.backend = backend
         self.epoch_callback = epoch_callback
+        self.batch_size = None if batch_size is None else int(batch_size)
+        self.use_amp = bool(use_amp)
 
         self.is_fitted: bool = False
         self.train_losses_: list[float] = []
+        self.training_metadata: dict[str, object] = {}
         self.input_mean_: NDArray[np.float32] | None = None
         self.input_std_: NDArray[np.float32] | None = None
         self.output_mean_: NDArray[np.float32] | None = None
@@ -128,6 +140,16 @@ class GeometryFNO2D:
     def in_channels(self) -> int:
         """입력 채널 수 (= sdf + mask + 파라미터 k개)."""
         return 2 + self.n_params
+
+    @property
+    def device_used(self) -> str | None:
+        """학습에 실제 사용된 torch 디바이스 문자열 ("cuda:0"/"cpu").
+
+        :meth:`fit` 전에는 ``None``. ``training_metadata["device_used"]`` 와
+        같은 값이다 (UI 디바이스 배지용).
+        """
+        value = self.training_metadata.get("device_used")
+        return str(value) if value is not None else None
 
     # ------------------------------------------------------------------
     # 내부 유틸
@@ -144,10 +166,20 @@ class GeometryFNO2D:
         return mean, std
 
     def _build_model(self) -> Any:
-        """설정에 맞는 백엔드 FNO 인스턴스를 만든다."""
+        """설정에 맞는 백엔드 FNO 인스턴스를 만든다.
+
+        ``batch_size=None`` 이면 백엔드 자체 기본값을 유지한다 (기존 동작).
+        ``use_amp`` 는 builtin(FNO2D)에만 전달된다 — neuralop 래퍼의 학습
+        루프는 AMP 미지원이라 조용히 무시한다.
+        """
         if self.backend == "neuralop":
             from naviertwin.core.operator_learning.fno.neuralop_fno import NeuralOpFNO
 
+            extra: dict[str, Any] = {}
+            if self.batch_size is not None:
+                extra["batch_size"] = self.batch_size
+            if self.use_amp:
+                logger.debug("GeometryFNO2D: neuralop 백엔드는 use_amp 를 무시합니다.")
             return NeuralOpFNO(
                 in_channels=self.in_channels,
                 out_channels=self.out_channels,
@@ -159,9 +191,13 @@ class GeometryFNO2D:
                 lr=self.lr,
                 seed=self.seed,
                 epoch_callback=self.epoch_callback,
+                **extra,
             )
         from naviertwin.core.operator_learning.fno.fno import FNO2D
 
+        extra = {}
+        if self.batch_size is not None:
+            extra["batch_size"] = self.batch_size
         return FNO2D(
             in_channels=self.in_channels,
             out_channels=self.out_channels,
@@ -174,6 +210,8 @@ class GeometryFNO2D:
             device=self.device,
             seed=self.seed,
             epoch_callback=self.epoch_callback,
+            use_amp=self.use_amp,
+            **extra,
         )
 
     def _validate_inputs(self, values: NDArray[np.float32], what: str) -> None:
@@ -234,6 +272,22 @@ class GeometryFNO2D:
         self._model.fit({"inputs": x_std, "outputs": y_std})
         self.train_losses_ = list(self._model.train_losses_)
         self.is_fitted = True
+        # v5.6: 실제 학습 디바이스/가속 설정 보고 — UI 디바이스 배지가 읽는다.
+        device_obj = getattr(self._model, "_device", None)
+        device_used = str(device_obj) if device_obj is not None else None
+        self.training_metadata = {
+            "backend": self.backend,
+            "device_used": device_used,
+            # 백엔드가 보고하는 실효 AMP 상태 (CUDA + bf16 지원일 때만 True;
+            # neuralop 백엔드는 AMP 미지원 → False).
+            "use_amp": bool(getattr(self._model, "_amp_used", False)),
+            "batch_size": self.batch_size,
+            "n_cases": int(x.shape[0]),
+            "epochs": int(self.epochs),
+            "final_loss": (
+                float(self.train_losses_[-1]) if self.train_losses_ else None
+            ),
+        }
         logger.info(
             "GeometryFNO2D 학습 완료: backend=%s, N=%d, in=%d ch, out=%d ch, loss=%.6g",
             self.backend,
