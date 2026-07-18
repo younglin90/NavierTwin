@@ -91,7 +91,9 @@ def test_unsteady_sweep_rom_physics_ok_with_time_note() -> None:
     )
     report = strategies.strategy_report(profile)
     assert report["rom"]["ok"] and report["physics"]["ok"]
-    assert not report["dynamics"]["ok"]
+    # v5.2: 비정상 스윕은 ParametricDMD 로 동역학 예보도 가능하다.
+    assert report["dynamics"]["ok"]
+    assert "ParametricDMD" in report["dynamics"]["reason"]
     rec = strategies.recommend(profile)
     assert rec["method"] == "rom"
     assert "(μ, t)" in rec["reason"]

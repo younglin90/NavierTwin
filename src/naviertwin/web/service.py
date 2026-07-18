@@ -1644,6 +1644,132 @@ def build_physics_ai_twin(
 DMD_METHODS = ("dmd", "spdmd")
 
 
+def build_parametric_dmd_twin(
+    datasets: Sequence[CFDDataset],
+    field: str,
+    params: np.ndarray,
+    *,
+    param_names: Sequence[str] | None = None,
+    forecast_factor: float = 1.5,
+) -> dict[str, Any]:
+    """비정상 케이스 세트에서 (μ, t) 예보 트윈을 학습한다 — ParametricDMD (v5.2).
+
+    케이스별 시계열(운전조건 μ 마다 하나)로 DMD 를 케이스마다 적합(partitioned)
+    하고, 학습에 없던 μ 는 모달 계수를 보간한다. 유일하게 **학습 시간 구간 밖
+    t 까지 예보**하는 케이스 세트 전략이다.
+
+    DMD 전제(저랭크 선형 동역학)는 여기서도 그대로다 — ``reconstruction_error``
+    로 적합도를 반드시 확인해야 한다 (부적합해도 조용히 "성공"한다).
+
+    Raises:
+        ValueError: 케이스 2개 미만, 시계열이 아님(스텝 < 4), 케이스 간 격자
+            또는 시간 격자가 다른 경우.
+    """
+    from pydmd import DMD, ParametricDMD
+
+    from naviertwin.core.digital_twin.parametric_dmd_engine import (
+        ParametricDMDTwinEngine,
+    )
+
+    try:
+        from ezyrb import POD as EzPOD
+        from ezyrb import RBF as EzRBF
+    except ImportError as exc:  # noqa: F841
+        raise RuntimeError(
+            "ParametricDMD 에는 ezyrb 가 필요합니다 — pip install ezyrb"
+        ) from exc
+
+    cases = list(datasets)
+    if len(cases) < 2:
+        raise ValueError(f"트윈 학습에는 케이스가 2개 이상 필요합니다. 현재: {len(cases)}")
+    steps = [max(1, int(getattr(d, "n_time_steps", 1))) for d in cases]
+    if min(steps) < 4:
+        raise ValueError(
+            f"ParametricDMD 에는 케이스당 타임스텝 4개 이상이 필요합니다 "
+            f"(현재 최소 {min(steps)}개) — 정상 스윕이면 ROM/Physics AI 를 쓰세요."
+        )
+    if not meshes_are_identical(cases):
+        raise ValueError(
+            "케이스마다 격자가 달라 ParametricDMD 가 불가능합니다 — 스냅샷 행렬을 "
+            "쌓으려면 동일 격자가 필요합니다."
+        )
+    times0 = [float(t) for t in (cases[0].time_steps or [])]
+    for case in cases[1:]:
+        if [float(t) for t in (case.time_steps or [])] != times0:
+            raise ValueError("케이스마다 시간 격자가 다릅니다 — 같은 타임스텝이 필요합니다.")
+
+    params_arr = np.asarray(params, dtype=np.float64)
+    if params_arr.ndim == 1:
+        params_arr = params_arr.reshape(-1, 1)
+    if params_arr.shape[0] != len(cases):
+        raise ValueError(
+            f"파라미터 행 수({params_arr.shape[0]})와 케이스 수({len(cases)})가 다릅니다."
+        )
+    base_names = (
+        list(param_names)
+        if param_names
+        else [f"param_{i}" for i in range(params_arr.shape[1])]
+    )
+
+    blocks = [
+        np.atleast_2d(np.asarray(case.extract_field_snapshots(field), dtype=np.float64))
+        for case in cases
+    ]
+    n_features = int(blocks[0].shape[0])
+    if any(int(b.shape[0]) != n_features for b in blocks):
+        raise ValueError("케이스마다 점 수가 달라 ParametricDMD 가 불가능합니다.")
+    stacked = np.stack(blocks, axis=0)  # (n_cases, n_space, n_time)
+
+    # partitioned: 케이스마다 DMD 하나 — μ 마다 고유 주파수가 달라도 각자 적합.
+    # svd_rank=0 은 자동 랭크 (실수 진동의 켤레쌍까지 알아서 잡는다).
+    dmds = [DMD(svd_rank=0) for _ in cases]
+    pdmd = ParametricDMD(dmds, EzPOD(rank=-1), EzRBF())
+    pdmd.fit(stacked, params_arr)
+
+    engine = ParametricDMDTwinEngine(
+        pdmd, time_steps=times0, forecast_factor=forecast_factor
+    )
+
+    # 적합도: 학습 (μ, t) 전부 재구성해 rel-L2 — DMD 는 부적합해도 조용하다.
+    errors: list[float] = []
+    for i, case_block in enumerate(blocks):
+        for j, t in enumerate(times0):
+            pred = engine.predict([*params_arr[i], float(t)])
+            truth = case_block[:, j]
+            denom = float(np.linalg.norm(truth))
+            if denom > 1e-12:
+                errors.append(float(np.linalg.norm(pred - truth)) / denom)
+    reconstruction_error = float(np.mean(errors)) if errors else float("nan")
+
+    names = [*base_names, "t"]
+    mins = [float(v) for v in params_arr.min(axis=0)] + [times0[0]]
+    maxs = [float(v) for v in params_arr.max(axis=0)] + [float(engine.t_max_forecast)]
+    engine.training_metadata = {
+        "field_name": field,
+        "reducer": "parametric_dmd",
+        "surrogate": "pydmd_parametric(partitioned)+ezyrb_rbf",
+        "problem_type": "parametric_forecast",
+        "param_names": names,
+        "param_mins": mins,
+        "param_maxs": maxs,
+        "train_t_max": times0[-1],
+        "forecast_t_max": float(engine.t_max_forecast),
+        "reconstruction_error": reconstruction_error,
+        "n_cases": len(cases),
+    }
+    return {
+        "engine": engine,
+        "field": field,
+        "n_cases": len(cases),
+        "param_names": names,
+        "param_mins": mins,
+        "param_maxs": maxs,
+        "reconstruction_error": reconstruction_error,
+        "train_t_max": times0[-1],
+        "forecast_t_max": float(engine.t_max_forecast),
+    }
+
+
 def build_dmd_twin(
     dataset: CFDDataset,
     field: str,
@@ -1814,9 +1940,17 @@ def split_multi_prediction(
         return None
     values = np.asarray(prediction, dtype=np.float64).reshape(-1)
     parts: list[tuple[str, np.ndarray]] = []
+    by_field: dict[str, list[np.ndarray]] = {}
     for spec in specs:
         segment = values[int(spec["start"]) : int(spec["end"])]
         parts.append((str(spec["display_name"]), segment))
+        by_field.setdefault(str(spec["field_name"]), []).append(segment)
+    # 벡터 field 는 성분 채널(U_x/U_y/U_z)로 예측된다 (v5.0, 방향 보존) —
+    # 컨투어 표시용 크기(magnitude)는 여기서 파생해 함께 붙인다.
+    for field_name, segments in by_field.items():
+        if len(segments) > 1:
+            magnitude = np.sqrt(np.sum(np.square(np.stack(segments)), axis=0))
+            parts.append((f"{field_name}_mag", magnitude))
     return parts
 
 

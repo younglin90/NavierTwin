@@ -557,7 +557,11 @@ def test_compare_models_includes_physics_for_vector_field_via_magnitude(demo) ->
 
 
 def test_build_physics_ai_twin_multi_output(demo) -> None:
-    """다중 출력: 한 신경망이 p 와 U(크기)를 동시 학습하고 필드별로 분해된다."""
+    """다중 출력 + 벡터 성분 보존 (v5.0): U 는 U_x/U_y/U_z 채널로 학습된다.
+
+    예전에는 벡터를 크기(norm)로 뭉개 방향을 잃었다 — 이제 성분이 살아 있고,
+    표시용 크기(U_mag)는 성분에서 파생된다.
+    """
     result = service.build_physics_ai_twin(
         demo, ["p", "U"], hidden=8, max_epochs=3, max_train_points=300
     )
@@ -567,17 +571,51 @@ def test_build_physics_ai_twin_multi_output(demo) -> None:
 
     mid = 0.5 * (result["param_min"] + result["param_max"])
     prediction = service.predict_twin(engine, mid)
-    assert prediction.shape[0] == n_points * 2  # field-major 로 이어붙은 벡터
+    # 채널 = p + U_x + U_y + U_z = 4
+    assert prediction.shape[0] == n_points * 4
 
     parts = service.split_multi_prediction(engine, prediction)
     assert parts is not None
     names = [name for name, _ in parts]
-    assert names == ["p", "U_mag"]  # 벡터 U 는 크기(magnitude)로 학습
+    assert names == ["p", "U_x", "U_y", "U_z", "U_mag"]
     for _, segment in parts:
         assert segment.shape[0] == n_points
+    # 파생 크기 = 성분의 norm (계약: 성분과 크기가 서로 모순되면 안 된다).
+    seg = {name: values for name, values in parts}
+    derived = np.sqrt(seg["U_x"] ** 2 + seg["U_y"] ** 2 + seg["U_z"] ** 2)
+    np.testing.assert_allclose(seg["U_mag"], derived, rtol=1e-12)
 
-    # 필드별 검증 지표도 딸려 온다.
-    assert set(result["per_field_metrics"].keys()) == {"p", "U"}
+    # 채널별 검증 지표가 딸려 온다.
+    assert set(result["per_field_metrics"].keys()) == {"p", "U_x", "U_y", "U_z"}
+
+
+@pytest.mark.slow
+def test_vector_direction_is_actually_learned(demo) -> None:
+    """방향 보존의 실질 검증: 부호가 있는 성분을 크기 학습은 절대 못 맞춘다.
+
+    데모 U 의 x 성분은 음수 영역이 있다 — |U| 로 학습하면 음수를 낼 수 없으므로,
+    학습된 U_x 가 음수 영역을 재현하면 방향이 진짜 학습된 것이다.
+
+    Taylor–Green 은 부호가 공간 진동해 작은 MLP 로는 스펙트럴 바이어스 때문에
+    에포크가 필요하다 (실측: hidden=48/200ep → 부호일치 75%, 64/400 → 89%).
+    """
+    truth_u = demo.metadata["time_series_fields"]["U"]  # (T, n, 3)
+    assert truth_u[..., 0].min() < 0, "테스트 전제: U_x 에 음수 영역이 있어야 한다"
+
+    result = service.build_physics_ai_twin(
+        demo, ["U"], hidden=64, max_epochs=400, max_train_points=3200
+    )
+    engine = result["engine"]
+    t_idx = 3
+    t_val = float(demo.time_steps[t_idx])
+    parts = service.split_multi_prediction(engine, service.predict_twin(engine, t_val))
+    assert parts is not None
+    seg = {name: values for name, values in parts}
+    assert set(seg) == {"U_x", "U_y", "U_z", "U_mag"}
+    # 부호 재현 — 크기 학습이면 불가능한 일.
+    assert seg["U_x"].min() < 0, "예측 U_x 에 음수가 없다 — 방향이 학습되지 않음"
+    sign_match = np.mean(np.sign(seg["U_x"]) == np.sign(truth_u[t_idx, :, 0]))
+    assert sign_match > 0.8, f"U_x 부호 일치율 {sign_match:.2f} — 방향 학습 실패"
 
 
 def test_split_multi_prediction_returns_none_for_single_output(demo) -> None:

@@ -110,6 +110,59 @@ def test_physics_ai_learns_mu_and_t(sweep_t) -> None:
     assert not np.allclose(base, dt), "t 를 바꿔도 예측이 안 변합니다"
 
 
+def test_parametric_dmd_interpolates_mu_and_forecasts_t(sweep_t) -> None:
+    """ParametricDMD (v5.2): 학습에 없던 μ 보간 + 학습 구간 밖 t 예보.
+
+    데모는 진행파(μ 에 비례하는 전파 속도)라 저랭크 선형 동역학 — DMD 적합 데이터.
+    """
+    result = service.build_parametric_dmd_twin(
+        sweep_t["datasets"],
+        "p",
+        sweep_t["params"],
+        param_names=sweep_t["param_names"],
+    )
+    engine = result["engine"]
+    assert result["param_names"] == ["inlet_velocity", "t"]
+    # 적합도: 진행파는 DMD 가 잘 맞아야 한다.
+    assert result["reconstruction_error"] < 0.05, (
+        f"재구성 오차 {result['reconstruction_error']:.3f} — DMD 적합 실패"
+    )
+    # 예보 상한이 학습 구간(1.4)을 넘는다.
+    assert result["forecast_t_max"] > result["train_t_max"] + 1e-9
+
+    # 학습 지점 재현.
+    truth = sweep_t["datasets"][1].extract_field_snapshots("p")[:, 2]
+    t2 = float(sweep_t["datasets"][1].time_steps[2])
+    pred = np.asarray(engine.predict([15.0, t2]))
+    rel = np.linalg.norm(pred - truth) / max(np.linalg.norm(truth), 1e-12)
+    assert rel < 0.05
+
+    # 학습에 없던 μ=17.5: 이웃(15, 20)의 사이 값이어야 하고 유한해야 한다.
+    mid = np.asarray(engine.predict([17.5, t2]))
+    assert np.isfinite(mid).all()
+    lo = np.asarray(engine.predict([15.0, t2]))
+    hi = np.asarray(engine.predict([20.0, t2]))
+    # 보간이 이웃보다 멀리 튀지 않는다 (전 지점 부등식은 과도 — 평균 거리로).
+    d_mid = min(np.linalg.norm(mid - lo), np.linalg.norm(mid - hi))
+    d_far = np.linalg.norm(hi - lo)
+    assert d_mid < d_far, "μ 보간이 이웃 케이스 사이에 있지 않습니다"
+
+    # 학습 구간 밖 t 예보가 유한하고, t 에 따라 계속 변한다.
+    f1 = np.asarray(engine.predict([15.0, 1.6]))
+    f2 = np.asarray(engine.predict([15.0, 2.0]))
+    assert np.isfinite(f1).all() and np.isfinite(f2).all()
+    assert not np.allclose(f1, f2), "예보 구간에서 시간 전개가 멈췄습니다"
+
+
+def test_parametric_dmd_rejects_steady_sweep() -> None:
+    steady = service.make_demo_case_set("sweep")
+    with pytest.raises(ValueError, match="타임스텝 4개 이상"):
+        service.build_parametric_dmd_twin(
+            steady["datasets"], "p", steady["params"],
+            param_names=steady["param_names"],
+        )
+
+
 def test_load_case_set_prefers_pvd_and_keeps_time(tmp_path) -> None:
     """폴더에 pvd 가 있으면 pvd 만 케이스 — 참조된 vtk 가 케이스로 새면 안 된다."""
     import pyvista as pv

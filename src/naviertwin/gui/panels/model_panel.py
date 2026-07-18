@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -123,6 +123,16 @@ class ModelPanel(QWidget):
         subtitle.setObjectName("subtitleLabel")
         subtitle.setWordWrap(True)
         left_layout.addWidget(subtitle)
+
+        # 전략 어드바이저 (v5.2) — 능력 레지스트리 판정. 웹 ②Model 카드의
+        # 데스크톱 대응: 로드된 데이터에 무엇이 가능한지 학습 전에 보여준다.
+        advisor_group = QGroupBox("전략 판정 (데이터 기반)")
+        advisor_layout = QVBoxLayout(advisor_group)
+        self._strategy_advisor_label = QLabel("데이터를 로드하면 전략별 가능 여부가 표시됩니다.")
+        self._strategy_advisor_label.setWordWrap(True)
+        self._strategy_advisor_label.setTextFormat(Qt.TextFormat.RichText)
+        advisor_layout.addWidget(self._strategy_advisor_label)
+        left_layout.addWidget(advisor_group)
 
         # 1. 학습 준비
         data_group = QGroupBox("1. 학습 준비")
@@ -538,10 +548,38 @@ class ModelPanel(QWidget):
             self._physics_case_label.setText(f"Import 탭에서 {len(case_paths)}개 케이스 로드됨")
         else:
             self._physics_case_label.setText("Import dataset 1개 사용")
+        self._update_strategy_advisor(dataset)
         self._log(
             f"Dataset 설정: {dataset.n_points} pts, {dataset.n_cells} cells, "
             f"{dataset.n_time_steps} steps"
         )
+
+    def _update_strategy_advisor(self, dataset: CFDDataset) -> None:
+        """능력 레지스트리(v5.2)로 전략별 가능/불가+이유를 표시한다.
+
+        웹 ②Model 카드의 데스크톱 대응 — 학습 버튼을 눌러야 알던 것을 로드
+        시점에 알려준다. 판정 실패는 로드를 막지 않는다.
+        """
+        try:
+            from naviertwin.core.digital_twin import strategies
+
+            profile = strategies.profile_data(dataset)
+            report = strategies.strategy_report(profile)
+            rec = strategies.recommend(profile)
+            lines = []
+            for key in ("rom", "physics", "dynamics", "operator"):
+                item = report.get(key)
+                if not item:
+                    continue
+                mark = "✅" if item["ok"] else "🚫"
+                reason = str(item["reason"])
+                if len(reason) > 90:
+                    reason = reason[:87] + "…"
+                lines.append(f"{mark} <b>{item['name']}</b><br/>&nbsp;&nbsp;{reason}")
+            lines.append(f"<br/><i>추천: {rec['reason']}</i>")
+            self._strategy_advisor_label.setText("<br/>".join(lines))
+        except Exception as exc:  # noqa: BLE001 — 어드바이저는 부가 정보
+            self._strategy_advisor_label.setText(f"전략 판정 불가: {exc}")
 
     def set_reduction_artifact(self, artifact: dict[str, object]) -> None:
         """Reduce 단계 산출물을 설정한다."""

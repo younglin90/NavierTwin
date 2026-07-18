@@ -1067,16 +1067,10 @@ class NavierTwinWebApp:
             return
         if method == "dynamics":
             if self.state.nt_case_mode:
-                # 비정상 케이스 세트에서 뷰어 데이터셋(첫 케이스)만으로 DMD 가
-                # 조용히 "성공"하는 것을 막는다 — 사용자는 전체 케이스를 학습했다고
-                # 믿게 된다. ParametricDMD 배선(로드맵 v5.2) 전까지는 명시 거절.
-                self._fail(
-                    "동역학 예보",
-                    RuntimeError(
-                        "케이스 세트의 동역학 예보(ParametricDMD)는 아직 지원하지 "
-                        "않습니다 — 단일 케이스 시계열에서 쓰세요."
-                    ),
-                )
+                # 비정상 케이스 세트 → ParametricDMD (v5.2). 뷰어 데이터셋(첫
+                # 케이스)만으로 단일 DMD 가 조용히 "성공"하는 함정을 막고 전체
+                # 케이스로 학습한다.
+                self._build_parametric_dmd_twin()
                 return
             self._build_dmd_twin()
             return
@@ -1114,6 +1108,52 @@ class NavierTwinWebApp:
             self._set_status(f"모델 학습 완료: {reducer}+{surrogate}. ③Twin 에서 예측하세요.")
         except Exception as exc:  # noqa: BLE001
             self._fail("모델 학습 실패", exc)
+
+    def _build_parametric_dmd_twin(self) -> None:
+        """②Model — 비정상 케이스 세트의 (μ, t) 예보 트윈 (ParametricDMD, v5.2).
+
+        학습에 없던 μ 는 모달 계수를 보간하고, t 는 학습 구간 밖까지 예보한다.
+        적합도(재구성 오차)는 단일 DMD 와 같은 트래픽 라이트로 표시한다.
+        """
+        if not self.case_datasets:
+            self._fail(
+                "케이스 없음",
+                RuntimeError("케이스 폴더를 다시 로드하세요."),
+            )
+            return
+        field = self._training_field()
+        try:
+            result = service.build_parametric_dmd_twin(
+                self.case_datasets,
+                field,
+                self.case_params,
+                param_names=self.case_param_names,
+            )
+            self.engine = result["engine"]
+            names = result["param_names"]
+            err = result["reconstruction_error"]
+            summary = (
+                f"field='{field}', ParametricDMD(partitioned) · 케이스 "
+                f"{result['n_cases']}개 · 입력 ({', '.join(names)}) · "
+                f"학습 t ≤ {result['train_t_max']:.3g} · "
+                f"예보 t ≤ {result['forecast_t_max']:.3g}"
+            )
+            with self.state:
+                self.state.nt_model_ready = True
+                self.state.nt_model_summary = summary
+                self.state.nt_physics_ready = False
+                self.state.nt_dmd_ready = True
+                self.state.nt_dmd_fit_error = float(err)
+                self.state.nt_dmd_summary = summary
+                self.state.nt_twin_ready = True
+                self.state.nt_twin_summary = summary
+            self._set_twin_param_ranges(names, result["param_mins"], result["param_maxs"])
+            self._set_status(
+                f"ParametricDMD 학습 완료 (재구성 오차 {err * 100:.1f}%). "
+                "③Twin 에서 학습에 없던 운전조건·미래 t 를 예보하세요."
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._fail("ParametricDMD 학습 실패", exc)
 
     def _build_dmd_twin(self) -> None:
         """②Model — PyDMD 동역학 트윈을 학습한다 (계열 Ⓓ, 시간 외삽 가능).

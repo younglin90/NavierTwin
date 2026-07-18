@@ -166,7 +166,7 @@ def test_build_twin_dispatches_by_model_method() -> None:
 
 
 def test_physics_multi_output_train_and_predict() -> None:
-    """Physics AI 다중 출력: p+U 동시 학습 → 예측 시 twin_p / twin_U_mag 로 분해 표시."""
+    """Physics AI 다중 출력 + 벡터 성분 보존 (v5.0): U 방향 채널이 뷰어에 뜬다."""
     app = _make_app("nt-test-multi-output")
     st = app.server.state
     app.load_demo()
@@ -184,9 +184,12 @@ def test_physics_multi_output_train_and_predict() -> None:
     app.predict()
     assert st.nt_error == ""
     assert "twin_p" in st.nt_fields
-    assert "twin_U_mag" in st.nt_fields
+    # 방향이 보존된다 — 성분 채널 + 파생 크기 둘 다.
+    for name in ("twin_U_x", "twin_U_y", "twin_U_mag"):
+        assert name in st.nt_fields, f"{name} 이 뷰어 필드에 없습니다"
     # 다중 출력 파생 필드는 학습 대상 선택지에 새지 않는다.
     assert "twin_p" not in st.nt_train_field_choices
+    assert "twin_U_x" not in st.nt_train_field_choices
 
 
 def test_build_twin_legacy_physicsnemo_surrogate_shim() -> None:
@@ -747,8 +750,12 @@ def test_dmd_dynamics_method_forecasts_beyond_training() -> None:
     assert st.nt_twin_max == st.nt_twin_train_max  # 내삽 전용으로 복귀
 
 
-def test_dmd_rejected_for_case_sets(tmp_path) -> None:
-    """케이스 세트는 시간축이 없어 동역학 예보가 명확히 거부된다."""
+def test_dmd_rejected_for_steady_case_sets(tmp_path) -> None:
+    """정상(스텝 1개) 케이스 세트는 시간 전개가 없어 동역학 예보가 거부된다.
+
+    v5.2 부터 **비정상** 케이스 세트는 ParametricDMD 로 가능하다 — 거절은
+    "케이스 세트여서"가 아니라 "시간축이 없어서"다.
+    """
     _make_case_set(tmp_path / "sweep")
     app = _make_app("nt-test-dmd-caseset")
     st = app.server.state
@@ -757,7 +764,7 @@ def test_dmd_rejected_for_case_sets(tmp_path) -> None:
 
     st.nt_model_method = "dynamics"
     app.build_twin()
-    assert "시계열" in st.nt_error
+    assert "타임스텝 4개 이상" in st.nt_error
 
 
 def test_unsteady_sweep_demo_end_to_end() -> None:
@@ -776,11 +783,10 @@ def test_unsteady_sweep_demo_end_to_end() -> None:
     assert st.nt_case_count == 4
     assert st.nt_has_timesteps is True
     assert st.nt_nsteps == 8
-    # 전략 판정: ROM/Physics 가능, DMD 는 이유와 함께 불가.
+    # 전략 판정: ROM/Physics/동역학(ParametricDMD, v5.2) 전부 가능.
     status = st.nt_strategy_status
     assert status["rom"]["ok"] and status["physics"]["ok"]
-    assert not status["dynamics"]["ok"]
-    assert "ParametricDMD" in status["dynamics"]["reason"]
+    assert status["dynamics"]["ok"]
     assert "시간(t)도 입력 파라미터" in st.nt_method_hint
 
     # ROM 학습 → 슬라이더가 μ 와 t 두 개.
@@ -803,10 +809,21 @@ def test_unsteady_sweep_demo_end_to_end() -> None:
     late = np.asarray(app.dataset.mesh.point_data["twin_prediction"])
     assert not np.allclose(early, late), "t 슬라이더가 예측에 반영되지 않습니다"
 
-    # DMD 는 케이스 세트에서 명시 거절 — 첫 케이스만으로 조용히 학습하면 안 된다.
+    # 동역학(v5.2): ParametricDMD 가 전체 케이스로 학습되고, t 슬라이더 상한이
+    # 학습 구간(1.4)을 넘어 예보 구간까지 열린다 — 이 계열의 존재 이유.
     st.nt_model_method = "dynamics"
     app.build_twin()
-    assert "ParametricDMD" in st.nt_error
+    assert st.nt_error == ""
+    assert st.nt_dmd_ready is True
+    assert "ParametricDMD" in st.nt_model_summary
+    assert st.nt_param_names == ["inlet_velocity", "t"]
+    assert st.nt_twin_maxs[1] > 1.4 + 1e-9, "t 예보 상한이 학습 구간을 못 넘습니다"
+
+    st.nt_twin_params = [17.5, 1.9]  # 학습에 없던 μ + 학습 구간 밖 t
+    app.predict()
+    assert st.nt_error == ""
+    forecast = np.asarray(app.dataset.mesh.point_data["twin_prediction"])
+    assert np.isfinite(forecast).all()
 
 
 def test_strategy_status_follows_loaded_data() -> None:

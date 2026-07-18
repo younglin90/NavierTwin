@@ -447,6 +447,21 @@ class MainWindow(QMainWindow):
         pipeline_demo_action.triggered.connect(self._run_pipeline_demo)
         self._tools_menu.addAction(pipeline_demo_action)
 
+        # 데모 데이터 (v5.2) — 웹 GUI 데모 카탈로그의 시계열 데모를 데스크톱에서도.
+        # 파일 없이 즉시 로드돼 전체 파이프라인을 바로 체험할 수 있다.
+        demo_menu = self._tools_menu.addMenu("데모 데이터 로드(&D)")
+        for kind, label in (
+            ("filament", "소용돌이 필라멘트 (불연속 — 어려운 기준)"),
+            ("advecting", "이류 Taylor–Green (부드러움 — ROM 적합)"),
+            ("waves", "진행파 2모드 (DMD 적합)"),
+            ("karman", "카르만 와열 (실제 LBM 해석 · 진짜 구멍)"),
+        ):
+            action = QAction(label, self)
+            action.triggered.connect(
+                lambda _checked=False, k=kind: self._load_demo_dataset(k)
+            )
+            demo_menu.addAction(action)
+
         build_twin_action = QAction("CSV 스냅샷으로 트윈 생성(&T)", self)
         build_twin_action.triggered.connect(self._build_twin_from_csv_snapshots)
         self._tools_menu.addAction(build_twin_action)
@@ -1111,6 +1126,23 @@ class MainWindow(QMainWindow):
             self._set_status(f"모델 학습 완료 ({model_type})")
         self._record_model_comparison(model_type, surrogate)
         self._tabs.setCurrentIndex(4)
+
+    def _load_demo_dataset(self, kind: str) -> None:
+        """데모 데이터셋을 메모리에서 생성해 전체 워크플로우에 로드한다 (v5.2).
+
+        ``naviertwin.web.service`` 는 Qt/trame 비의존 워크플로우 계층이라
+        데스크톱에서 그대로 재사용한다. karman 은 저장소 번들 데이터에서 즉시
+        로드된다 (재계산 없음).
+        """
+        try:
+            from naviertwin.web import service as web_service
+
+            dataset = web_service.make_demo_dataset(kind=kind)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "데모 로드 실패", str(exc))
+            return
+        self._on_dataset_loaded(dataset)
+        self._set_status(f"데모 데이터 로드 완료 — {kind}")
 
     def _on_project_loaded(self, dataset: object, engine: object | None) -> None:
         """Export 패널에서 로드한 프로젝트를 전체 워크플로우 상태로 복원한다."""

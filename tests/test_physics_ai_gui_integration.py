@@ -154,13 +154,15 @@ def test_physicsnemo_cfd_field_model_uses_multiple_inputs_and_outputs() -> None:
     pred = model.predict(np.array([[1.5, 150.0]], dtype=float))
 
     assert model.is_fitted is True
-    assert pred.shape == (8, 1)
+    # v5.0 벡터 성분 보존: p + U_x/U_y/U_z = 채널 4개 × 4점 = 16 (예전엔 |U| 로
+    # 뭉개 8이었다).
+    assert pred.shape == (16, 1)
     assert model.training_metadata["source"] == "cfd_dataset"
     assert model.training_metadata["field_names"] == ["p", "U"]
     assert model.training_metadata["parameter_names"] == ["inlet_u", "reynolds"]
     assert model.training_metadata["n_locations"] == 4
     assert model.training_metadata["n_params"] == 2
-    assert len(model.training_metadata["output_fields"]) == 2
+    assert len(model.training_metadata["output_fields"]) == 4  # 채널당 1 spec
 
 
 def test_main_window_connects_physics_ai_model_to_twin(qtbot) -> None:

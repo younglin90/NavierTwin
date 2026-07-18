@@ -86,10 +86,11 @@ def test_model_panel_trains_direct_cfd_surrogate_multi_input_output(
     assert metadata["field_names"] == ["p", "U"]
     assert metadata["parameter_names"] == ["inlet_u", "reynolds"]
     assert metadata["n_params"] == 2
-    assert metadata["n_outputs"] == 8
-    assert len(metadata["output_fields"]) == 2
+    # v5.0 벡터 성분 보존: p + U_x/U_y/U_z = 채널 4개 × 4점 = 16.
+    assert metadata["n_outputs"] == 16
+    assert len(metadata["output_fields"]) == 4
     assert model.input_dim == 2
-    assert model.output_dim == 8
+    assert model.output_dim == 16
 
 
 def test_model_panel_capability_table_documents_multi_io_paths(qtbot) -> None:

@@ -7,7 +7,8 @@ The intended digital-twin training layout is:
 Steady-state parameter sweeps can pass multiple CFD datasets plus a parameter
 table where each row corresponds to one case. Time-series data maps each
 timestep is treated as one case unless an explicit parameter table is supplied.
-Vector fields are converted to magnitude to support immediate contour display.
+Vector fields keep their components (v5.0): U trains/predicts as U_x/U_y/U_z
+channels so direction is preserved; magnitude is derived downstream for display.
 """
 
 from __future__ import annotations
@@ -272,15 +273,14 @@ class PhysicsNeMoCFDFieldModel:
         pred_val = self._predict_matrix(X_val_n)
         pred_val = pred_val * self._y_std + self._y_mean
         self.validation_metrics = _regression_metrics(y_val, pred_val)
+        # 지표는 **채널 단위** (v5.0) — 벡터 U 는 U_x/U_y/U_z 각각. y 열 순서가
+        # output_fields spec 순서와 같다는 것이 계약이다.
         per_field = {}
-        index = 0
-        while index < len(self.field_names):
-            field = self.field_names[index]
-            per_field[field] = _regression_metrics(
+        for index, spec in enumerate(self.output_fields):
+            per_field[str(spec["display_name"])] = _regression_metrics(
                 y_val[:, index : index + 1],
                 pred_val[:, index : index + 1],
             )
-            index += 1
         self.is_fitted = True
         self.training_metadata = {
             "source": "cfd_dataset",
@@ -442,7 +442,9 @@ class PhysicsNeMoCFDFieldModel:
         assert self._y_std is not None
         X_n = (X - self._x_mean) / self._x_std
         y = self._predict_matrix(X_n) * self._y_std + self._y_mean
-        y_blocks = y.reshape(n_rows, n_locations, len(self.field_names))
+        # 출력 열 수 = **채널** 수 (벡터 성분 포함, v5.0) — field 수가 아니다.
+        n_channels = max(1, len(self.output_fields))
+        y_blocks = y.reshape(n_rows, n_locations, n_channels)
         return y_blocks.transpose(0, 2, 1).reshape(n_rows, -1).T
 
     def _build_training_matrix(
@@ -575,7 +577,7 @@ def prepare_cfd_field_training_data_from_datasets(
     dataset_index = 0
     while dataset_index < len(dataset_list):
         dataset = dataset_list[dataset_index]
-        coords, location, values, components = _extract_dataset_outputs(
+        coords, location, values, components, _channels = _extract_dataset_outputs(
             dataset,
             fields,
         )
@@ -658,8 +660,8 @@ def prepare_cfd_field_training_data_from_datasets(
             )
         input_blocks: list[NDArray[np.float64]] = []
         for dataset in dataset_list:
-            coords_in, location_in, values_in, _components = _extract_dataset_outputs(
-                dataset, inputs
+            coords_in, location_in, values_in, _components, _in_channels = (
+                _extract_dataset_outputs(dataset, inputs)
             )
             if location_in != location_ref:
                 raise ValueError(
@@ -728,7 +730,7 @@ def count_dataset_snapshots(datasets: Sequence[Any], field_names: Sequence[str])
     dataset_list = list(datasets)
     dataset_index = 0
     while dataset_index < len(dataset_list):
-        _coords, _location, values, _components = _extract_dataset_outputs(
+        _coords, _location, values, _components, _chs = _extract_dataset_outputs(
             dataset_list[dataset_index],
             field_names,
         )
@@ -737,23 +739,38 @@ def count_dataset_snapshots(datasets: Sequence[Any], field_names: Sequence[str])
     return total
 
 
+_COMPONENT_SUFFIXES = ("x", "y", "z")
+
+
+def _component_channel_names(field_name: str, n_components: int) -> list[str]:
+    """벡터 field 의 성분별 채널 이름 — U → U_x, U_y, U_z (4성분 이상은 c0…)."""
+    if n_components <= 1:
+        return [str(field_name)]
+    if n_components <= len(_COMPONENT_SUFFIXES):
+        return [f"{field_name}_{_COMPONENT_SUFFIXES[i]}" for i in range(n_components)]
+    return [f"{field_name}_c{i}" for i in range(n_components)]
+
+
 def _extract_dataset_outputs(
     dataset: Any,
     field_names: Sequence[str],
-) -> tuple[NDArray[np.float64], str, NDArray[np.float64], list[int]]:
+) -> tuple[NDArray[np.float64], str, NDArray[np.float64], list[int], list[str]]:
+    """선택 field 들을 (coords, location, 채널 스택, per-field 성분 수, 채널명)으로.
+
+    벡터 field 는 **성분별 채널로 보존**한다 (v5.0) — 예전에는 크기(norm)로
+    뭉개서 U 가 방향을 잃었다. U(T, n, 3) → 채널 U_x/U_y/U_z 세 개.
+    """
     location_ref: str | None = None
     coords_ref: NDArray[np.float64] | None = None
-    values_by_field: list[NDArray[np.float64]] = []
+    channel_values: list[NDArray[np.float64]] = []
+    channel_names: list[str] = []
     components: list[int] = []
     n_steps_ref: int | None = None
 
-    field_index = 0
-    field_list = list(field_names)
-    while field_index < len(field_list):
-        field_name = field_list[field_index]
+    for field_name in field_names:
         raw, location = _extract_raw_field(dataset, field_name)
         coords = _coords_for_location(dataset.mesh, location)
-        values, source_components = _field_to_scalar_snapshots(raw)
+        values, source_components = _field_to_component_snapshots(raw)
         if location_ref is None:
             location_ref = location
             coords_ref = coords
@@ -768,14 +785,15 @@ def _extract_dataset_outputs(
                 raise ValueError("selected output fields use different mesh sizes")
             if n_steps_ref != values.shape[0]:
                 raise ValueError("selected output fields have different snapshot counts")
-        values_by_field.append(values)
+        for k, name in enumerate(_component_channel_names(field_name, source_components)):
+            channel_values.append(values[:, :, k])
+            channel_names.append(name)
         components.append(source_components)
-        field_index += 1
 
     assert coords_ref is not None
     assert location_ref is not None
-    values_stack = np.stack(values_by_field, axis=2)
-    return coords_ref, location_ref, values_stack, components
+    values_stack = np.stack(channel_values, axis=2)
+    return coords_ref, location_ref, values_stack, components, channel_names
 
 
 def _extract_raw_field(dataset: Any, field_name: str) -> tuple[NDArray[np.float64], str]:
@@ -816,14 +834,21 @@ def _coords_for_location(mesh: Any, location: str) -> NDArray[np.float64]:
     return coords[:, :3]
 
 
-def _field_to_scalar_snapshots(raw: NDArray[np.float64]) -> tuple[NDArray[np.float64], int]:
+def _field_to_component_snapshots(
+    raw: NDArray[np.float64],
+) -> tuple[NDArray[np.float64], int]:
+    """field 배열을 (n_steps, n_loc, n_comp) 로 정규화한다 — 성분 보존 (v5.0).
+
+    예전 ``_field_to_scalar_snapshots`` 는 벡터를 norm 으로 뭉개 방향을 잃었다.
+    이제 스칼라는 성분 1개, 벡터는 성분 C개로 그대로 나간다.
+    """
     arr = np.asarray(raw, dtype=np.float64)
     if arr.ndim == 1:
-        return arr.reshape(1, -1), 1
+        return arr.reshape(1, -1, 1), 1
     if arr.ndim == 2:
-        return arr, 1
+        return arr[:, :, None], 1
     if arr.ndim == 3:
-        return np.linalg.norm(arr, axis=2), int(arr.shape[2])
+        return arr, int(arr.shape[2])
     raise ValueError(f"unsupported field array shape: {arr.shape}")
 
 
@@ -861,29 +886,34 @@ def _build_output_field_specs(
     components: Sequence[int],
     n_locations: int,
 ) -> list[dict[str, object]]:
+    """출력 채널 spec — **채널(성분)당 1개** (v5.0, 방향 보존).
+
+    벡터 U(3성분)는 U_x/U_y/U_z 세 spec 이 된다. ``field_name`` 은 원본 field
+    이름을 유지하므로 소비자(:func:`~naviertwin.web.service.split_multi_prediction`)
+    가 성분을 다시 묶어 크기(magnitude)를 파생할 수 있다.
+    """
     if len(field_names) != len(components):
         raise ValueError("field_names and components must have the same length")
     specs: list[dict[str, object]] = []
     start = 0
-    spec_index = 0
-    while spec_index < len(field_names):
-        field_name = field_names[spec_index]
-        n_components = components[spec_index]
-        display_name = f"{field_name}_mag" if int(n_components) > 1 else str(field_name)
-        end = start + n_locations
-        specs.append(
-            {
-                "field_name": str(field_name),
-                "display_name": display_name,
-                "location": location,
-                "source_components": int(n_components),
-                "start": int(start),
-                "end": int(end),
-                "n_locations": int(n_locations),
-            }
-        )
-        start = end
-        spec_index += 1
+    for field_name, n_components in zip(field_names, components):
+        for k, channel in enumerate(
+            _component_channel_names(str(field_name), int(n_components))
+        ):
+            end = start + n_locations
+            specs.append(
+                {
+                    "field_name": str(field_name),
+                    "display_name": channel,
+                    "component_index": int(k),
+                    "location": location,
+                    "source_components": int(n_components),
+                    "start": int(start),
+                    "end": int(end),
+                    "n_locations": int(n_locations),
+                }
+            )
+            start = end
     return specs
 
 
