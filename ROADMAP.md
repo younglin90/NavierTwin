@@ -20,13 +20,18 @@
 - [x] v5.2: EZyRB 서로게이트 — `ezyrb_gpr`(예측 σ UQ)/`ezyrb_ann` 키, 리더보드 포함
 - [x] v5.2: FNO+SDF 채널 core — `GeometryFNO2D` + `cases_to_grid_tensors`
       (형상=SDF 채널 · 조건=브로드캐스트 채널, DeepCFD/Thuerey 방식)
-- [ ] v5.2: GeometryFNO service/app 배선 (operator 전략을 형상가변 케이스 세트에 활성화)
-- [ ] v5.1: 경계조건 서브시스템 (patch 메타 보존 · wall face 마우스 지정 ·
-      메쉬 네이티브 wall-SDF)
-- [ ] v5.4: 분할 뷰어(실제|트윈) + 셀별 차이장 + 외삽 모드
-- [ ] v5.6: 성능/병렬 계층 — GPU 디바이스 배지/토글·AMP·미니배치, 케이스 로드/
-      전처리 process_map 병렬, 리더보드 조합 병렬, MPI 배치 CLI(클러스터 전용).
-      현재 실태: GPU 학습은 이미 자동(cuda), mpi4py 설치·미사용
+- [x] v5.2: GeometryFNO service/app 배선 — operator 전략이 정상 형상가변 케이스
+      세트에서 활성화(공통 격자+SDF 채널), 예측은 공통 격자 뷰어 전환
+- [x] v5.2: ParametricDMD(비정상 스윕 μ,t 예보), EZyRB(GPR·UQ/NN) 배선
+- [x] v5.4: 셀별 오차장(twin_error) + 실제/트윈 요약 지표 + 정직한 외삽 인지
+- [x] v5.6 P0: 학습 디바이스 배지(GPU/CPU), AMP·미니배치(A3, ~2.2배), OOD 3단계
+      지지집합 상태(IN/NEAR/OUT), GeometryFNO 마스크 손실(0-채움 셀 loss 제외)
+- [x] 검토 반영: 데이터 계약 우선 재정렬(로드맵 §6½), signed SDF 폐곡면 한정 강제
+- [ ] v5.1: 경계조건 UI — wall face 마우스 클릭 지정(백엔드 patch/wall-SDF는 완료),
+      seed+region growing, BC 입력 폼
+- [ ] v5.4: 좌(실제)/우(트윈) 분할 뷰어(공통 컬러 범위·카메라 동기)
+- [ ] v5.6 P1+: 케이스 로드/전처리 process_map 병렬, 리더보드 조합 병렬, remap
+      오차 바닥 분리, 그룹 스플릿+train-only 정규화, MPI 배치 CLI(클러스터)
 
 ## 직전 단계: v4.2.0 + 17 rounds — 연구 플랫폼 + 전영역 성숙화 ✅
 
