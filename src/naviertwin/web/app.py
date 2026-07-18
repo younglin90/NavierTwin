@@ -281,6 +281,15 @@ class NavierTwinWebApp:
         st.nt_gino_hidden = 16
         st.nt_gino_radius = 0.25
 
+        # Model — 메쉬 GNN 메시지패싱 (mesh_gnn_mp, Route 2 세 번째 배선 ·
+        # 케이스 세트 전용). mesh_gnn 과 같은 그래프 빌더를 쓰지만, 내부
+        # 모델이 GCN 대신 진짜 edge_features(Δ좌표)를 메시지패싱에 쓰는
+        # MeshGraphNets(Encode-Process-Decode) 다 — 재샘플 없이 원본 격자
+        # 위에 표시된다.
+        st.nt_mgn_epochs = 200
+        st.nt_mgn_hidden = 64
+        st.nt_mgn_msgpass = 4
+
         # Model — 계열 Ⓓ 동역학 예보 (PyDMD). 학습 구간 밖 외삽이 가능한 유일
         # 계열. 적합도(재구성 오차)를 반드시 노출한다 — DMD 는 데이터가 안 맞으면
         # 조용히 크게 빗나간다. 근거: model-taxonomy-plan.md §20.
@@ -1206,6 +1215,20 @@ class NavierTwinWebApp:
                 ),
             )
             return
+        if method == "mesh_gnn_mp":
+            if self.state.nt_case_mode:
+                # 케이스 세트 → 메쉬 GNN 메시지패싱 (Route 2 세 번째 배선,
+                # 재샘플 없이 edge_features 를 실제로 쓰는 MeshGraphNets).
+                self._build_mgn_twin()
+                return
+            self._fail(
+                "메쉬 GNN(메시지패싱)",
+                RuntimeError(
+                    "메쉬 GNN(메시지패싱) 은 케이스 세트(정상 파라미터 스윕) "
+                    "전용입니다 — 케이스 폴더나 데모 케이스 세트를 로드하세요."
+                ),
+            )
+            return
         if method == "dynamics":
             if self.state.nt_case_mode:
                 # 비정상 케이스 세트 → ParametricDMD (v5.2). 뷰어 데이터셋(첫
@@ -1773,6 +1796,72 @@ class NavierTwinWebApp:
             )
         except Exception as exc:  # noqa: BLE001
             self._fail("GINO 학습 실패", exc)
+
+    def _build_mgn_twin(self) -> None:
+        """②Model — 케이스 세트에서 메쉬 GNN 메시지패싱(mesh_gnn_mp) 트윈을 학습한다.
+
+        정상 파라미터 스윕 전용 (Route 2 세 번째 배선) — mesh_gnn 과 같은
+        그래프 빌더를 쓰지만, 내부 모델이 진짜 edge_features(Δ좌표, ‖Δ‖)를
+        메시지패싱에 쓰는 MeshGraphNets(Encode-Process-Decode) 다. 결과
+        엔진은 ``varying_mesh=True`` 라 :meth:`predict` 의 기존 형상 가변
+        분기(``predict_to_mesh`` — 보고 있는 원본 케이스 메쉬 위 표시)를
+        그대로 탄다.
+        """
+        if not self.case_datasets:
+            self._fail(
+                "케이스 없음",
+                RuntimeError(
+                    "복원된 프로젝트는 케이스 1개만 담아 재학습할 수 없습니다 — "
+                    "케이스 폴더를 다시 로드하세요."
+                ),
+            )
+            return
+        fields = self._training_fields()
+        try:
+            result = service.build_mgn_twin_from_cases(
+                self.case_datasets,
+                fields,
+                self.case_params,
+                param_names=self.case_param_names,
+                hidden=int(self.state.nt_mgn_hidden or 64),
+                n_msgpass=int(self.state.nt_mgn_msgpass or 4),
+                max_epochs=int(self.state.nt_mgn_epochs or 200),
+            )
+            self.engine = result["engine"]
+            names = result["param_names"]
+            loss = float(result.get("train_loss", float("nan")))
+            multi = f", 다중 출력 {len(fields)}개" if len(fields) > 1 else ""
+            summary = (
+                f"field(s)='{', '.join(fields)}', 메쉬 GNN 메시지패싱(그래프+에지{multi}) · "
+                f"케이스 {result['n_cases']}개 · 입력 파라미터 {len(names)}개 "
+                f"({', '.join(names)}) · train loss {loss:.3g}"
+            )
+            with self.state:
+                self.state.nt_model_ready = True
+                self.state.nt_model_summary = summary
+                self.state.nt_physics_ready = False
+                self.state.nt_dmd_ready = False
+                self.state.nt_twin_ready = True
+                self.state.nt_twin_summary = summary
+            self._set_twin_param_ranges(names, result["param_mins"], result["param_maxs"])
+            self._log_training_run(
+                "mesh_gnn_mp",
+                {
+                    "fields": fields,
+                    "n_cases": result["n_cases"],
+                    "param_names": names,
+                    "hidden": int(self.state.nt_mgn_hidden or 64),
+                    "n_msgpass": int(self.state.nt_mgn_msgpass or 4),
+                    "epochs": int(self.state.nt_mgn_epochs or 200),
+                },
+                {"train_loss": loss},
+            )
+            self._set_status(
+                f"메쉬 GNN(메시지패싱) 학습 완료 — 케이스 {result['n_cases']}개, "
+                "재샘플 없음. ③Twin 에서 예측하세요 (보고 있는 형상 위에 표시됩니다)."
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._fail("메쉬 GNN(메시지패싱) 학습 실패", exc)
 
     @staticmethod
     def _format_holdout_summary(eval_split: dict[str, Any] | None) -> str:
@@ -4037,6 +4126,12 @@ class NavierTwinWebApp:
                             "mdi-dots-hexagon",
                         ),
                         (
+                            "mesh_gnn_mp",
+                            "메쉬 GNN (메시지패싱)",
+                            "에지 특징(Δ좌표) 메시지패싱 · 재샘플 없음 · 원본 격자 예측",
+                            "mdi-transit-connection-variant",
+                        ),
+                        (
                             "dynamics",
                             "동역학 예보 (DMD)",
                             "시간 전이 규칙 학습 · 학습 구간 밖 외삽 가능 · PyDMD",
@@ -4310,6 +4405,57 @@ class NavierTwinWebApp:
                                     classes="mt-1",
                                 )
 
+                    # Ⓖ 메쉬 GNN 메시지패싱 (mesh_gnn_mp, Route 2 세 번째 배선) —
+                    # 케이스 세트 전용, 재샘플 없는 메쉬 네이티브 학습(mesh_gnn 과
+                    # 같은 그래프 빌더 + 진짜 edge_features 메시지패싱).
+                    with html.Div(v_show=("nt_model_method === 'mesh_gnn_mp'",)):
+                        with html.Div(v_show=("!nt_case_mode",)):
+                            self._tip_row(
+                                "케이스 세트 전용",
+                                "메쉬 GNN(메시지패싱) 은 케이스 세트(정상 파라미터 "
+                                "스윕)에서만 학습할 수 있습니다 — ①Import 에서 "
+                                "케이스 폴더나 데모 케이스 세트를 로드하세요.",
+                                warn=True,
+                            )
+                        with html.Div(v_show=("nt_case_mode",)):
+                            self._tip_row(
+                                "메시지패싱 — 에지 특징(Δ좌표)을 실제로 쓴다",
+                                "케이스마다 자기 메쉬를 그래프(노드=격자점, 에지="
+                                "셀 연결)로 바꾸되, mesh_gnn(GCN)과 달리 "
+                                "Encode-Process-Decode 메시지패싱(MeshGraphNets)이 "
+                                "에지 특징(Δ좌표, 거리)까지 반영해 [좌표, 운전조건] "
+                                "→ 필드를 학습합니다. 공통 격자 재샘플이 없어 진짜 "
+                                "구멍(형상 가변)이 그대로 보존되고, 예측도 보고 있는 "
+                                "원본 케이스 격자 위에 표시됩니다. 소수 케이스는 "
+                                "정성적 데모로 보세요.",
+                                warn=True,
+                            )
+                            with html.Div(classes="d-flex"):
+                                v3.VTextField(
+                                    v_model=("nt_mgn_epochs",),
+                                    label="Epochs",
+                                    type="number",
+                                    density="compact",
+                                    hide_details=True,
+                                    classes="mt-1 mr-2",
+                                )
+                                v3.VTextField(
+                                    v_model=("nt_mgn_hidden",),
+                                    label="Hidden width",
+                                    type="number",
+                                    density="compact",
+                                    hide_details=True,
+                                    classes="mt-1 mr-2",
+                                )
+                                v3.VTextField(
+                                    v_model=("nt_mgn_msgpass",),
+                                    label="메시지패싱 층 수",
+                                    type="number",
+                                    density="compact",
+                                    hide_details=True,
+                                    classes="mt-1",
+                                )
+
                     # Ⓓ 동역학 예보 (PyDMD) — 학습 구간 밖 외삽이 가능한 유일 계열.
                     with html.Div(v_show=("nt_model_method === 'dynamics'",)):
                         # DMD 는 부적합해도 조용히 학습에 "성공"한다 — 못 보면
@@ -4357,14 +4503,15 @@ class NavierTwinWebApp:
 
                     # 라벨은 입력 종류에 따라 바뀐다 (t vs 운전조건). VBtn 의
                     # 첫 위치 인자는 텍스트 child 라 바인딩이 안 되므로 mustache 로.
-                    # operator/mesh_gnn/gino 는 케이스 세트일 때만 학습 버튼이
-                    # 뜬다 (단일 케이스는 각 카드의 안내가 대신 뜬다).
+                    # operator/mesh_gnn/gino/mesh_gnn_mp 는 케이스 세트일 때만
+                    # 학습 버튼이 뜬다 (단일 케이스는 각 카드의 안내가 대신 뜬다).
                     with html.Div(
                         classes="d-flex align-center mt-2",
                         v_show=(
                             "(nt_model_method !== 'operator' && "
                             "nt_model_method !== 'mesh_gnn' && "
-                            "nt_model_method !== 'gino') || nt_case_mode",
+                            "nt_model_method !== 'gino' && "
+                            "nt_model_method !== 'mesh_gnn_mp') || nt_case_mode",
                         ),
                     ):
                         with v3.VBtn(
