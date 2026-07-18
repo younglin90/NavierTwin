@@ -2,7 +2,26 @@
 
 > Phase별 세부 태스크 체크리스트. 버전별 목표·범위·근거는 `PLAN.md` 참조.
 
-## 현재 단계: v4.2.0 + 17 rounds — 연구 플랫폼 + 전영역 성숙화 ✅
+## 현재 단계: v5.0~v5.2 진행 중 — 일반 CFD 트윈 플랫폼 전환
+
+상세 설계·갭 분석·전략 카탈로그: `.omc/plans/twin-platform-roadmap.md`
+
+- [x] v5.0-M1: 능력 기반 전략 레지스트리(`core/digital_twin/strategies.py`) —
+      ②Model 카드/데스크톱 어드바이저가 로드 시점에 가능/불가+이유 표시
+- [x] v5.0-M1: 비정상×다케이스 시간축 보존 — 케이스 세트가 (μ, t) 로 학습,
+      ③Twin 에 t 슬라이더 자동 생성 (`sweep_unsteady` 데모, PVD 우선 규칙)
+- [x] v5.0-M2: 벡터 성분 보존 — U 가 U_x/U_y/U_z 채널로 학습(방향 유지),
+      U_mag 는 파생
+- [x] v5.2: ParametricDMD — 비정상 스윕의 (μ, t) 예보 (partitioned + ezyrb 보간)
+- [x] GUI 패리티: 데스크톱 전략 어드바이저 + 데모 데이터 메뉴 + 웹 엔진
+      param_names 호환
+- [ ] v5.2: EZyRB 서로게이트 (POD-GPR·UQ / POD-NN) — 진행 중
+- [ ] v5.2: FNO+SDF 채널 (형상=SDF 입력 채널, DeepCFD/Thuerey 방식) — 진행 중
+- [ ] v5.1: 경계조건 서브시스템 (patch 메타 보존 · wall face 마우스 지정 ·
+      메쉬 네이티브 wall-SDF)
+- [ ] v5.4: 분할 뷰어(실제|트윈) + 셀별 차이장 + 외삽 모드
+
+## 직전 단계: v4.2.0 + 17 rounds — 연구 플랫폼 + 전영역 성숙화 ✅
 
 ---
 
