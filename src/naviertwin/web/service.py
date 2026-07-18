@@ -2427,3 +2427,171 @@ __all__ = [
     "snapshot_dataset",
     "sync_timestep_to_mesh",
 ]
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 실제 vs 트윈 비교 (v5.4) — 점별 오차장 + 요약 지표 + 외삽 인지
+# ──────────────────────────────────────────────────────────────────────
+
+# 학습 샘플 일치 판정의 축별 정규화 상대 허용오차. 진실(ground truth)은
+# 학습 샘플과 "정확히 같은" 질의에만 존재한다 — 부동소수 잡음만 흡수한다.
+_TRUTH_MATCH_RTOL = 1e-6
+
+
+def _truth_axis_scale(values: np.ndarray) -> float:
+    """축 정규화 스케일 — 학습 값의 최대 절대값 (전부 0 이면 1.0)."""
+    scale = float(np.max(np.abs(values))) if values.size else 0.0
+    return scale if scale > 0.0 else 1.0
+
+
+def _truth_match_index(query: float, values: np.ndarray) -> int | None:
+    """정규화 허용오차 안에서 일치하는 첫 인덱스를 찾는다 — 없으면 None."""
+    values = np.asarray(values, dtype=np.float64).reshape(-1)
+    tol = _TRUTH_MATCH_RTOL * _truth_axis_scale(values)
+    hits = np.nonzero(np.abs(values - float(query)) <= tol)[0]
+    return int(hits[0]) if hits.size else None
+
+
+def compute_error_field(truth: np.ndarray, prediction: np.ndarray) -> dict[str, Any]:
+    """실제 스냅샷과 트윈 예측의 점별 오차장 + 요약 지표를 계산한다 (v5.4).
+
+    Args:
+        truth: 실제(ground truth) 필드 벡터.
+        prediction: 트윈 예측 필드 벡터 — ``truth`` 와 같은 크기여야 한다.
+
+    Returns:
+        ``abs_error`` (점별 |truth − prediction| 배열), ``rmse``, ``rel_l2``,
+        ``max_error``, ``r2`` 를 담은 dict.
+
+    Raises:
+        ValueError: 두 벡터의 크기가 다르거나 비어 있는 경우.
+    """
+    from naviertwin.core.validation.metrics import r2_score, relative_l2_error, rmse
+
+    truth_vec = np.asarray(truth, dtype=np.float64).reshape(-1)
+    pred_vec = np.asarray(prediction, dtype=np.float64).reshape(-1)
+    if truth_vec.size == 0 or pred_vec.size == 0:
+        raise ValueError(
+            "오차 계산에 빈 배열이 들어왔습니다 — 실제/예측 필드를 확인하세요."
+        )
+    if truth_vec.shape != pred_vec.shape:
+        raise ValueError(
+            f"실제({truth_vec.size})와 예측({pred_vec.size}) 벡터 크기가 달라 "
+            "오차를 계산할 수 없습니다."
+        )
+    abs_error = np.abs(truth_vec - pred_vec)
+    return {
+        "abs_error": abs_error,
+        "rmse": float(rmse(truth_vec, pred_vec)),
+        "rel_l2": float(relative_l2_error(truth_vec, pred_vec)),
+        "max_error": float(abs_error.max()),
+        "r2": float(r2_score(truth_vec, pred_vec)),
+    }
+
+
+def truth_for_params(
+    case_datasets: Sequence[CFDDataset] | CFDDataset | None,
+    case_params: Any | None,
+    engine: Any,
+    params: Sequence[float] | float,
+    field: str,
+    time_steps: Sequence[float] | None = None,
+) -> np.ndarray | None:
+    """예측 지점이 학습 샘플과 일치할 때만 실제 스냅샷을 돌려준다 (v5.4).
+
+    "실제 vs 트윈" 오차는 실제 결과가 존재하는 지점에서만 의미가 있다 —
+    학습 샘플과 (정규화 축별 rtol 1e-6 안에서) 정확히 일치하지 않는 질의는
+    외삽/보간이므로 **None** 을 돌려준다. 최근접 스냅샷으로 얼버무리지
+    않는다 — "오차가 작아 보이는" 착시를 만들기 때문이다.
+
+    매칭 규칙:
+        - 정상 케이스 세트(문제 유형 B): 질의 (μ₁..μₖ) 가 파라미터 표의 한
+          행과 일치 → 그 케이스의 스냅샷.
+        - 비정상 스윕(문제 유형 C, 질의 = (μ₁..μₖ, t)): 케이스 행 일치
+          **그리고** 그 케이스의 타임스텝 중 하나와 t 일치 → 해당 시점 스냅샷.
+        - 단일 케이스 시계열(문제 유형 A, ``case_params=None``): 질의 t 가
+          타임스텝 중 하나와 일치 → 해당 시점 스냅샷.
+
+    Args:
+        case_datasets: 학습에 쓴 케이스 목록(케이스 세트) 또는 단일 데이터셋
+            (문제 유형 A). None 이면 항상 None 을 돌려준다.
+        case_params: 케이스별 파라미터 행렬 (N, k). None 이면 단일 케이스
+            시계열로 취급한다.
+        engine: 학습된 트윈 엔진 — ``training_metadata['problem_type']`` 으로
+            질의 형태(시간축 유무)를 교차 검증한다 (없어도 동작).
+        params: ③Twin 질의 입력 벡터 (스칼라 t 또는 운전조건 벡터).
+        field: 진실을 추출할 물리량 field (``extract_field_snapshots`` 계약 —
+            벡터 field 는 크기(magnitude) 스냅샷).
+        time_steps: 시간축 override — None 이면 매칭된 데이터셋의
+            ``time_steps`` 를 쓴다.
+
+    Returns:
+        일치하는 실제 필드 스냅샷 (1D ndarray), 일치가 없으면 None.
+    """
+    query = np.asarray(params, dtype=np.float64).reshape(-1)
+    if case_datasets is None or query.size == 0 or not str(field):
+        return None
+    if hasattr(case_datasets, "extract_field_snapshots"):
+        datasets: list[Any] = [case_datasets]
+    else:
+        datasets = list(case_datasets)
+    if not datasets:
+        return None
+
+    def _snapshot(dataset: Any, step: int) -> np.ndarray | None:
+        try:
+            matrix = np.atleast_2d(
+                np.asarray(dataset.extract_field_snapshots(field), dtype=np.float64)
+            )
+        except ValueError:
+            return None  # field 가 이 데이터셋에 없음 → 진실 없음
+        if step < 0 or step >= matrix.shape[1]:
+            return None
+        return np.array(matrix[:, step], dtype=np.float64).reshape(-1)
+
+    def _times(dataset: Any) -> np.ndarray:
+        if time_steps is not None:
+            return np.asarray(list(time_steps), dtype=np.float64).reshape(-1)
+        return np.asarray(
+            list(getattr(dataset, "time_steps", None) or [0.0]), dtype=np.float64
+        ).reshape(-1)
+
+    # ── 문제 유형 A — 단일 케이스 시계열: 질의 = (t,) ──
+    if case_params is None:
+        if query.size != 1:
+            return None
+        dataset = datasets[0]
+        step = _truth_match_index(float(query[0]), _times(dataset))
+        return None if step is None else _snapshot(dataset, step)
+
+    # ── 케이스 세트(문제 유형 B/C): 질의 = (μ₁..μₖ[, t]) ──
+    rows = np.atleast_2d(np.asarray(case_params, dtype=np.float64))
+    if rows.shape[0] != len(datasets):
+        return None
+    k_base = int(rows.shape[1])
+    has_time_axis = query.size == k_base + 1
+    if not has_time_axis and query.size != k_base:
+        return None
+    # 엔진 메타데이터가 문제 유형을 알면 질의 형태와 교차 검증한다.
+    problem = str((getattr(engine, "training_metadata", {}) or {}).get("problem_type") or "")
+    if problem == "steady_sweep" and has_time_axis:
+        return None
+    if problem == "unsteady_sweep" and not has_time_axis:
+        return None
+
+    scales = np.array([_truth_axis_scale(rows[:, j]) for j in range(k_base)])
+    tolerances = _TRUTH_MATCH_RTOL * scales
+    matches = np.nonzero(np.all(np.abs(rows - query[:k_base]) <= tolerances, axis=1))[0]
+    if matches.size == 0:
+        return None
+    dataset = datasets[int(matches[0])]
+
+    if not has_time_axis:
+        # 정상 스윕 — 케이스당 스냅샷 1장. 시계열 케이스에 시간 없는 질의는
+        # 스냅샷을 특정할 수 없으므로 None (정직 우선).
+        if max(1, int(getattr(dataset, "n_time_steps", 1))) > 1:
+            return None
+        return _snapshot(dataset, 0)
+
+    step = _truth_match_index(float(query[k_base]), _times(dataset))
+    return None if step is None else _snapshot(dataset, step)

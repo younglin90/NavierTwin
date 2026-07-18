@@ -271,6 +271,15 @@ class NavierTwinWebApp:
         # 좌표 평가가 가능하다). 근거: model-taxonomy-plan.md §14, M3.
         st.nt_predict_mesh_name = ""
 
+        # Twin — 실제 vs 트윈 비교 (v5.4): 예측 지점이 학습 샘플과 정확히
+        # 일치하면 실제 스냅샷과의 점별 오차장(twin_error) + 요약 지표를
+        # 계산한다. 일치하지 않으면(외삽/보간) 실제 결과가 없으므로 정직하게
+        # 계산하지 않고 안내만 한다 — 최근접 스냅샷으로 얼버무리지 않는다.
+        st.nt_predicted = False  # predict() 성공 여부 — 안내문 표시 게이트
+        st.nt_truth_available = False  # 학습 샘플 일치 → 오차장 계산됨
+        st.nt_error_summary = ""  # "RMSE … · rel-L2 … · max …"
+        st.nt_extrapolating = False  # 외삽/보간 — 실제 결과 없음
+
         # Compare (reducer×surrogate 벤치마크)
         st.nt_compare_dialog = False
         st.nt_compare_rows = []
@@ -1654,6 +1663,7 @@ class NavierTwinWebApp:
             return
         try:
             values, point = self._twin_param_values()
+            self._reset_truth_state()  # v5.4 — 직전 예측의 비교 상태 초기화
             # 형상 가변 케이스에는 "학습 격자" 가 없다(케이스마다 자기 격자를 가짐)
             # → 지금 보고 있는 형상 위에 예측한다. 신경장이라 좌표만 있으면 된다.
             if self.engine.training_metadata.get("varying_mesh"):
@@ -1665,6 +1675,9 @@ class NavierTwinWebApp:
                     status=f"예측 완료: {point} → 보고 있는 형상 위에 표시",
                     prefer=names[0] if names else "",
                 )
+                # v5.4 — 형상 가변은 예측 격자가 진실 격자와 달라 오차장 생략.
+                with self.state:
+                    self.state.nt_predicted = True
                 return
             prediction = service.predict_twin(self.engine, values)
             # 다중 출력(Physics AI) 이면 필드별로 잘라 각각 twin_<name> 으로 붙인다.
@@ -1681,6 +1694,8 @@ class NavierTwinWebApp:
             else:
                 shown = service.attach_prediction(self.dataset, prediction)
                 label = f"'{shown}'"
+            # v5.4 — 실제 vs 트윈: 학습 샘플 일치 시 오차장/지표, 아니면 외삽 안내.
+            self._update_truth_comparison(values, prediction, parts)
             self._refresh_fields(prefer=shown)
             self._render(reset_camera=False)
             self._set_status(f"예측 완료: {point} → {label} 3D 표시")
@@ -1718,6 +1733,102 @@ class NavierTwinWebApp:
                 self.state.nt_predict_mesh_name = label
         except Exception as exc:  # noqa: BLE001
             self._fail("다른 격자 예측 실패", exc)
+
+    # ------------------------------------------------------------------
+    # 실제 vs 트윈 비교 (v5.4)
+    # ------------------------------------------------------------------
+
+    def _reset_truth_state(self) -> None:
+        """v5.4 — 직전 예측의 실제-vs-트윈 비교 상태를 초기화한다.
+
+        직전 오차장(twin_error)도 메쉬에서 제거한다 — 남겨두면 새 예측 옆에
+        "옛 예측 vs 옛 진실" 오차가 그대로 보여 착시를 만들기 때문이다.
+        """
+        with self.state:
+            self.state.nt_predicted = False
+            self.state.nt_truth_available = False
+            self.state.nt_error_summary = ""
+            self.state.nt_extrapolating = False
+        dataset = self.dataset
+        if dataset is None:
+            return
+        mesh = getattr(dataset, "mesh", None)
+        for data in (getattr(mesh, "point_data", None), getattr(mesh, "cell_data", None)):
+            if data is not None and "twin_error" in data:
+                del data["twin_error"]
+        names = getattr(dataset, "field_names", None)
+        if names and "twin_error" in names:
+            names.remove("twin_error")
+
+    def _error_target(self, parts: Any, prediction: Any) -> tuple[str, Any]:
+        """오차 계산에 쓸 (물리량 field 이름, 예측 벡터) 를 고른다 (v5.4).
+
+        다중 출력(Physics AI)은 **첫 출력 필드**만 오차장으로 삼는다 — 여러
+        필드의 오차를 한 장에 섞으면 단위가 달라 의미가 없기 때문이다. 벡터
+        필드는 성분이 아니라 크기(magnitude) 채널을 쓴다 — 진실 추출
+        (``extract_field_snapshots``) 계약과 동일한 표현이라 직접 비교된다.
+        """
+        import numpy as np
+
+        if parts:
+            specs = (
+                getattr(getattr(self.engine, "model", None), "output_fields", None) or []
+            )
+            if not specs:
+                return "", None
+            field = str(specs[0].get("field_name") or "")
+            by_display = {str(display): segment for display, segment in parts}
+            segment = by_display.get(f"{field}_mag", by_display.get(field))
+            if not field or segment is None:
+                return "", None
+            return field, np.asarray(segment, dtype=np.float64).reshape(-1)
+        metadata = getattr(self.engine, "training_metadata", {}) or {}
+        field = str(metadata.get("field_name") or "")
+        if not field:
+            return "", None
+        return field, np.asarray(prediction, dtype=np.float64).reshape(-1)
+
+    def _update_truth_comparison(
+        self, values: list[float], prediction: Any, parts: Any
+    ) -> None:
+        """v5.4 — 예측 지점이 학습 샘플과 일치하면 오차장·요약 지표를 붙인다.
+
+        일치하는 실제 스냅샷이 없으면(외삽/보간) 오차를 계산하지 않고
+        ``nt_extrapolating`` 만 켠다 — 최근접 스냅샷으로 얼버무리면 "오차가
+        작다"는 착시를 만들기 때문이다 (:func:`service.truth_for_params` 참조).
+        predict() 의 attach 직후·필드 갱신 전에 호출된다. 비교 실패는 예측
+        자체를 막지 않는다 (부가 정보).
+        """
+        with self.state:
+            self.state.nt_predicted = True
+        try:
+            field, predicted = self._error_target(parts, prediction)
+            if not field or predicted is None:
+                return
+            truth = service.truth_for_params(
+                self.case_datasets if self.state.nt_case_mode else self.dataset,
+                self.case_params if self.state.nt_case_mode else None,
+                self.engine,
+                values,
+                field,
+            )
+            if truth is None or truth.shape != predicted.shape:
+                with self.state:
+                    self.state.nt_extrapolating = True
+                return
+            result = service.compute_error_field(truth, predicted)
+            service.attach_prediction(
+                self.dataset, result["abs_error"], field_name="twin_error"
+            )
+            with self.state:
+                self.state.nt_truth_available = True
+                self.state.nt_extrapolating = False
+                self.state.nt_error_summary = (
+                    f"RMSE {result['rmse']:.3g} · rel-L2 {result['rel_l2']:.2%} · "
+                    f"max {result['max_error']:.3g}"
+                )
+        except Exception as exc:  # noqa: BLE001 — 비교는 부가 정보, 예측을 막지 않는다
+            log.warning("실제 vs 트윈 비교 실패: %s", exc)
 
     def restore_training_mesh(self) -> None:
         """예측 격자에서 원래 학습 격자로 뷰어를 되돌린다."""
@@ -3104,6 +3215,28 @@ class NavierTwinWebApp:
                                 classes="mt-2",
                                 disabled=("nt_busy",),
                                 prepend_icon="mdi-play",
+                            )
+                            # 실제 vs 트윈 비교 (v5.4) — 예측 지점이 학습 샘플과
+                            # 일치할 때만 오차장/지표가 존재한다 (정직 우선).
+                            html.Div(
+                                "실제 vs 트윈: {{ nt_error_summary }}",
+                                v_show=("nt_truth_available",),
+                                classes="text-caption text-success mt-2",
+                            )
+                            v3.VBtn(
+                                "오차장 보기",
+                                click="nt_field = 'twin_error'",
+                                variant="tonal",
+                                size="small",
+                                block=True,
+                                classes="mt-1",
+                                v_show=("nt_truth_available",),
+                                prepend_icon="mdi-compare",
+                            )
+                            html.Div(
+                                "외삽/보간 — 실제 결과 없음, 에러 계산 안 함",
+                                v_show=("nt_predicted && nt_extrapolating",),
+                                classes="text-caption text-warning mt-2",
                             )
                             # 출력 격자 자유화(M3) — Physics AI(신경장)만 가능.
                             v3.VDivider(classes="my-3")
