@@ -72,13 +72,40 @@ def _resolve_workers(n_items: int, max_workers: int | None) -> int:
 # ──────────────────────────────────────────────────────────────────────
 
 
-def load_dataset(path: str | Path) -> CFDDataset:
-    """파일/디렉토리 경로에서 CFD 데이터셋을 로드한다 (ReaderFactory)."""
+def load_dataset(
+    path: str | Path,
+    *,
+    use_canonical_cache: bool = False,
+    canonical_cache_dir: str | Path | None = None,
+) -> CFDDataset:
+    """파일/디렉토리 경로에서 CFD 데이터셋을 로드한다 (ReaderFactory).
+
+    Args:
+        path: 로드할 CFD 파일/디렉토리 경로.
+        use_canonical_cache: True 면 리더를 직접 호출하는 대신 canonical
+            `.ntwin` 캐시(:class:`~naviertwin.core.storage.canonical_cache.
+            CanonicalCache`, 외부 검토 §6½ #6 저장 계층 2)를 거친다 — 같은
+            원본 파일(경로+mtime+size 불변)을 다시 로드할 때 리더 파싱을
+            건너뛰고 `.ntwin` 에서 바로 복원한다. 원본이 바뀌면(mtime/size
+            변경) 자동으로 캐시 미스가 되어 재변환한다. 기본값 False —
+            기존 동작(항상 리더 직접 호출)과 100% 동일해 하위 호환을
+            해치지 않는다.
+        canonical_cache_dir: canonical 캐시 디렉토리 재지정(기본
+            ``~/.naviertwin/canonical_cache/``). ``use_canonical_cache=False``
+            면 무시된다.
+    """
     from naviertwin.core.cfd_reader import ReaderFactory
 
     target = Path(path).expanduser()
     if not target.exists():
         raise FileNotFoundError(f"경로를 찾을 수 없습니다: {target}")
+
+    if use_canonical_cache:
+        from naviertwin.core.storage.canonical_cache import CanonicalCache
+
+        cache = CanonicalCache(cache_dir=canonical_cache_dir)
+        return cache.get_or_convert(target, lambda p: ReaderFactory().create_and_read(p))
+
     return ReaderFactory().create_and_read(target)
 
 
@@ -578,6 +605,8 @@ def load_case_set(
     resolution: int = 32,
     parallel: bool = True,
     max_workers: int | None = None,
+    use_canonical_cache: bool = False,
+    canonical_cache_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """폴더의 CFD 파일들을 "정상 파라미터 스윕" 케이스 세트로 로드한다.
 
@@ -614,6 +643,11 @@ def load_case_set(
         parallel: 파일 읽기 + 공통 격자 재샘플을 스레드로 병렬화할지 여부.
             파일이 3개 미만이면 오버헤드를 피하려 항상 순차 실행한다.
         max_workers: 최대 스레드 수. None 이면 ``min(8, cpu_count)``.
+        use_canonical_cache: True 면 파일별 로드가 canonical `.ntwin` 캐시
+            (:func:`load_dataset` 의 ``use_canonical_cache`` 와 동일 의미)를
+            거친다. 기본값 False — 기존 동작과 100% 동일.
+        canonical_cache_dir: canonical 캐시 디렉토리 재지정. ``use_canonical_cache=False``
+            면 무시된다.
 
     Returns:
         ``datasets``(단일 스냅샷 CFDDataset 목록), ``params`` (N, k),
@@ -653,15 +687,22 @@ def load_case_set(
             "파일 하나가 운전조건 하나여야 합니다."
         )
 
+    def _load_case_file(target: Path) -> CFDDataset:
+        return load_dataset(
+            target,
+            use_canonical_cache=use_canonical_cache,
+            canonical_cache_dir=canonical_cache_dir,
+        )
+
     # 시간축 보존 (v5.0) — 비정상 결과는 케이스당 시계열 그대로 싣는다.
     if parallel and len(files) >= 3:
         workers = _resolve_workers(len(files), max_workers)
         logger.info("케이스 세트 파일 읽기: %d 파일, %d 스레드", len(files), workers)
         # thread_map 은 ThreadPoolExecutor.map 기반 → 입력 순서 그대로 반환
         # (완료 순서가 아니라 files 순서 = 케이스 순서 보존).
-        datasets: list[CFDDataset] = thread_map(load_dataset, files, workers=workers)
+        datasets: list[CFDDataset] = thread_map(_load_case_file, files, workers=workers)
     else:
-        datasets = [load_dataset(target) for target in files]
+        datasets = [_load_case_file(target) for target in files]
 
     csv: Path | None = Path(params_path).expanduser() if params_path else None
     if csv is None:
