@@ -2779,3 +2779,83 @@ def support_status(engine: Any, params: Sequence[float]) -> dict[str, Any]:
         label = f"학습 범위 밖 — {worst_name} 축 {worst_frac:.0%} 외삽, 신뢰 낮음"
     return {"status": status, "label": label,
             "worst_axis": worst_name, "margin_frac": worst_frac}
+
+
+# ──────────────────────────────────────────────────────────────────────
+# v5.1 — wall face 픽킹 (경계 메타데이터 없는 raw 메쉬용 폴백)
+# ──────────────────────────────────────────────────────────────────────
+
+
+def wall_surface_from_picked_cells(dataset: CFDDataset, cell_ids: list[int]) -> Any:
+    """3D 뷰어에서 픽킹한 표면 셀 id 들로 벽면 PolyData 를 만든다.
+
+    ``metadata["boundary_patch_meshes"]``(OpenFOAM 경계 패치) 가 없는
+    원시 VTU/STL 등에서, 사용자가 뷰어에서 직접 클릭한 셀들만으로 벽면을
+    구성하는 폴백 경로다. 데이터셋 표면(``mesh.extract_surface()``) 을
+    한 번 더 추출한 뒤, 그중 지정한 셀만 뽑아 깨끗한 PolyData 로 만든다.
+
+    Args:
+        dataset: 대상 :class:`~naviertwin.core.cfd_reader.base.CFDDataset`.
+        cell_ids: 픽킹된 표면 셀 인덱스 목록 (``dataset.mesh.extract_surface()``
+            기준).
+
+    Returns:
+        픽킹한 셀들로 이루어진 pyvista PolyData.
+
+    Raises:
+        ValueError: ``cell_ids`` 가 비었거나, 메쉬에서 표면을 추출할 수
+            없거나, 유효한 셀이 하나도 없는 경우.
+    """
+    if not cell_ids:
+        raise ValueError(
+            "선택된 셀이 없습니다. 3D 뷰어에서 벽면으로 쓸 셀을 먼저 클릭하세요."
+        )
+
+    mesh = getattr(dataset, "mesh", None)
+    if mesh is None:
+        raise ValueError("데이터셋에 메쉬가 없습니다.")
+
+    try:
+        surface = mesh.extract_surface()
+    except Exception as exc:  # noqa: BLE001 — 표면 추출 실패는 사용자 오류로 안내
+        raise ValueError(f"메쉬에서 표면을 추출할 수 없습니다: {exc}") from exc
+
+    n_surface_cells = int(getattr(surface, "n_cells", 0))
+    if n_surface_cells == 0:
+        raise ValueError("메쉬에 표면이 없습니다 (표면 셀 0개).")
+
+    # 중복 제거 + 유효 범위(0 <= id < n_surface_cells)만 남긴다 — 픽킹 콜백이
+    # 살짝 어긋난 id 를 보내도 여기서 방어한다.
+    valid_ids = sorted({int(cid) for cid in cell_ids if 0 <= int(cid) < n_surface_cells})
+    if not valid_ids:
+        raise ValueError("선택된 셀이 모두 유효 범위를 벗어났습니다.")
+
+    picked = surface.extract_cells(valid_ids)
+    wall_surface = picked.extract_surface()
+    if int(getattr(wall_surface, "n_cells", 0)) == 0:
+        raise ValueError("선택된 셀로부터 벽면을 만들지 못했습니다.")
+    return wall_surface
+
+
+def attach_wall_distance_from_picks(
+    dataset: CFDDataset, cell_ids: list[int], *, prefix: str = "wall"
+) -> list[str]:
+    """픽킹한 셀들로 벽면을 만들고, 벽 거리(wall-distance) 필드를 부착한다.
+
+    :func:`wall_surface_from_picked_cells` 로 벽면을 구성한 뒤
+    :func:`naviertwin.core.geometry.mesh_features.attach_wall_features` 로
+    위임한다 — 경계 패치 메타데이터가 없는 원시 파일에서 뷰어 픽킹만으로
+    wall-distance/SDF 를 붙이는 v5.1 진입점이다.
+
+    Args:
+        dataset: 대상 :class:`~naviertwin.core.cfd_reader.base.CFDDataset`.
+        cell_ids: 픽킹된 표면 셀 인덱스 목록.
+        prefix: 부착 필드 이름 접두사. 기본값 ``"wall"``.
+
+    Returns:
+        부착된 필드 이름 리스트 (예: ``["wall_distance", "wall_sdf"]``).
+    """
+    from naviertwin.core.geometry.mesh_features import attach_wall_features
+
+    wall_surface = wall_surface_from_picked_cells(dataset, cell_ids)
+    return attach_wall_features(dataset, wall_surface, prefix=prefix)
