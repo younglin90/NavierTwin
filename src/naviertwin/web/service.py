@@ -1491,6 +1491,248 @@ def build_mesh_gnn_twin_from_cases(
     }
 
 
+def build_mgn_twin_from_cases(
+    datasets: Sequence[CFDDataset],
+    field: str | Sequence[str],
+    params: np.ndarray,
+    *,
+    param_names: Sequence[str] | None = None,
+    hidden: int = 64,
+    n_msgpass: int = 4,
+    max_epochs: int = 200,
+    device: str = "auto",
+    input_field_names: Sequence[str] = (),
+    group_split: bool = False,
+    group_ids: Sequence[int] | None = None,
+    val_frac: float = 0.15,
+    test_frac: float = 0.15,
+    split_seed: int = 0,
+) -> dict[str, Any]:
+    """케이스 세트에서 MeshGraphNets 메시지패싱(mesh_gnn_mp) 트윈을 학습한다 (Route 2, 3번째 배선).
+
+    정상(steady) 파라미터 스윕 전용 — ``mesh_gnn``(GCN)과 같은 그래프 빌더
+    (:func:`~naviertwin.core.gnn.case_graph.case_to_graph`)를 재사용하지만,
+    내부 모델은 진짜 ``edge_features``(Δ좌표, ‖Δ‖)를 메시지패싱에 쓰는
+    Encode-Process-Decode 구조(:class:`~naviertwin.core.gnn.meshgraphnets.
+    case_set_mgn.CaseSetMGN` — 학습된
+    :class:`~naviertwin.core.gnn.meshgraphnets.meshgraphnets.MeshGraphNets`
+    를 감싸고, 수정된(더 이상 stale edge_features 를 재사용하지 않는)
+    ``predict()`` 로 케이스별 edge_index/edge_features 를 오버라이드한다)다.
+    GeometryFNO 와 달리 공통 격자 재샘플이 없다 — 진짜 구멍이 뚫린 형상 가변
+    케이스(예: ``karman_shapes`` 데모)를 원본 격자 그대로 학습·예측한다.
+    결과 엔진은 ``training_metadata["varying_mesh"]=True`` 라 앱 예측이 기존
+    형상 가변 분기(:func:`predict_to_mesh` — 보고 있는 케이스 메쉬 위 표시)를
+    그대로 탄다.
+
+    Args:
+        datasets: 정상 케이스 목록 (메쉬가 서로 달라도, 같아도 된다).
+        field: 학습 대상 필드 — 문자열 하나 또는 목록(다중 출력). 벡터
+            필드는 성분 채널(U_x 등)로 전개된다.
+        params: 케이스별 운전조건 (N, k) 또는 (N,).
+        param_names: 운전조건 이름. None 이면 ``param_i``.
+        hidden: 메시지패싱 은닉 폭.
+        n_msgpass: Encode-Process-Decode 메시지패싱 블록 수.
+        max_epochs: 학습 epoch 수.
+        device: 학습 디바이스 ("auto" | "cpu" | "cuda") — 테스트는 "cpu" 로
+            결정성(save/load bit-동일)을 보장한다.
+        input_field_names: 노드 피처로 함께 넣을 point 필드
+            (예: ``wall_distance`` — ``attach_wall_features`` 산출물).
+        group_split: True 면 케이스(그룹) 단위 train/val/test 분할 후 train
+            만 학습 — 정규화 상수도 train 케이스로만 계산한다(누수 방지).
+        group_ids: 케이스별 그룹 id. None 이면 케이스 하나 = 그룹 하나.
+        val_frac: validation 그룹 비율 (``group_split=True`` 일 때만).
+        test_frac: test 그룹 비율 (``group_split=True`` 일 때만).
+        split_seed: 그룹 셔플 시드.
+
+    Returns:
+        ``engine``, ``field``, ``fields``, ``n_cases``, ``param_names``,
+        ``param_mins``, ``param_maxs``, ``target_names``, ``train_loss``,
+        ``eval_split`` (held-out rel-L2 — ``group_split=True`` 일 때만 의미)
+        를 담은 dict.
+
+    Raises:
+        ValueError: 케이스 2개 미만, 필드 미선택, 파라미터 행 수 불일치,
+            또는 비정상(시계열) 케이스가 섞여 있는 경우.
+        RuntimeError: torch_geometric 미설치.
+    """
+    from naviertwin.core.digital_twin.mgn_case_set_engine import MGNCaseSetTwinEngine
+    from naviertwin.core.gnn.case_graph import case_to_graph, graph_norm_from_cases
+    from naviertwin.core.gnn.meshgraphnets.case_set_mgn import CaseSetMGN
+    from naviertwin.core.preprocessing.group_split import (
+        classify_query_split,
+        group_train_val_test_split,
+    )
+
+    fields = [field] if isinstance(field, str) else [str(f) for f in field if str(f).strip()]
+    if not fields:
+        raise ValueError("학습할 출력 필드를 최소 1개 선택하세요.")
+    cases = list(datasets)
+    if len(cases) < 2:
+        raise ValueError(f"트윈 학습에는 케이스가 2개 이상 필요합니다. 현재: {len(cases)}")
+    if any(max(1, int(getattr(case, "n_time_steps", 1))) > 1 for case in cases):
+        # 그래프 타깃은 케이스당 스냅샷 1장(시간축 없음)을 전제한다 — 시계열을
+        # 조용히 첫 스텝으로 뭉개느니 명확히 거절한다 (mesh_gnn/GeometryFNO 와 동일 게이트).
+        raise ValueError(
+            "비정상(시계열) 케이스 세트의 메쉬 GNN(메시지패싱) 은 아직 미지원입니다 — "
+            "정상 해(스텝 1개) 케이스만 학습할 수 있습니다. 비정상 스윕은 "
+            "ROM/Physics AI/ParametricDMD 를 쓰세요."
+        )
+
+    params_arr = np.asarray(params, dtype=np.float64)
+    if params_arr.ndim == 1:
+        params_arr = params_arr.reshape(-1, 1)
+    if params_arr.shape[0] != len(cases):
+        raise ValueError(
+            f"파라미터 행 수({params_arr.shape[0]})와 케이스 수({len(cases)})가 다릅니다."
+        )
+    names = (
+        [str(n) for n in param_names]
+        if param_names
+        else [f"param_{i}" for i in range(params_arr.shape[1])]
+    )
+    inputs = [str(n) for n in input_field_names if str(n).strip()]
+
+    # 그룹 스플릿 (검토 §6½ #2) — train 케이스로만 정규화 상수를 계산하고
+    # val/test 그래프에 주입한다 (train-only 원칙).
+    n_cases_total = len(cases)
+    if group_split:
+        split = group_train_val_test_split(
+            n_cases_total,
+            group_ids,
+            val_frac=float(val_frac),
+            test_frac=float(test_frac),
+            seed=int(split_seed),
+        )
+        train_idx, val_idx, test_idx = split.train_idx, split.val_idx, split.test_idx
+    else:
+        train_idx = np.arange(n_cases_total, dtype=np.int64)
+        val_idx = np.zeros(0, dtype=np.int64)
+        test_idx = np.zeros(0, dtype=np.int64)
+
+    norm = graph_norm_from_cases(
+        [cases[i] for i in train_idx.tolist()],
+        params_arr[train_idx],
+        input_field_names=inputs,
+    )
+    graphs = [
+        case_to_graph(
+            case, params_arr[i], fields, input_field_names=inputs, norm=norm
+        )
+        for i, case in enumerate(cases)
+    ]
+    target_names = list(graphs[0]["target_names"])
+    for i, graph in enumerate(graphs[1:], start=1):
+        if list(graph["target_names"]) != target_names:
+            raise ValueError(
+                f"케이스 {i} 의 타깃 채널({graph['target_names']})이 첫 케이스"
+                f"({target_names})와 다릅니다."
+            )
+
+    in_dim = int(graphs[0]["x"].shape[1])
+    edge_feat = int(graphs[0]["edge_attr"].shape[1])
+    operator = CaseSetMGN(
+        in_dim=in_dim,
+        out_dim=len(target_names),
+        edge_feat=edge_feat,
+        hidden=int(hidden),
+        n_msgpass=int(n_msgpass),
+        max_epochs=int(max_epochs),
+        device=str(device),
+    )
+    operator.fit({"graphs": [graphs[i] for i in train_idx.tolist()]})
+
+    # 엔진에는 train 케이스 그래프만 담는다 — predict()(대표 케이스)와
+    # predict_at 의 좌표 일치 재사용 경로 모두 학습에 쓴 형상이 기준이다.
+    # held-out 평가는 아래에서 그래프를 직접 predict_graph 에 넣어 잰다
+    # (kNN 폴백 없이 원본 메쉬 위상 그대로).
+    engine_cases = [
+        {
+            "points": graphs[i]["points"],
+            "edge_index": graphs[i]["edge_index"],
+            "edge_attr": graphs[i]["edge_attr"],
+            # μ 채널을 뺀 노드 피처 — 예측 시 질의 μ 로 다시 붙인다.
+            "base_x": graphs[i]["x"][:, : in_dim - params_arr.shape[1]]
+            if params_arr.shape[1]
+            else graphs[i]["x"],
+        }
+        for i in train_idx.tolist()
+    ]
+    engine = MGNCaseSetTwinEngine(
+        operator,
+        cases=engine_cases,
+        train_params=params_arr[train_idx],
+        param_names=names,
+        field_names=fields,
+        target_names=target_names,
+        norm=norm,
+        input_field_names=inputs,
+    )
+
+    eval_split: dict[str, Any] = {"enabled": bool(group_split)}
+    if group_split:
+        train_params_used = params_arr[train_idx]
+        geometry_ids_arr = np.asarray(group_ids) if group_ids is not None else None
+        holdout: list[dict[str, Any]] = []
+        for split_name, idx_array in (("val", val_idx), ("test", test_idx)):
+            for case_idx in idx_array.tolist():
+                graph = graphs[case_idx]
+                truth = np.asarray(graph["y"], dtype=np.float64)
+                pred = np.asarray(
+                    operator.predict_graph(graph), dtype=np.float64
+                )
+                metrics = compute_error_field(truth.ravel(), pred.ravel())
+                query_geometry_id = (
+                    int(geometry_ids_arr[case_idx]) if geometry_ids_arr is not None else None
+                )
+                holdout.append(
+                    {
+                        "case_index": int(case_idx),
+                        "split": split_name,
+                        "query_split_class": classify_query_split(
+                            params_arr[case_idx],
+                            train_params_used,
+                            geometry_ids=(
+                                geometry_ids_arr[train_idx]
+                                if geometry_ids_arr is not None
+                                else None
+                            ),
+                            query_geometry_id=query_geometry_id,
+                        ),
+                        "rel_l2": float(metrics["rel_l2"]),
+                        "rmse": float(metrics["rmse"]),
+                        "max_error": float(metrics["max_error"]),
+                    }
+                )
+        val_scores = [h["rel_l2"] for h in holdout if h["split"] == "val"]
+        test_scores = [h["rel_l2"] for h in holdout if h["split"] == "test"]
+        eval_split.update(
+            {
+                "train_idx": train_idx.tolist(),
+                "val_idx": val_idx.tolist(),
+                "test_idx": test_idx.tolist(),
+                "holdout": holdout,
+                "val_rel_l2_mean": float(np.mean(val_scores)) if val_scores else None,
+                "test_rel_l2_mean": float(np.mean(test_scores)) if test_scores else None,
+            }
+        )
+
+    meta = engine.training_metadata
+    return {
+        "engine": engine,
+        "field": ",".join(fields),
+        "fields": list(fields),
+        "n_cases": len(cases),
+        "param_names": names,
+        "param_mins": list(meta["param_mins"]),
+        "param_maxs": list(meta["param_maxs"]),
+        "target_names": target_names,
+        "eval_split": eval_split,
+        "train_loss": (
+            float(operator.train_losses_[-1]) if operator.train_losses_ else float("nan")
+        ),
+    }
+
+
 def make_demo_dataset(
     nx: int = 48,
     ny: int = 48,

@@ -67,7 +67,7 @@ class StrategySpec:
 
     Attributes:
         key: 앱의 ``nt_model_method`` 값 ("rom" | "physics" | "dynamics" |
-            "operator" | "mesh_gnn" | "gino").
+            "operator" | "mesh_gnn" | "gino" | "mesh_gnn_mp").
         name: 표시 이름.
         needs_identical_mesh: 케이스 간 동일 격자가 필수인가 (POD 스냅샷 쌓기).
         needs_uniform_grid: 균일 격자(ImageData)가 필수인가 (FFT 등).
@@ -101,7 +101,7 @@ TIER_LABELS: dict[str, str] = {
 }
 
 
-# 현재 앱이 실제로 배선한 6개 전략의 선언. 새 전략(EZyRB, ParametricDMD,
+# 현재 앱이 실제로 배선한 7개 전략의 선언. 새 전략(EZyRB, ParametricDMD,
 # Transolver, FNO+SDF …)을 붙일 때는 여기에 spec 하나를 더하는 것이 첫 단계다.
 STRATEGIES: tuple[StrategySpec, ...] = (
     StrategySpec(
@@ -191,6 +191,24 @@ STRATEGIES: tuple[StrategySpec, ...] = (
         note="점군을 그대로 신경 연산자로 학습(GNO+잠재 FNO) — 재샘플 없이 "
         "원본 격자(진짜 구멍 포함) 위 예측, 고정 그래프가 없어 임의 좌표에서도 "
         "동작. 케이스 3개 이상, 소수 케이스는 정성적.",
+        tier="experimental",
+    ),
+    StrategySpec(
+        key="mesh_gnn_mp",
+        name="메쉬 GNN (메시지패싱)",
+        # Route 2 세 번째 배선 — mesh_gnn 과 같은 그래프 빌더를 쓰지만,
+        # 내부 모델이 GCN 대신 진짜 edge_features(Δ좌표, ‖Δ‖)를 메시지패싱에
+        # 쓰는 MeshGraphNets(Encode-Process-Decode) 다. 동일/균일 격자 제약이
+        # 없고, 재샘플도 없다.
+        needs_identical_mesh=False,
+        needs_uniform_grid=False,
+        supports_case_sets=True,  # 정상 스윕 전용 — CaseSetMGN
+        supports_time_in_sweep=False,
+        single_case_needs_steps=2,
+        min_snapshots=3,
+        note="메쉬를 그래프로 학습하되 에지 특징(Δ좌표)까지 메시지패싱에 쓰는 "
+        "MeshGraphNets — 재샘플 없이 원본 격자(진짜 구멍 포함) 위 예측. 케이스 "
+        "3개 이상, 소수 케이스는 정성적.",
         tier="experimental",
     ),
 )
@@ -365,6 +383,20 @@ def _check(spec: StrategySpec, p: DataProfile) -> tuple[bool, str]:
                     "필요합니다."
                 )
             return True, spec.note
+        if spec.key == "mesh_gnn_mp":
+            # MeshGraphNets 메시지패싱(Route 2, 3번째 배선): mesh_gnn/gino 와
+            # 같은 판정 구조 — 동일/균일 격자 제약 없음.
+            if p.n_time_steps > 1:
+                return False, (
+                    "비정상(시간축) 케이스 세트의 메쉬 GNN(메시지패싱) 은 아직 "
+                    "미지원입니다 — ROM/Physics AI/ParametricDMD 를 쓰세요."
+                )
+            if p.n_cases < 3:
+                return False, (
+                    f"케이스 {p.n_cases}개 — 메쉬 GNN(메시지패싱) 학습에는 "
+                    "최소 3개가 필요합니다."
+                )
+            return True, spec.note
         if spec.needs_identical_mesh and not p.identical_mesh:
             return False, (
                 "케이스마다 격자가 달라 불가 — 동일 격자가 필요합니다. "
@@ -398,6 +430,11 @@ def _check(spec: StrategySpec, p: DataProfile) -> tuple[bool, str]:
             return False, (
                 "GINO 는 케이스 세트(정상 파라미터 스윕) 전용입니다 — "
                 "케이스 폴더나 데모 케이스 세트를 로드하세요."
+            )
+        if spec.key == "mesh_gnn_mp":
+            return False, (
+                "메쉬 GNN(메시지패싱) 은 케이스 세트(정상 파라미터 스윕) "
+                "전용입니다 — 케이스 폴더나 데모 케이스 세트를 로드하세요."
             )
 
     if spec.needs_uniform_grid and not p.uniform_grid:
