@@ -174,6 +174,7 @@ def resample_cases_to_common_grid(
     fields: Sequence[str] | None = None,
     parallel: bool = True,
     max_workers: int | None = None,
+    conservative_fields: Sequence[str] = (),
 ) -> dict[str, Any]:
     """형상이 다른 케이스들을 공통 배경 격자로 재샘플한다 (형상 가변 지원).
 
@@ -198,6 +199,10 @@ def resample_cases_to_common_grid(
         parallel: 케이스별 재샘플을 스레드로 병렬화할지 여부. 케이스가 3개
             미만이면 오버헤드를 피하려 항상 순차 실행한다.
         max_workers: 최대 스레드 수. None 이면 ``min(8, cpu_count)``.
+        conservative_fields: 이 목록에 있는 field 는 점 보간(``grid.sample``)
+            대신 :func:`~naviertwin.core.preprocessing.field_semantics.
+            conservative_resample_to_grid` (부피 가중 평균 근사)를 쓴다.
+            기본값(빈 튜플)은 기존 동작과 100% 동일 — 하위 호환.
 
     Returns:
         ``datasets``(공통 격자 위 케이스 목록), ``grid_summary``,
@@ -209,6 +214,9 @@ def resample_cases_to_common_grid(
     from scipy.ndimage import distance_transform_edt
 
     from naviertwin.core.cfd_reader.base import CFDDataset as _CFDDataset
+    from naviertwin.core.preprocessing.field_semantics import (
+        conservative_resample_to_grid,
+    )
     from naviertwin.utils.parallel import thread_map
 
     cases = list(datasets)
@@ -237,6 +245,10 @@ def resample_cases_to_common_grid(
     # 두께 0 축(2D)은 거리가 항상 0 이라 값이 무의미하지만 길이는 맞춰야 한다.
     edt_sampling = list(reversed(spacing))
 
+    # conservative_fields 는 점 보간이 아니라 부피 가중 평균 근사로 옮긴다
+    # (기본값 = 빈 튜플이면 이 분기는 절대 타지 않아 기존 동작과 100% 동일).
+    needs_conservative = {str(f) for f in conservative_fields} & set(names)
+
     def _resample_one(case: CFDDataset) -> CFDDataset:
         sampled = grid.sample(case.mesh)
         mask = np.asarray(
@@ -251,7 +263,11 @@ def resample_cases_to_common_grid(
 
         mesh = grid.copy(deep=True)
         for name in names:
-            if name in sampled.point_data:
+            if name in needs_conservative:
+                mesh.point_data[name] = conservative_resample_to_grid(
+                    case.mesh, name, grid
+                )
+            elif name in sampled.point_data:
                 mesh.point_data[name] = np.asarray(sampled.point_data[name])
         mesh.point_data["sdf"] = sdf.astype(np.float64)
         return _CFDDataset(
@@ -429,6 +445,7 @@ def coarsen_dataset(
     *,
     resolution: int = 48,
     fields: Sequence[str] | None = None,
+    conservative_fields: Sequence[str] = (),
 ) -> dict[str, Any]:
     """대용량 메쉬를 성긴 균일 격자로 재샘플해 메모리·학습 비용을 줄인다.
 
@@ -446,6 +463,12 @@ def coarsen_dataset(
         dataset: 원본 데이터셋 (시계열 포함 가능).
         resolution: 최장 축 방향 격자 분할 수. 작을수록 가볍고 거칠다.
         fields: 옮길 field. None 이면 파생이 아닌 원본 물리량 전체.
+        conservative_fields: 이 목록에 있는 field 는 점 보간(``grid.sample``)
+            대신 :func:`~naviertwin.core.preprocessing.field_semantics.
+            conservative_resample_to_grid` (부피 가중 평균 근사)를 쓴다.
+            밀도·질량 유량 같은 보존량에 총량 보존 오차를 줄이고 싶을 때
+            지정한다 (:func:`flag_conserved_fields` 로 후보를 찾을 수 있다).
+            기본값(빈 튜플)은 기존 동작과 100% 동일 — 하위 호환.
 
     Returns:
         ``dataset``(성긴 격자 데이터셋), ``summary``, ``points_before``/
@@ -455,6 +478,9 @@ def coarsen_dataset(
         ValueError: 옮길 field 가 없거나 격자를 만들 수 없는 경우.
     """
     from naviertwin.core.cfd_reader.base import CFDDataset as _CFDDataset
+    from naviertwin.core.preprocessing.field_semantics import (
+        conservative_resample_to_grid,
+    )
 
     names = (
         [str(f) for f in fields]
@@ -475,6 +501,11 @@ def coarsen_dataset(
     series_in = meta.get("time_series_fields")
     locations = meta.get("time_series_locations") or {}
 
+    # conservative_fields 는 점 보간이 아니라 부피 가중 평균 근사로 옮긴다
+    # (기본값 = 빈 튜플이면 이 분기는 절대 타지 않아 기존 동작과 100% 동일).
+    needs_conservative = {str(f) for f in conservative_fields} & set(names)
+    needs_sample = set(names) - needs_conservative
+
     # 원본 메쉬를 복사해 타임스텝별 값을 얹어가며 샘플한다 (원본 불변).
     source = dataset.mesh.copy(deep=True)
     series_out: dict[str, list[Any]] = {name: [] for name in names}
@@ -489,9 +520,13 @@ def coarsen_dataset(
                 location = str(locations.get(name, "point"))
                 target = source.cell_data if location == "cell" else source.point_data
                 target[name] = np.asarray(current)
-        sampled = grid.sample(source)
+        sampled = grid.sample(source) if needs_sample else None
         for name in names:
-            if name in sampled.point_data:
+            if name in needs_conservative:
+                series_out[name].append(
+                    conservative_resample_to_grid(source, name, grid)
+                )
+            elif sampled is not None and name in sampled.point_data:
                 series_out[name].append(np.asarray(sampled.point_data[name]))
 
     stacked = {
