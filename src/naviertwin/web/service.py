@@ -843,6 +843,137 @@ def build_physics_ai_twin_from_cases(
     }
 
 
+def build_geometry_fno_twin(
+    datasets: Sequence[CFDDataset],
+    field: str | Sequence[str],
+    params: np.ndarray,
+    *,
+    param_names: Sequence[str] | None = None,
+    resolution: int = 48,
+    modes: int = 12,
+    width: int = 32,
+    epochs: int = 200,
+    backend: str = "builtin",
+) -> dict[str, Any]:
+    """케이스 세트에서 형상 인지 FNO(GeometryFNO, SDF 채널) 트윈을 학습한다.
+
+    정상(steady) 파라미터 스윕 전용 — 케이스들을 **공통 균일 격자** 위
+    (N, H, W, C) 텐서로 바꾸고(:func:`cases_to_grid_tensors`), 입력 채널
+    ``[sdf, mask, μ...]`` 로 :class:`GeometryFNO2D` 를 학습한다. 형상이
+    케이스마다 달라도 SDF/마스크 채널이 형상을 입력으로 알려준다
+    (DeepCFD 계열의 표준 인코딩).
+
+    예측은 공통 격자 위 벡터다 — 결과 엔진(:class:`GeometryFNOTwinEngine`)의
+    ``training_metadata["common_grid"] = True`` 를 보고 앱이 뷰어를
+    ``engine.grid_dataset`` 으로 교체한다. 질의 μ 의 형상(SDF) 채널은 최근접
+    학습 케이스 것을 재사용한다 — 한계와 근거는 엔진 모듈 docstring 참조.
+
+    Args:
+        datasets: 정상 케이스 목록 (메쉬가 서로 달라도 됨 — 내부 재샘플).
+        field: 학습 대상 필드 — 문자열 하나 또는 목록(다중 출력). 벡터
+            필드는 성분 채널(U_x 등)로 전개된다.
+        params: 케이스별 운전조건 (N, k) 또는 (N,).
+        param_names: 운전조건 이름. None 이면 ``param_i``.
+        resolution: 공통 격자의 최장 축 분할 수.
+        modes: 축별 유지 푸리에 모드 수.
+        width: FNO 은닉 채널 폭.
+        epochs: 학습 epoch 수.
+        backend: FNO 백엔드 ("builtin" | "neuralop").
+
+    Returns:
+        ``engine``, ``field``, ``fields``, ``n_cases``, ``param_names``,
+        ``param_mins``, ``param_maxs``, ``resolution``, ``grid_summary``,
+        ``target_names``, ``train_loss`` 를 담은 dict.
+
+    Raises:
+        ValueError: 케이스 2개 미만, 필드 미선택, 파라미터 행 수 불일치,
+            또는 비정상(시계열) 케이스가 섞여 있는 경우.
+    """
+    from naviertwin.core.digital_twin.geometry_fno_engine import GeometryFNOTwinEngine
+    from naviertwin.core.operator_learning.fno.case_tensorizer import (
+        cases_to_grid_tensors,
+    )
+    from naviertwin.core.operator_learning.fno.geometry_fno import GeometryFNO2D
+
+    fields = [field] if isinstance(field, str) else [str(f) for f in field if str(f).strip()]
+    if not fields:
+        raise ValueError("학습할 출력 필드를 최소 1개 선택하세요.")
+    cases = list(datasets)
+    if len(cases) < 2:
+        raise ValueError(f"트윈 학습에는 케이스가 2개 이상 필요합니다. 현재: {len(cases)}")
+    if any(max(1, int(getattr(case, "n_time_steps", 1))) > 1 for case in cases):
+        # 텐서화는 케이스당 스냅샷 1장(시간축 없음)을 전제한다 — 시계열을
+        # 조용히 마지막 스텝으로 뭉개느니 명확히 거절한다.
+        raise ValueError(
+            "비정상(시계열) 케이스 세트의 GeometryFNO 는 아직 미지원입니다 — "
+            "정상 해(스텝 1개) 케이스만 학습할 수 있습니다. 비정상 스윕은 "
+            "ROM/Physics AI/ParametricDMD 를 쓰세요."
+        )
+
+    params_arr = np.asarray(params, dtype=np.float64)
+    if params_arr.ndim == 1:
+        params_arr = params_arr.reshape(-1, 1)
+    if params_arr.shape[0] != len(cases):
+        raise ValueError(
+            f"파라미터 행 수({params_arr.shape[0]})와 케이스 수({len(cases)})가 다릅니다."
+        )
+    names = (
+        [str(n) for n in param_names]
+        if param_names
+        else [f"param_{i}" for i in range(params_arr.shape[1])]
+    )
+
+    tensors = cases_to_grid_tensors(
+        cases,
+        params_arr,
+        field_names=fields,
+        resolution=int(resolution),
+        param_names=names,
+    )
+    target_names = [str(t) for t in tensors["meta"]["target_names"]]
+    operator = GeometryFNO2D(
+        n_params=params_arr.shape[1],
+        out_channels=len(target_names),
+        modes=int(modes),
+        width=int(width),
+        epochs=int(epochs),
+        backend=backend,
+    )
+    operator.fit(tensors["inputs"], tensors["targets"])
+
+    grid_summary = str(tensors["meta"]["grid_summary"])
+    engine = GeometryFNOTwinEngine(
+        operator,
+        train_inputs=tensors["inputs"],
+        train_params=params_arr,
+        param_names=names,
+        field_names=fields,
+        target_names=target_names,
+        grid=tensors["grid"],
+        backend=backend,
+        metadata={
+            "resolution": int(resolution),
+            "grid_summary": grid_summary,
+        },
+    )
+    meta = engine.training_metadata
+    return {
+        "engine": engine,
+        "field": ",".join(fields),
+        "fields": list(fields),
+        "n_cases": len(cases),
+        "param_names": names,
+        "param_mins": list(meta["param_mins"]),
+        "param_maxs": list(meta["param_maxs"]),
+        "resolution": int(resolution),
+        "grid_summary": grid_summary,
+        "target_names": target_names,
+        "train_loss": (
+            float(operator.train_losses_[-1]) if operator.train_losses_ else float("nan")
+        ),
+    }
+
+
 def make_demo_dataset(
     nx: int = 48,
     ny: int = 48,

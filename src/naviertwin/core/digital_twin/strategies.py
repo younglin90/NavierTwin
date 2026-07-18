@@ -121,13 +121,18 @@ STRATEGIES: tuple[StrategySpec, ...] = (
     StrategySpec(
         key="operator",
         name="신경 연산자 (FNO)",
-        needs_identical_mesh=True,
-        needs_uniform_grid=True,
-        supports_case_sets=False,  # FNO+SDF 채널 배선 시 True 로 (로드맵 v5.2)
+        # 케이스 세트는 GeometryFNO(FNO+SDF) 가 내부에서 공통 격자로 재샘플·
+        # 텐서화하므로 동일/균일 격자 제약이 없다. 단일 케이스 직접 학습은
+        # 여전히 미배선(⑥연산자 랩 전용) — _check 가 먼저 거절한다.
+        needs_identical_mesh=False,
+        needs_uniform_grid=False,
+        supports_case_sets=True,  # 정상 스윕 전용 — GeometryFNO(FNO+SDF, v5.2)
         supports_time_in_sweep=False,
         single_case_needs_steps=2,
-        min_snapshots=100,
-        note="함수→함수 연산자 — 균일 격자·다수 샘플 필요. 현재는 ⑥연산자 랩 전용.",
+        min_snapshots=100,  # 문헌 기준 규모 — 케이스 세트 분기는 별도 판정
+        note="함수→함수 연산자 — 정상 케이스 세트는 SDF 채널(GeometryFNO)로 "
+        "형상 가변까지 학습(공통 격자 자동 재샘플). 샘플 수백 장이 문헌 기준 — "
+        "소수 케이스는 정성적. 단일 케이스 직접 학습은 ⑥연산자 랩 전용.",
     ),
 )
 
@@ -202,6 +207,22 @@ def _check(spec: StrategySpec, p: DataProfile) -> tuple[bool, str]:
     if p.n_cases > 1:
         if not spec.supports_case_sets:
             return False, "케이스 세트(파라미터 스윕) 학습은 아직 미지원입니다."
+        if spec.key == "operator":
+            # GeometryFNO(FNO+SDF): 내부에서 공통 격자로 재샘플·텐서화하므로
+            # 동일/균일 격자 제약이 없다. min_snapshots(문헌 규모)도 여기서는
+            # 적용하지 않는다 — 소수 케이스 동작을 허용하되 note 의 few-shot
+            # 경고("소수 케이스는 정성적")가 그 한계를 알린다.
+            if p.n_time_steps > 1:
+                return False, (
+                    "비정상(시간축) 케이스 세트의 GeometryFNO 는 아직 "
+                    "미지원입니다 — ROM/Physics AI/ParametricDMD 를 쓰세요."
+                )
+            if p.n_cases < 3:
+                return False, (
+                    f"케이스 {p.n_cases}개 — GeometryFNO 학습에는 최소 3개가 "
+                    "필요합니다 (문헌 기준은 수백 장)."
+                )
+            return True, spec.note
         if spec.needs_identical_mesh and not p.identical_mesh:
             return False, (
                 "케이스마다 격자가 달라 불가 — 동일 격자가 필요합니다. "
@@ -271,10 +292,19 @@ def recommend(profile: DataProfile) -> dict[str, str]:
             + report["rom"]["reason"],
         }
     if profile.n_cases > 1 and not profile.identical_mesh:
+        # 정상 스윕이면 GeometryFNO(SDF 채널)도 가능해졌다 — "만 가능" 이라고
+        # 말하지 않되 기본 추천은 소표본에 더 안전한 Physics AI 로 유지한다.
+        operator_note = (
+            " 신경 연산자(GeometryFNO·SDF 채널)도 시험할 수 있습니다 — "
+            "소수 케이스에서는 정성적입니다."
+            if report["operator"]["ok"]
+            else ""
+        )
         return {
             "method": "physics",
             "reason": f"{header} · 케이스마다 격자가 다름(형상 가변) — 좌표 기반 "
-            "Physics AI 만 가능합니다. ROM 이 필요하면 공통 격자로 재샘플하세요.",
+            "Physics AI 를 추천합니다. ROM 이 필요하면 공통 격자로 재샘플하세요."
+            + operator_note,
         }
     if profile.n_cases > 1:
         time_note = (
