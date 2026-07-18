@@ -830,6 +830,33 @@ def test_unsteady_sweep_demo_end_to_end() -> None:
     assert np.isfinite(forecast).all()
 
 
+def test_device_badge_reflects_training_backend() -> None:
+    """학습 디바이스 배지(v5.6): ROM=CPU, 신경망=GPU/CPU(가용성 따라).
+
+    GPU 로 학습되는데 사용자가 모르는 문제를 해소한다. device_used 는 A3 가
+    모델 metadata 에 기록한 값을 읽는다.
+    """
+    import torch
+
+    app = _make_app("nt-test-device-badge")
+    st = app.server.state
+    app.load_demo()
+
+    # ROM 은 CPU 전용 — 배지가 CPU.
+    st.nt_model_method = "rom"
+    app.build_twin()
+    assert st.nt_error == ""
+    assert st.nt_train_device == "CPU"
+
+    # 신경망(Physics AI)은 실제 학습 디바이스를 반영한다.
+    st.nt_model_method = "physics"
+    st.nt_physics_epochs = 3
+    app.build_twin()
+    assert st.nt_error == ""
+    expected = "GPU" if torch.cuda.is_available() else "CPU"
+    assert st.nt_train_device.startswith(expected), st.nt_train_device
+
+
 def test_strategy_status_follows_loaded_data() -> None:
     """전략 카드 상태가 데이터를 따라간다 — 시계열↔단일스냅샷 전환."""
     app = _make_app("nt-test-strategy-status")

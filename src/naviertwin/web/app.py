@@ -229,6 +229,9 @@ class NavierTwinWebApp:
         ]
         st.nt_model_ready = False
         st.nt_model_summary = ""
+        # 학습에 실제 쓰인 디바이스 배지 (v5.6) — GPU 로 도는데 사용자가 모르는
+        # 문제 해소. 학습 완료 시 엔진 metadata 에서 읽어 채운다.
+        st.nt_train_device = ""
         # surrogate="physicsnemo" 로 학습된 엔진인지 — ④Export 의 "PhysicsNeMo
         # Module" 버튼(실제 physicsnemo 패키지로 감싸기)은 이때만 의미가 있다.
         st.nt_physics_ready = False
@@ -771,6 +774,7 @@ class NavierTwinWebApp:
             self.state.nt_twin_step = max((pmax - pmin) / 100.0, 1e-6)
             self.state.nt_model_summary = summary
             self.state.nt_twin_summary = summary
+        self._update_device_badge()  # v5.6 — 복원 엔진도 배지 갱신
         self._set_status(f"프로젝트 로드 완료 — {summary}")
 
     def _restore_sweep_engine(
@@ -1057,12 +1061,22 @@ class NavierTwinWebApp:
         return self._figure_to_uri(fig)
 
     def build_twin(self) -> None:
+        """②Model 학습의 공개 진입점 — 디스패치 후 디바이스 배지를 갱신한다.
+
+        실제 디스패치는 :meth:`_build_twin_dispatch`. 모든 학습 경로가 이 한
+        출구를 지나므로, 여기서 학습 디바이스 배지(v5.6)를 한 번만 갱신한다
+        (state.change 리스너는 headless 에서 신뢰할 수 없어 명시 호출로 대체).
+        """
+        self._build_twin_dispatch()
+        self._update_device_badge()
+
+    def _build_twin_dispatch(self) -> None:
         """②Model — 선택한 방식으로 (입력 → 필드) 트윈을 학습한다.
 
         ``nt_model_method`` 로 디스패치한다: "physics" 는 POD reducer 없이
         좌표+입력→필드를 직접 학습(:meth:`_build_physics_twin`), "operator" 는
-        ⑥연산자 랩 안내, 기본("rom")은 POD reducer + 계수 회귀(rbf/kriging).
-        입력은 문제 유형에 따라 시간(t) 또는 운전조건 벡터(케이스 세트)다.
+        형상가변 케이스 세트면 GeometryFNO, 아니면 ⑥연산자 랩 안내, 기본("rom")은
+        POD reducer + 계수 회귀. 입력은 문제 유형에 따라 시간(t) 또는 운전조건이다.
         """
         if self.dataset is None:
             self._fail("데이터 없음", RuntimeError("먼저 데이터를 로드하세요."))
@@ -2185,6 +2199,34 @@ class NavierTwinWebApp:
         self._render(reset_camera=True)
         self._set_status(status)
 
+    def _update_device_badge(self, **_kwargs: Any) -> None:
+        """학습 완료 시 실제 학습 디바이스(GPU/CPU)를 배지 상태에 채운다 (v5.6).
+
+        A3 가 신경망 모델의 ``training_metadata["device_used"]``(또는
+        ``model.device_used``)에 기록한 값을 읽는다. ROM/DMD 같은 CPU 전용 전략은
+        "CPU", 신경망은 "GPU (cuda:0)" 처럼 표시된다. GPU 로 도는지 사용자가 알 수
+        있게 하는 것이 목적.
+        """
+        if not self.state.nt_model_ready or self.engine is None:
+            with self.state:
+                self.state.nt_train_device = ""
+            return
+        device = ""
+        model = getattr(self.engine, "model", None)
+        for source in (model, self.engine):
+            meta = getattr(source, "training_metadata", None)
+            if isinstance(meta, dict) and meta.get("device_used"):
+                device = str(meta["device_used"])
+                break
+        if not device:
+            device = str(getattr(model, "device_used", "") or "")
+        if not device:
+            # 신경망이 아닌 전략(ROM/DMD)은 device_used 를 안 남긴다 → CPU.
+            device = "cpu"
+        label = f"GPU ({device})" if device.startswith("cuda") else "CPU"
+        with self.state:
+            self.state.nt_train_device = label
+
     def _update_coarsen_preview(self, **_kwargs: Any) -> None:
         """현재 해상도 값이면 결과가 몇 점이 되는지 미리 보여준다.
 
@@ -3248,7 +3290,23 @@ class NavierTwinWebApp:
                     )
                     with v3.VCard(variant="tonal", classes="mt-3", v_show=("nt_model_ready",)):
                         with v3.VCardText(classes="text-caption"):
-                            html.Div("학습 완료 — {{ nt_model_summary }}")
+                            with html.Div(classes="d-flex align-center mb-1"):
+                                html.Span("학습 완료", classes="mr-2")
+                                # 디바이스 배지 (v5.6) — GPU 로 학습됐는지 표시.
+                                v3.VChip(
+                                    "{{ nt_train_device }}",
+                                    v_show=("nt_train_device",),
+                                    size="x-small",
+                                    color=(
+                                        "nt_train_device.startsWith('GPU') "
+                                        "? 'success' : 'default'",
+                                    ),
+                                    prepend_icon=(
+                                        "nt_train_device.startsWith('GPU') "
+                                        "? 'mdi-expansion-card' : 'mdi-cpu-64-bit'",
+                                    ),
+                                )
+                            html.Div("{{ nt_model_summary }}")
 
                     # 자동 비교 리더보드 (구 ⑦Compare 흡수) — 내 데이터에서
                     # ROM 조합 + Physics AI 를 같은 지표로 순위 매기는 모델 선정.
