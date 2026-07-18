@@ -3316,3 +3316,36 @@ def estimate_remap_floor(
             "resolution": int(resolution),
             "note": f"오차 바닥 계산 실패: {exc}",
         }
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Canonical data model — 데이터셋 시그니처 (로드맵 §6½)
+# ──────────────────────────────────────────────────────────────────────
+
+# re-export: UI 층이 core 경로를 몰라도 service 만 import 하면 geometry_id 를
+# 뽑아 build_geometry_fno_twin(group_ids=...) 에 넣을 수 있게 한다.
+# (redundant alias 는 ruff/mypy 가 인정하는 명시적 re-export 표기다.)
+from naviertwin.core.data_model.signature import (  # noqa: E402 — 파일 끝 추가 전용 구역
+    assign_geometry_ids as assign_geometry_ids,
+)
+
+
+def dataset_signatures(datasets: Sequence[Any]) -> list[dict[str, Any]]:
+    """각 케이스의 :class:`DatasetSignature` 를 dict 로 직렬화한다 (UI/저장용).
+
+    :func:`naviertwin.core.data_model.signature.compute_signature` 의 얇은
+    래퍼 — trame 상태나 JSON(.ntwin metadata)에 그대로 넣을 수 있도록
+    dataclass 를 평범한 dict 로 푼다.
+
+    Args:
+        datasets: CFDDataset(또는 pyvista 메쉬) 목록.
+
+    Returns:
+        케이스별 ``{"topology_hash", "coordinate_hash", "n_points", "n_cells"}``
+        dict 목록 (입력 순서 보존).
+    """
+    from dataclasses import asdict
+
+    from naviertwin.core.data_model.signature import compute_signature
+
+    return [asdict(compute_signature(ds)) for ds in datasets]
