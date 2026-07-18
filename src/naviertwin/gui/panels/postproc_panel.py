@@ -9,6 +9,7 @@ Signals:
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
@@ -1071,6 +1072,22 @@ class PostProcessPanel(QWidget):
         }
         if op_name not in kwargs_map:
             raise ValueError(f"smoke 데이터 미정의: {op_name}")
+        if op_name == "load_rom":
+            # list_operations()가 알파벳 정렬을 반환하므로 'load_rom'이
+            # 'save_rom'보다 먼저 실행될 수 있다. 파일이 없으면 동일한
+            # smoke modes/singular_values로 미리 만들어 순서 의존성을 없앤다.
+            rom_path = Path(kwargs_map["load_rom"]["path"])
+            if not rom_path.exists():
+                from naviertwin.core.dimensionality_reduction.rom_serialization import (
+                    save_rom as _save_rom_for_smoke,
+                )
+
+                save_kwargs = kwargs_map["save_rom"]
+                _save_rom_for_smoke(
+                    save_kwargs["path"],
+                    modes=save_kwargs["modes"],
+                    singular_values=save_kwargs["singular_values"],
+                )
         return kwargs_map[op_name]
 
     @staticmethod
