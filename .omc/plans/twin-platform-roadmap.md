@@ -354,6 +354,51 @@ AIAA'20) — 둘 다 "0-채움 = 형상 인코딩" 전제를 검증. FNO는 `in_
 
 ---
 
+## §6½. 외부 검토 반영 (2026-07-18) — 우선순위 재조정
+
+사용자가 제공한 정밀 검토를 수용한다. 핵심 재프레이밍: **현재는 "대리모델·연산자
+학습/검증 플랫폼"이며, 운영형 디지털 트윈(센서 동기화·자료동화·온라인 보정)은
+별도 최종 단계(단계 6)다.** 모델 추가보다 데이터 계약이 먼저다.
+
+**이미 일치하는 것(계속 유지):** 능력 기반 전략 레지스트리(비활성+이유 표시),
+signed SDF 폐곡면 한정(mesh_features 가 강제), 마스크 채널(GeometryFNO),
+patch 메타 보존, 외삽 시 에러 미계산, 재샘플/네이티브 이중 경로.
+
+**새로 수용하는 결정(기존 계획 수정):**
+1. **마스크 손실** — 0-채움 셀을 loss 에서 제외: L = Σ mᵢwᵢℓᵢ / Σ mᵢwᵢ
+   (m=valid mask, w=셀 부피). GeometryFNO 학습 루프에 적용. 0이 물리값인지
+   결측인지 모델이 구분 못 하는 문제의 정공법. [즉시 실행 가능]
+2. **그룹 스플릿 + train-only 정규화** — trajectory/case 단위 분할(인접 프레임
+   누수 차단), 정규화·POD 기저는 train 만으로. 스플릿 4종(조건 보간/외삽,
+   형상 OOD, 결합 OOD). [SplitManager 신규 — 단계 2 선행]
+3. **remap 오차 바닥 분리** — truth 를 평가 격자로 왕복(reconstruction test)해
+   보간 오차 바닥을 먼저 재고, 모델 오차와 분리 보고. [compute_error_field 확장]
+4. **OOD/support 상태 3단계** — IN_SUPPORT / NEAR_BOUNDARY / OUT_OF_SUPPORT.
+   A4의 truth_for_params(외삽 인지)가 1단계 — 파라미터 범위·최근접 학습 케이스
+   거리 표시로 확장. [A4 위에 증분]
+5. **필드 association·해상도 의미 명시** — point/cell/face 를 메타데이터 필수화,
+   해상도 낮추기 UI 에 "축 분할↔셀 수↔메모리" 의미를 이미 표시 중 — 여기에
+   보존량(질량 등)은 conservative remap 필요 경고 추가. intensive/보존량 구분은
+   ESMPy/MEDCoupling 도입 시점(단계 3)에.
+6. **저장 계층** — 원본 불변 보존(현재 유지) + ML 캐시 Zarr(현 demo_cache npz 의
+   후속) + 실험 관리 MLflow. [단계 2]
+7. **GUI/워커 프로세스 분리 + job spec** — 현재 스레드 워커를 유지하되, MPI/
+   대형 학습은 job manager 프로세스 분리로. v5.6 P3(MPI 배치 CLI)와 일치 —
+   재확인: GUI 에서 MPI 초기화 금지. [단계 4]
+8. **모델 등급제** — Production Core(POD/DMD/OpInf/FNO/GINO/Transolver/MGN) /
+   Domain-Specific(UPT/DoMINO/AB-UPT/Transolver++) / Experimental(Transolver-3,
+   PGD-NO). 실험 트랙은 제품 코어와 분리.
+9. **분할 뷰어 기본값** — 좌우 공통 컬러 범위(다른 범위는 오차를 시각적으로
+   숨김), 카메라·슬라이스·시간 동기.
+10. **topological vs embedding 차원 분리** — DataProfile 에 두 속성으로. [소규모]
+
+**수정된 실행 순서(검토 §16 대비 현재 위치):**
+- ✅ 이미 확보: 전략 레지스트리(#3에 해당), ROM/DMD 기준선(#4), FNO 정렬격자(#5
+  부분 — GeometryFNO), patch/wall-distance 백엔드(#2 부분)
+- ▶ 다음(P0): 마스크 손실(1) → OOD 상태(4) → 그룹 스플릿(2) → remap 오차 분리(3)
+- 그 후: Transolver/GINO 배선(#6), MeshGraphNet(#7), 대형 3D/HPC(#8), 운영형
+  트윈 계층(#10 = 단계 6)
+
 ## §7. 리스크 · 결정 필요
 
 - **"가짜 empty" 텐션**: 비전은 학습용으로 0-채움을 명시 허용(ROM/FNO 경로). 동시에
