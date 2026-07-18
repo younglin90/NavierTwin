@@ -32,10 +32,14 @@
 - [x] v5.4: 좌(실제)/우(트윈) 분할 뷰어 — 독립 Plotter 2개, 공통 컬러 범위(clim) 강제,
       카메라는 수동 동기화 버튼(실시간 드래그 연동은 아님, 문서화됨)
 - [x] v5.6 P1: 케이스 로드/재샘플 병렬화(thread_map, ~4.6배 실측)
-- [ ] v5.1 후속: seed+region growing 확장, BC 값 입력 폼(속도/압력/온도), CGNS
-      ZoneBC 자동 wall 인식
-- [ ] v5.6 P1+: 리더보드 조합 병렬, remap 오차 바닥 분리, 그룹 스플릿+train-only
-      정규화, MPI 배치 CLI(클러스터)
+- [x] v5.1 후속: BC 값 입력 폼(속도/압력/온도/사용자 정의) — 기존 wall-picking
+      카드 확장, OpenFOAM patch 메타와 병합된 통합 목록(service.list_boundary_patches)
+- [x] v5.6 P1+: 리더보드 조합 병렬(ThreadPoolExecutor, 완료순 진행률 보고로 갱신)
+- [x] 검토 §6½ #2: 그룹(trajectory/case) 스플릿 + train-only 정규화 primitive
+      (`core/preprocessing/group_split.py`) — 아직 학습 경로 미배선, 척추만 확보
+- [ ] v5.1 후속: seed+region growing 확장, CGNS ZoneBC 자동 wall 인식
+- [ ] v5.6 P1+: remap 오차 바닥 분리(reconstruction test), 그룹 스플릿을 실제
+      학습 경로(build_twin_from_cases 등)에 배선, MPI 배치 CLI(클러스터)
 
 ## 직전 단계: v4.2.0 + 17 rounds — 연구 플랫폼 + 전영역 성숙화 ✅
 
