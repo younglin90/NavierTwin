@@ -259,8 +259,8 @@ def test_compare_models_subset_combos(demo) -> None:
     assert result["rows"][0]["combo"] == "pod+rbf"
 
 
-def test_compare_models_progress_cb(demo) -> None:
-    """progress_cb 가 조합 시작마다 + 완료 시 1회 호출된다 (done, total, label)."""
+def test_compare_models_progress_cb_sequential(demo) -> None:
+    """순차(parallel=False): 조합 시작마다 + 완료 시 1회 호출 (done, total, label)."""
     calls: list[tuple[int, int, str]] = []
     combos = [("pod", "rbf"), ("pod", "kriging")]
     service.compare_models(
@@ -269,11 +269,63 @@ def test_compare_models_progress_cb(demo) -> None:
         3,
         combos=combos,
         include_physics=False,
+        parallel=False,
         progress_cb=lambda d, n, lbl: calls.append((d, n, lbl)),
     )
     # 조합 2개 시작(done=0,1) + 완료(done=2) = 3회, total 은 항상 2.
     assert [c[0] for c in calls] == [0, 1, 2]
     assert all(c[1] == 2 for c in calls)
+
+
+def test_compare_models_progress_cb_parallel(demo) -> None:
+    """병렬(기본값): 완료 순서로 보고 — 시작 인덱스가 아니라 실제 진행 반영 (v5.6 P1+).
+
+    스레드 완료 순서는 실행마다 달라질 수 있으므로, 정확한 리스트가 아니라
+    "1..n_combos 를 단조 비증가 없이 커버하고 마지막이 (n_total,n_total,완료)"
+    라는 계약만 검증한다 (비-flaky).
+    """
+    calls: list[tuple[int, int, str]] = []
+    combos = [("pod", "rbf"), ("pod", "kriging"), ("randomized_pod", "rbf")]
+    service.compare_models(
+        demo,
+        "U",
+        3,
+        combos=combos,
+        include_physics=False,
+        parallel=True,
+        progress_cb=lambda d, n, lbl: calls.append((d, n, lbl)),
+    )
+    n_combos = len(combos)
+    assert len(calls) == n_combos + 1  # 조합마다 1회 + 최종 "완료" 1회
+    assert all(c[1] == n_combos for c in calls)  # total 은 항상 n_combos
+    dones = [c[0] for c in calls]
+    assert dones == sorted(dones)  # 완료 카운트는 단조 증가
+    assert dones[-1] == n_combos
+    assert calls[-1][2] == "완료"
+
+
+def test_compare_models_parallel_matches_sequential(demo) -> None:
+    """병렬/순차 결과가 (정렬 후) 동일해야 한다 — 병렬화는 순서만 바꾼다.
+
+    combo 학습에 난수 시드가 있는 surrogate(kriging 등)라도, 같은 조합·같은
+    데이터면 같은 결과가 나와야 한다(각 스레드가 독립적으로 fit 하므로 서로
+    간섭할 이유가 없다).
+    """
+    combos = [("pod", "rbf"), ("pod", "kriging"), ("randomized_pod", "rbf")]
+    seq = service.compare_models(
+        demo, "p", 3, combos=combos, include_physics=False, parallel=False
+    )
+    par = service.compare_models(
+        demo, "p", 3, combos=combos, include_physics=False, parallel=True
+    )
+    seq_by_combo = {r["combo"]: r for r in seq["rows"]}
+    par_by_combo = {r["combo"]: r for r in par["rows"]}
+    assert set(seq_by_combo) == set(par_by_combo)
+    for combo, seq_row in seq_by_combo.items():
+        par_row = par_by_combo[combo]
+        assert seq_row["status"] == par_row["status"] == "ok"
+        assert seq_row["rmse"] == pytest.approx(par_row["rmse"], rel=1e-6)
+        assert seq_row["r2"] == pytest.approx(par_row["r2"], rel=1e-6)
 
 
 def test_compare_models_requires_timeseries() -> None:

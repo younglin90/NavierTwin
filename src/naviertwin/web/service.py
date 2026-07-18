@@ -2238,6 +2238,8 @@ def compare_models(
     progress_cb: Any = None,
     include_physics: bool = True,
     physics_epochs: int = 120,
+    parallel: bool = True,
+    max_workers: int | None = None,
 ) -> dict[str, Any]:
     """여러 reducer×surrogate 조합(+Physics AI)을 학습/평가해 순위표를 만든다.
 
@@ -2247,6 +2249,13 @@ def compare_models(
     리더보드에 포함한다. 벡터 필드는 양쪽 모두 크기(magnitude) 스냅샷으로
     학습하므로(extract_field_snapshots 계약) 동일 조건 비교다.
 
+    ROM 조합(POD/DMD 없는 순수 POD+RBF/Kriging/GPR 계열)은 numpy/scipy 선형대수가
+    주 연산이라 스레드로 병렬화한다(``parallel=True``, v5.6 P1+) — GIL 해제
+    구간이 대부분이라 ``ThreadPoolExecutor`` 로 벽시계가 실제로 줄어든다. Physics
+    AI(신경망, GPU 가능)는 조합이 아니라 단일 항목이라 병렬화 대상이 아니며,
+    ROM 조합들과 자원(torch/CUDA 컨텍스트)을 다투지 않도록 항상 그 뒤에
+    순차 실행한다.
+
     Args:
         dataset: 시계열 데이터셋.
         field: 평가 대상 물리량 field.
@@ -2255,6 +2264,9 @@ def compare_models(
         repeat: 지연시간 측정 반복 횟수.
         include_physics: Physics AI 행 포함 여부.
         physics_epochs: 비교용 Physics AI 학습 epoch 수.
+        parallel: ROM 조합을 스레드 병렬로 평가할지 (기본 True). 조합이 2개
+            미만이면 오버헤드를 피해 순차 실행한다.
+        max_workers: 스레드 수 (None 이면 ``min(8, os.cpu_count() or 4)``).
 
     Returns:
         ``rows`` (조합별 결과 dict 리스트, RMSE 오름차순 정렬), ``best``
@@ -2263,6 +2275,9 @@ def compare_models(
     Raises:
         ValueError: 타임스텝이 2개 미만인 경우.
     """
+    import os
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from threading import Lock
     from time import perf_counter
 
     from naviertwin.core.validation.metrics import r2_score, relative_l2_error, rmse
@@ -2284,7 +2299,6 @@ def compare_models(
             for surrogate in LEADERBOARD_SURROGATES
         ]
 
-    rows: list[dict[str, Any]] = []
     n_combos = len(combos)
     # 안전장치: truth 가 point/cell 단위 스칼라 스냅샷일 때만 Physics AI 참전
     # (extract_field_snapshots 는 벡터도 크기로 펴므로 통상 항상 성립).
@@ -2292,9 +2306,8 @@ def compare_models(
     n_cells = int(getattr(dataset, "n_cells", 0))
     physics_comparable = bool(include_physics) and truth.shape[0] in {n_points, n_cells}
     n_total = n_combos + (1 if physics_comparable else 0)
-    for combo_index, (reducer, surrogate) in enumerate(combos):
-        if progress_cb is not None:
-            progress_cb(combo_index, n_total, f"{reducer}+{surrogate}")
+
+    def _eval_combo(reducer: str, surrogate: str) -> dict[str, Any]:
         try:
             result = build_twin(dataset, field, n_modes, reducer=reducer, surrogate=surrogate)
             engine = result["engine"]
@@ -2306,33 +2319,57 @@ def compare_models(
                 engine.predict(single)
                 iteration += 1
             latency_ms = (perf_counter() - started) / max(1, repeat) * 1000.0
-            rows.append(
-                {
-                    "combo": f"{reducer}+{surrogate}",
-                    "reducer": reducer,
-                    "surrogate": surrogate,
-                    "n_modes": int(result["n_modes"]),
-                    "rmse": float(rmse(truth, prediction)),
-                    "r2": float(r2_score(truth, prediction)),
-                    "rel_l2": float(relative_l2_error(truth, prediction)),
-                    "latency_ms": float(latency_ms),
-                    "status": "ok",
-                }
-            )
+            return {
+                "combo": f"{reducer}+{surrogate}",
+                "reducer": reducer,
+                "surrogate": surrogate,
+                "n_modes": int(result["n_modes"]),
+                "rmse": float(rmse(truth, prediction)),
+                "r2": float(r2_score(truth, prediction)),
+                "rel_l2": float(relative_l2_error(truth, prediction)),
+                "latency_ms": float(latency_ms),
+                "status": "ok",
+            }
         except Exception as exc:  # noqa: BLE001 — 한 조합 실패가 전체를 막지 않도록
-            rows.append(
-                {
-                    "combo": f"{reducer}+{surrogate}",
-                    "reducer": reducer,
-                    "surrogate": surrogate,
-                    "n_modes": int(n_modes),
-                    "rmse": float("inf"),
-                    "r2": float("nan"),
-                    "rel_l2": float("inf"),
-                    "latency_ms": float("nan"),
-                    "status": f"error: {exc}",
-                }
-            )
+            return {
+                "combo": f"{reducer}+{surrogate}",
+                "reducer": reducer,
+                "surrogate": surrogate,
+                "n_modes": int(n_modes),
+                "rmse": float("inf"),
+                "r2": float("nan"),
+                "rel_l2": float("inf"),
+                "latency_ms": float("nan"),
+                "status": f"error: {exc}",
+            }
+
+    rows: list[dict[str, Any]] = [{} for _ in range(n_combos)]
+    use_parallel = parallel and n_combos >= 2
+    if use_parallel:
+        workers = max_workers or min(8, os.cpu_count() or 4)
+        completed = 0
+        lock = Lock()
+        logger.info("리더보드: %d개 조합을 스레드 %d개로 병렬 평가", n_combos, workers)
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_idx = {
+                executor.submit(_eval_combo, reducer, surrogate): idx
+                for idx, (reducer, surrogate) in enumerate(combos)
+            }
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                rows[idx] = future.result()
+                with lock:
+                    completed += 1
+                    done, name = completed, rows[idx]["combo"]
+                # 완료 순서로 보고 — 실제 진행 상황을 반영한다(순차 실행 때의
+                # "제출 순서" 보고보다 정직하다).
+                if progress_cb is not None:
+                    progress_cb(done, n_total, name)
+    else:
+        for combo_index, (reducer, surrogate) in enumerate(combos):
+            if progress_cb is not None:
+                progress_cb(combo_index, n_total, f"{reducer}+{surrogate}")
+            rows[combo_index] = _eval_combo(reducer, surrogate)
 
     if physics_comparable:
         # Ⓑ 직접 회귀(PhysicsNeMo) 도 같은 지표로 리더보드에 참전시킨다.
