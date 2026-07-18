@@ -53,3 +53,4 @@ electron/dist/
 electron/server.log
 electron/smoke.png
 electron/boot.log
+.claude/worktrees/
