@@ -42,8 +42,14 @@
       이전과 동일(하위 호환)
 - [x] v5.1 후속: seed+region growing 확장 — `grow_wall_selection()` BFS
       (edge-connected 이웃만, 모서리 넘어 새는 것 방지) + "선택 확장" 버튼
-- [ ] v5.1 후속: CGNS ZoneBC 자동 wall 인식 (CGNS 리더가 연결성부터 미지원 —
-      리더 고도화 선행 필요)
+- [x] v5.1 후속: CGNS ZoneBC 자동 wall 인식 — 폴백 리더(pyCGNS/h5py)에
+      Elements_t 셀 연결성 파싱 추가(점 구름 탈피), BC_t → boundary_patches
+      (OpenFOAM 과 동일 계약) + auto_wall_patches. MIXED/NGON/멀티존은 미지원
+      (경고 후 점 구름 폴백)
+- [x] 검토 §6½ #5: 보존량(rho/mass_flux 등) 점 보간 재샘플 경고 —
+      `flag_conserved_fields()`, coarsen/케이스 재샘플 UI 에 warning 표시
+- [x] GeometryFNO held-out 검증 토글(웹 UI) — 시그니처 geometry_id 자동 부여,
+      공통 격자 재샘플로 시그니처가 뭉치면 케이스=그룹 폴백(문서화됨)
 - [x] v5.6 P1+: MPI 배치 CLI(클러스터) — `naviertwin batch-train --config jobs.json`,
       `jobs[rank::size]` 라운드로빈 분배, mpi4py 없거나 단독 실행 시 rank 0/size 1
       순차 폴백, MPI 초기화는 헤드리스 CLI 전용(GUI 이벤트 루프 금지)
