@@ -536,6 +536,90 @@ def test_split_view_toggle_and_field_selection() -> None:
     assert st.nt_split_view is False
 
 
+def test_split_view_syncs_timestep_to_twin_prediction() -> None:
+    """분할 뷰 켜짐 상태에서 타임스텝을 바꾸면 시간 파라미터 트윈(DMD)의
+    우측 예측이 그 시간으로 자동 재계산된다 (검토 §6½ #9 잔여분).
+
+    ``nt_timestep`` 은 좌측(실제) 뷰어의 시간 인덱스, ``nt_twin_param`` 은
+    트윈(DMD)의 시간 입력이다 — 분할 뷰가 켜져 있으면 전자가 후자를
+    따라가야 한다.
+    """
+    import numpy as np
+
+    app = _make_app("nt-test-split-timestep-sync")
+    st = app.server.state
+    app.load_demo()
+
+    st.nt_model_method = "dynamics"
+    app.build_twin()
+    assert st.nt_error == ""
+    assert st.nt_dmd_ready is True
+
+    st.nt_twin_param = 0.0
+    app.predict()
+    assert st.nt_error == ""
+    assert st.nt_predicted is True
+    before = np.asarray(app.dataset.mesh.point_data["twin_prediction"]).copy()
+
+    app.toggle_split_view()
+    assert st.nt_split_view is True
+
+    # 좌측 타임스텝을 학습 구간 안의 다른 지점으로 옮긴다 — trame 테스트
+    # 하네스는 이벤트 루프가 없어 state.change 콜백이 자동 발화하지 않으므로
+    # (기존 test_timestep_change_renders_if_gl 과 동일한 패턴) 직접 호출한다.
+    new_idx = max(1, int(st.nt_nsteps) - 1)
+    st.nt_timestep = new_idx
+    app._on_split_timestep_sync()
+    assert st.nt_error == ""
+    assert st.nt_twin_param == pytest.approx(float(app.dataset.time_steps[new_idx]))
+
+    after = np.asarray(app.dataset.mesh.point_data["twin_prediction"])
+    assert not np.allclose(before, after), (
+        "타임스텝 변경이 분할 뷰 우측(트윈) 예측에 반영되지 않았습니다"
+    )
+
+    # 분할 뷰를 끄면 자동 동기화도 멈춘다 — nt_twin_param 을 더는 건드리지 않는다.
+    app.toggle_split_view()
+    assert st.nt_split_view is False
+    stale_param = st.nt_twin_param
+    st.nt_timestep = 0
+    app._on_split_timestep_sync()
+    assert st.nt_twin_param == pytest.approx(stale_param), (
+        "분할 뷰가 꺼져 있으면 시간 자동 동기화가 없어야 합니다"
+    )
+
+
+def test_split_view_timestep_sync_is_noop_for_steady_case_set() -> None:
+    """정상(steady) 파라미터 스윕 트윈은 시간 파라미터가 없다 — 조용한 no-op.
+
+    ``nt_case_mode=True`` 이고 ``nt_param_names`` 에 ``"t"`` 가 없으면
+    (케이스당 스냅샷 1개, 운전조건만 학습) 타임스텝 변경이 트윈 예측을
+    건드리면 안 된다 — 애초에 그 트윈은 시간을 입력받지 않는다.
+    """
+    app = _make_app("nt-test-split-timestep-sync-steady")
+    st = app.server.state
+    st.nt_demo_kind = "sweep"
+    app.load_demo()
+    st.nt_model_method = "rom"
+    app.build_twin()
+    assert st.nt_error == ""
+    assert "t" not in list(st.nt_param_names)
+
+    st.nt_twin_params = [0.5 * (a + b) for a, b in zip(st.nt_twin_mins, st.nt_twin_maxs)]
+    app.predict()
+    assert st.nt_error == ""
+    assert st.nt_predicted is True
+
+    app.toggle_split_view()
+    assert st.nt_split_view is True
+
+    stale = list(st.nt_twin_params)
+    st.nt_timestep = 1
+    app._on_split_timestep_sync()  # no-op 이어야 한다 — 에러도, 값 변경도 없음
+    assert st.nt_error == ""
+    assert list(st.nt_twin_params) == stale
+
+
 def test_build_ui_if_gl_available() -> None:
     """전체 UI(PyVista 뷰어) 빌드 — GL 미지원 환경에서만 skip.
 
