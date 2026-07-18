@@ -1,0 +1,69 @@
+{
+  "threshold": 50,
+  "weak": [
+    {
+      "name": "src/naviertwin/core/generative/wavelet_diffusion/wavelet_diffusion_no.py",
+      "cover": 45
+    },
+    {
+      "name": "src/naviertwin/core/operator_learning/fno/wno.py",
+      "cover": 33
+    },
+    {
+      "name": "src/naviertwin/core/tools/mesh_generator.py",
+      "cover": 20
+    },
+    {
+      "name": "src/naviertwin/gui/main_window.py",
+      "cover": 15
+    },
+    {
+      "name": "src/naviertwin/gui/panels/analyze_panel.py",
+      "cover": 6
+    },
+    {
+      "name": "src/naviertwin/gui/panels/export_panel.py",
+      "cover": 12
+    },
+    {
+      "name": "src/naviertwin/gui/panels/import_panel.py",
+      "cover": 15
+    },
+    {
+      "name": "src/naviertwin/gui/panels/model_panel.py",
+      "cover": 45
+    },
+    {
+      "name": "src/naviertwin/gui/panels/reduce_panel.py",
+      "cover": 10
+    },
+    {
+      "name": "src/naviertwin/gui/panels/simulation_panel.py",
+      "cover": 10
+    },
+    {
+      "name": "src/naviertwin/gui/panels/twin_panel.py",
+      "cover": 9
+    },
+    {
+      "name": "src/naviertwin/gui/widgets/analytic_compare_widget.py",
+      "cover": 0
+    },
+    {
+      "name": "src/naviertwin/gui/widgets/loss_curve_widget.py",
+      "cover": 15
+    },
+    {
+      "name": "src/naviertwin/gui/widgets/model_compare_widget.py",
+      "cover": 13
+    },
+    {
+      "name": "src/naviertwin/gui/widgets/vtk_viewer.py",
+      "cover": 12
+    },
+    {
+      "name": "src/naviertwin/gui/wizard/tutorial_wizard.py",
+      "cover": 0
+    }
+  ]
+}

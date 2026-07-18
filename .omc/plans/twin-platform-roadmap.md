@@ -258,8 +258,19 @@ AIAA'20) — 둘 다 "0-채움 = 형상 인코딩" 전제를 검증. FNO는 `in_
   ③Twin 에 μ·t 슬라이더 자동 생성. `sweep_unsteady` 데모(문제 유형 C). DMD 가
   케이스 세트에서 첫 케이스만으로 조용히 학습하던 함정 차단. 비정상+형상가변
   재샘플은 시간을 버리므로 명시 거절. 202 테스트.
-- 남은 것: **벡터장 성분 보존**(방향 유지 — `_field_to_scalar_snapshots` 대체),
-  `TwinDataset`/`TwinCase` 정식 구조(현재는 list[CFDDataset]+전개 헬퍼로 대체 중).
+- ✅ **M2 (2026-07-18):** 벡터장 성분 보존 — Physics AI 가 U 를 U_x/U_y/U_z 채널로
+  학습(방향 유지), U_mag 는 성분에서 파생. 부호 재현 테스트(크기 학습으론 불가능한
+  일)로 검증. 발견: 작은 MLP 의 스펙트럴 바이어스 절벽(24/60ep R²≈0 vs 64/400ep
+  0.81) — 테스트에 문서화.
+- ✅ **M3 (2026-07-18, v5.2 항목):** ParametricDMD — 비정상 스윕의 (μ, t) 예보.
+  partitioned(케이스별 DMD, μ별 고유 주파수 안전) + ezyrb POD/RBF 계수 보간.
+  진행파 데모 적합 2e-15, 미지 μ 보간 + 학습 구간 밖 t 예보 브라우저 검증.
+  신규 의존성: ezyrb.
+- ✅ **GUI 패리티 1차 (2026-07-18):** 레지스트리를 core/digital_twin/strategies.py
+  로 이동(웹 shim 유지), 데스크톱 Model 패널에 전략 어드바이저, 도구 메뉴에
+  데모 데이터 로드(시계열 4종 — 데스크톱 최초의 인앱 데모).
+- 남은 것: `TwinDataset`/`TwinCase` 정식 구조(현재는 list[CFDDataset]+전개 헬퍼).
+  데스크톱: 케이스 세트 데모/(μ,t) 트윈 패널 다중 슬라이더는 후속.
 
 ### v5.1 — 경계조건 & 전처리 (최우선 갭)
 - OpenFOAM boundary 블록 / CGNS ZoneBC patch 메타 보존.

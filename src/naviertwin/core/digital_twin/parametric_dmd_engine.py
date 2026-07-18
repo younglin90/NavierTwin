@@ -75,6 +75,12 @@ class ParametricDMDTwinEngine:
         """예보 가능한 물리 시간 상한."""
         return self._t0 + self._dt * (self._n_forecast_steps - 1)
 
+    @property
+    def input_dim(self) -> int:
+        """(μ…, t) 입력 차원 — 데스크톱 Twin 패널이 스핀박스 수를 맞추는 데 쓴다."""
+        names = self.training_metadata.get("param_names")
+        return len(names) if isinstance(names, list) and names else 2
+
     def _series_for(self, mu: tuple[float, ...]) -> NDArray[np.float64]:
         """μ 하나의 전체 시계열 (n_space, n_forecast_steps) — μ 단위로 캐시.
 

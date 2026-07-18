@@ -1,0 +1,15 @@
+{
+  "name": "naviertwin-desktop",
+  "version": "0.1.0",
+  "description": "NavierTwin desktop shell (Electron) wrapping the trame web GUI",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "smoke": "electron . --smoke"
+  },
+  "author": "NavierTwin Contributors",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^33.2.0"
+  }
+}

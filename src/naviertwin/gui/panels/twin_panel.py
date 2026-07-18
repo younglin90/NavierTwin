@@ -398,7 +398,9 @@ class TwinPanel(QWidget):
             source = sources[source_index]
             meta = getattr(source, "training_metadata", None)
             if isinstance(meta, dict):
-                raw = meta.get("parameter_names")
+                # 웹 계열 엔진(TwinEngine 스윕/ParametricDMD)은 "param_names",
+                # PhysicsNeMo 모델은 "parameter_names" 를 쓴다 — 둘 다 읽는다.
+                raw = meta.get("parameter_names") or meta.get("param_names")
                 if isinstance(raw, list):
                     names = list(map(str, raw))
                     break

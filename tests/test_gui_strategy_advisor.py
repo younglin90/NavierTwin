@@ -47,6 +47,28 @@ def test_main_window_demo_menu_loads_dataset(qtbot) -> None:
     assert "동역학 예보" in advisor and "✅" in advisor
 
 
+def test_twin_panel_reads_web_engine_param_names(qtbot) -> None:
+    """웹 계열 엔진(param_names 키)도 데스크톱 Twin 패널이 이름/차원을 읽는다.
+
+    데스크톱은 원래 "parameter_names" 만 읽어서, 웹에서 학습한 (μ, t) 엔진을
+    데스크톱에 물리면 스핀박스 라벨/개수가 어긋났다 — 패리티 버그 수정 검증.
+    """
+    from naviertwin.gui.panels.twin_panel import TwinPanel
+    from naviertwin.web import service
+
+    sweep = service.make_demo_case_set("sweep_unsteady")
+    result = service.build_parametric_dmd_twin(
+        sweep["datasets"], "p", sweep["params"], param_names=sweep["param_names"]
+    )
+    engine = result["engine"]
+
+    panel = TwinPanel()
+    qtbot.addWidget(panel)
+    panel.set_engine(engine)
+    assert panel._param_names == ["inlet_velocity", "t"]
+    assert len(panel._param_spins) == 2  # input_dim 이 스핀박스 수를 맞춘다
+
+
 def test_demo_menu_exists_with_karman(qtbot) -> None:
     """메뉴에 카르만(실제 LBM) 데모가 노출된다 — 웹과 카탈로그 동기."""
     from naviertwin.gui.main_window import MainWindow

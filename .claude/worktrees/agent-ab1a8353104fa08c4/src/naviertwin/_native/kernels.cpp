@@ -1,0 +1,5478 @@
+#include <cmath>
+#include <algorithm>
+#include <array>
+#include <cstdlib>
+#include <limits>
+#include <stdexcept>
+#include <string>
+#include <thread>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include <pybind11/numpy.h>
+#include <pybind11/pybind11.h>
+
+namespace py = pybind11;
+
+using Array2D = py::array_t<double, py::array::c_style | py::array::forcecast>;
+
+using ArrayD = py::array_t<double, py::array::c_style | py::array::forcecast>;
+
+using ArrayI = py::array_t<long long, py::array::c_style | py::array::forcecast>;
+
+using ArrayB = py::array_t<bool, py::array::c_style | py::array::forcecast>;
+
+static int native_thread_count(py::ssize_t n) {
+    if (n < 8192) {
+        return 1;
+    }
+
+    unsigned int hw = std::thread::hardware_concurrency();
+    if (hw == 0) {
+        hw = 4;
+    }
+
+    int requested = 0;
+    if (const char* env = std::getenv("NAVIERTWIN_NATIVE_THREADS")) {
+        char* end = nullptr;
+        const long parsed = std::strtol(env, &end, 10);
+        if (end != env && parsed > 0) {
+            requested = static_cast<int>(std::min<long>(parsed, 64));
+        }
+    }
+
+    const int hardware_limit = static_cast<int>(std::min<unsigned int>(hw, 32));
+    const int chunk_limit = static_cast<int>(std::max<py::ssize_t>(1, (n + 8191) / 8192));
+    if (requested > 0) {
+        return std::max(1, std::min(requested, chunk_limit));
+    }
+    return std::max(1, std::min(hardware_limit, chunk_limit));
+}
+
+template <typename Fn>
+static void parallel_for(py::ssize_t n, Fn&& fn) {
+    const int threads = native_thread_count(n);
+    if (threads <= 1) {
+        fn(0, n);
+        return;
+    }
+
+    std::vector<std::thread> workers;
+    workers.reserve(static_cast<std::size_t>(threads));
+    const py::ssize_t chunk = (n + threads - 1) / threads;
+    for (int t = 0; t < threads; ++t) {
+        const py::ssize_t begin = t * chunk;
+        const py::ssize_t end = std::min(n, begin + chunk);
+        if (begin >= end) {
+            break;
+        }
+        workers.emplace_back([begin, end, &fn]() { fn(begin, end); });
+    }
+    for (auto& worker : workers) {
+        worker.join();
+    }
+}
+
+static void check_same_2d(const Array2D& u, const Array2D& v) {
+    if (u.ndim() != 2 || v.ndim() != 2) {
+        throw std::invalid_argument("2D arrays expected");
+    }
+    if (u.shape(0) != v.shape(0) || u.shape(1) != v.shape(1)) {
+        throw std::invalid_argument("u and v must have the same shape");
+    }
+    if (u.shape(0) < 2 || u.shape(1) < 2) {
+        throw std::invalid_argument("each array axis must have at least 2 points");
+    }
+}
+
+static inline double grad_x(const double* a, py::ssize_t ny, py::ssize_t nx, py::ssize_t i, py::ssize_t j, double dx) {
+    const py::ssize_t row = i * nx;
+    if (j == 0) {
+        return (a[row + 1] - a[row]) / dx;
+    }
+    if (j == nx - 1) {
+        return (a[row + j] - a[row + j - 1]) / dx;
+    }
+    return (a[row + j + 1] - a[row + j - 1]) / (2.0 * dx);
+}
+
+static inline double grad_y(const double* a, py::ssize_t ny, py::ssize_t nx, py::ssize_t i, py::ssize_t j, double dy) {
+    if (i == 0) {
+        return (a[nx + j] - a[j]) / dy;
+    }
+    if (i == ny - 1) {
+        return (a[i * nx + j] - a[(i - 1) * nx + j]) / dy;
+    }
+    return (a[(i + 1) * nx + j] - a[(i - 1) * nx + j]) / (2.0 * dy);
+}
+
+static py::array_t<double> field_j_2d(Array2D u, Array2D v, double dx, double dy) {
+    check_same_2d(u, v);
+    if (dx == 0.0 || dy == 0.0) {
+        throw std::invalid_argument("dx and dy must be non-zero");
+    }
+
+    const auto ny = u.shape(0);
+    const auto nx = u.shape(1);
+    auto out = py::array_t<double>({ny, nx, static_cast<py::ssize_t>(2), static_cast<py::ssize_t>(2)});
+    const double* up = u.data();
+    const double* vp = v.data();
+    double* op = out.mutable_data();
+
+    {
+        py::gil_scoped_release release;
+        for (py::ssize_t idx = 0; idx < ny * nx; ++idx) {
+            const py::ssize_t i = idx / nx;
+            const py::ssize_t j = idx - i * nx;
+            const auto base = (((i * nx + j) * 2) * 2);
+            op[base + 0] = grad_x(up, ny, nx, i, j, dx);
+            op[base + 1] = grad_y(up, ny, nx, i, j, dy);
+            op[base + 2] = grad_x(vp, ny, nx, i, j, dx);
+            op[base + 3] = grad_y(vp, ny, nx, i, j, dy);
+        }
+    }
+    return out;
+}
+
+static py::array_t<double> lambda2_2d(Array2D u, Array2D v, double dx, double dy) {
+    check_same_2d(u, v);
+    if (dx == 0.0 || dy == 0.0) {
+        throw std::invalid_argument("dx and dy must be non-zero");
+    }
+
+    const auto ny = u.shape(0);
+    const auto nx = u.shape(1);
+    auto out = py::array_t<double>({ny, nx});
+    const double* up = u.data();
+    const double* vp = v.data();
+    double* op = out.mutable_data();
+
+    {
+        py::gil_scoped_release release;
+        for (py::ssize_t idx = 0; idx < ny * nx; ++idx) {
+            const py::ssize_t i = idx / nx;
+            const py::ssize_t j = idx - i * nx;
+            const double du_dx = grad_x(up, ny, nx, i, j, dx);
+            const double du_dy = grad_y(up, ny, nx, i, j, dy);
+            const double dv_dx = grad_x(vp, ny, nx, i, j, dx);
+            const double dv_dy = grad_y(vp, ny, nx, i, j, dy);
+
+            const double s11 = du_dx;
+            const double s22 = dv_dy;
+            const double s12 = 0.5 * (du_dy + dv_dx);
+            const double o12 = 0.5 * (dv_dx - du_dy);
+
+            const double m11 = s11 * s11 + s12 * s12 - o12 * o12;
+            const double m22 = s22 * s22 + s12 * s12 - o12 * o12;
+            const double m12 = s11 * s12 + s12 * s22;
+            const double mid = 0.5 * (m11 + m22);
+            const double rad = std::sqrt(0.25 * (m11 - m22) * (m11 - m22) + m12 * m12);
+            op[i * nx + j] = mid - rad;
+        }
+    }
+    return out;
+}
+
+static py::array_t<double> vorticity_2d_native(Array2D u, Array2D v, double dx, double dy) {
+    check_same_2d(u, v);
+    if (dx == 0.0 || dy == 0.0) {
+        throw std::invalid_argument("dx and dy must be non-zero");
+    }
+
+    const auto ny = u.shape(0);
+    const auto nx = u.shape(1);
+    auto out = py::array_t<double>({ny, nx});
+    const double* up = u.data();
+    const double* vp = v.data();
+    double* op = out.mutable_data();
+
+    {
+        py::gil_scoped_release release;
+        for (py::ssize_t idx = 0; idx < ny * nx; ++idx) {
+            const py::ssize_t i = idx / nx;
+            const py::ssize_t j = idx - i * nx;
+            op[i * nx + j] = grad_x(vp, ny, nx, i, j, dx) - grad_y(up, ny, nx, i, j, dy);
+        }
+    }
+    return out;
+}
+
+static py::array_t<double> q_criterion_2d_native(Array2D u, Array2D v, double dx, double dy) {
+    check_same_2d(u, v);
+    if (dx == 0.0 || dy == 0.0) {
+        throw std::invalid_argument("dx and dy must be non-zero");
+    }
+
+    const auto ny = u.shape(0);
+    const auto nx = u.shape(1);
+    auto out = py::array_t<double>({ny, nx});
+    const double* up = u.data();
+    const double* vp = v.data();
+    double* op = out.mutable_data();
+
+    {
+        py::gil_scoped_release release;
+        for (py::ssize_t idx = 0; idx < ny * nx; ++idx) {
+            const py::ssize_t i = idx / nx;
+            const py::ssize_t j = idx - i * nx;
+            const double du_dx = grad_x(up, ny, nx, i, j, dx);
+            const double du_dy = grad_y(up, ny, nx, i, j, dy);
+            const double dv_dx = grad_x(vp, ny, nx, i, j, dx);
+            const double dv_dy = grad_y(vp, ny, nx, i, j, dy);
+            const double s12 = 0.5 * (du_dy + dv_dx);
+            const double o12 = 0.5 * (dv_dx - du_dy);
+            const double s2 = du_dx * du_dx + dv_dy * dv_dy + 2.0 * s12 * s12;
+            const double o2 = 2.0 * o12 * o12;
+            op[i * nx + j] = 0.5 * (o2 - s2);
+        }
+    }
+    return out;
+}
+
+static py::array_t<double> production_rate_2d(Array2D u, Array2D v, double dx, double dy, Array2D nu_t) {
+    check_same_2d(u, v);
+    if (nu_t.ndim() != 2 || nu_t.shape(0) != u.shape(0) || nu_t.shape(1) != u.shape(1)) {
+        throw std::invalid_argument("nu_t must have the same shape as u and v");
+    }
+    if (dx == 0.0 || dy == 0.0) {
+        throw std::invalid_argument("dx and dy must be non-zero");
+    }
+
+    const auto ny = u.shape(0);
+    const auto nx = u.shape(1);
+    auto out = py::array_t<double>({ny, nx});
+    const double* up = u.data();
+    const double* vp = v.data();
+    const double* ntp = nu_t.data();
+    double* op = out.mutable_data();
+
+    for (py::ssize_t i = 0; i < ny; ++i) {
+        for (py::ssize_t j = 0; j < nx; ++j) {
+            const double dudx = grad_x(up, ny, nx, i, j, dx);
+            const double dudy = grad_y(up, ny, nx, i, j, dy);
+            const double dvdx = grad_x(vp, ny, nx, i, j, dx);
+            const double dvdy = grad_y(vp, ny, nx, i, j, dy);
+            const double e12 = 0.5 * (dudy + dvdx);
+            op[i * nx + j] = 2.0 * ntp[i * nx + j] * (dudx * dudx + dvdy * dvdy + 2.0 * e12 * e12);
+        }
+    }
+    return out;
+}
+
+static py::array_t<double> entropy_generation_2d_native(
+    Array2D u, Array2D v, Array2D t, double dx, double dy, double mu, double k
+) {
+    check_same_2d(u, v);
+    if (t.ndim() != 2 || t.shape(0) != u.shape(0) || t.shape(1) != u.shape(1)) {
+        throw std::invalid_argument("u, v, and T must have the same 2D shape");
+    }
+    if (dx == 0.0 || dy == 0.0) {
+        throw std::invalid_argument("dx and dy must be non-zero");
+    }
+
+    const auto ny = u.shape(0);
+    const auto nx = u.shape(1);
+    auto out = py::array_t<double>({ny, nx});
+    const double* up = u.data();
+    const double* vp = v.data();
+    const double* tp = t.data();
+    double* op = out.mutable_data();
+
+    for (py::ssize_t i = 0; i < ny; ++i) {
+        for (py::ssize_t j = 0; j < nx; ++j) {
+            const py::ssize_t index = i * nx + j;
+            const double temp = tp[index];
+            if (temp <= 0.0) {
+                throw std::invalid_argument("T must be positive");
+            }
+            const double dtdx = grad_x(tp, ny, nx, i, j, dx);
+            const double dtdy = grad_y(tp, ny, nx, i, j, dy);
+            const double dudx = grad_x(up, ny, nx, i, j, dx);
+            const double dudy = grad_y(up, ny, nx, i, j, dy);
+            const double dvdx = grad_x(vp, ny, nx, i, j, dx);
+            const double dvdy = grad_y(vp, ny, nx, i, j, dy);
+            const double e12 = 0.5 * (dudy + dvdx);
+            const double div = dudx + dvdy;
+            const double phi =
+                2.0 * (dudx * dudx + dvdy * dvdy + 2.0 * e12 * e12) -
+                (2.0 / 3.0) * div * div;
+            op[index] = (k / (temp * temp)) * (dtdx * dtdx + dtdy * dtdy) + (mu / temp) * phi;
+        }
+    }
+    return out;
+}
+
+static void check_same_3d(const ArrayD& u, const ArrayD& v, const ArrayD& w) {
+    if (u.ndim() != 3 || v.ndim() != 3 || w.ndim() != 3) {
+        throw std::invalid_argument("3D arrays expected");
+    }
+    if (
+        u.shape(0) != v.shape(0) || u.shape(0) != w.shape(0) ||
+        u.shape(1) != v.shape(1) || u.shape(1) != w.shape(1) ||
+        u.shape(2) != v.shape(2) || u.shape(2) != w.shape(2)
+    ) {
+        throw std::invalid_argument("u, v, and w must have the same shape");
+    }
+    if (u.shape(0) < 2 || u.shape(1) < 2 || u.shape(2) < 2) {
+        throw std::invalid_argument("each array axis must have at least 2 points");
+    }
+}
+
+static inline py::ssize_t idx3(py::ssize_t z, py::ssize_t y, py::ssize_t x, py::ssize_t ny, py::ssize_t nx) {
+    return (z * ny + y) * nx + x;
+}
+
+static inline double grad3_axis0(
+    const double* a, py::ssize_t nz, py::ssize_t ny, py::ssize_t nx,
+    py::ssize_t z, py::ssize_t y, py::ssize_t x, double dz
+) {
+    if (z == 0) {
+        return (a[idx3(1, y, x, ny, nx)] - a[idx3(0, y, x, ny, nx)]) / dz;
+    }
+    if (z == nz - 1) {
+        return (a[idx3(z, y, x, ny, nx)] - a[idx3(z - 1, y, x, ny, nx)]) / dz;
+    }
+    return (a[idx3(z + 1, y, x, ny, nx)] - a[idx3(z - 1, y, x, ny, nx)]) / (2.0 * dz);
+}
+
+static inline double grad3_axis1(
+    const double* a, py::ssize_t nz, py::ssize_t ny, py::ssize_t nx,
+    py::ssize_t z, py::ssize_t y, py::ssize_t x, double dy
+) {
+    (void)nz;
+    if (y == 0) {
+        return (a[idx3(z, 1, x, ny, nx)] - a[idx3(z, 0, x, ny, nx)]) / dy;
+    }
+    if (y == ny - 1) {
+        return (a[idx3(z, y, x, ny, nx)] - a[idx3(z, y - 1, x, ny, nx)]) / dy;
+    }
+    return (a[idx3(z, y + 1, x, ny, nx)] - a[idx3(z, y - 1, x, ny, nx)]) / (2.0 * dy);
+}
+
+static inline double grad3_axis2(
+    const double* a, py::ssize_t nz, py::ssize_t ny, py::ssize_t nx,
+    py::ssize_t z, py::ssize_t y, py::ssize_t x, double dx
+) {
+    (void)nz;
+    if (x == 0) {
+        return (a[idx3(z, y, 1, ny, nx)] - a[idx3(z, y, 0, ny, nx)]) / dx;
+    }
+    if (x == nx - 1) {
+        return (a[idx3(z, y, x, ny, nx)] - a[idx3(z, y, x - 1, ny, nx)]) / dx;
+    }
+    return (a[idx3(z, y, x + 1, ny, nx)] - a[idx3(z, y, x - 1, ny, nx)]) / (2.0 * dx);
+}
+
+static py::tuple vorticity_3d_native(ArrayD u, ArrayD v, ArrayD w, double dx, double dy, double dz) {
+    check_same_3d(u, v, w);
+    if (dx == 0.0 || dy == 0.0 || dz == 0.0) {
+        throw std::invalid_argument("dx, dy, and dz must be non-zero");
+    }
+
+    const auto nz = u.shape(0);
+    const auto ny = u.shape(1);
+    const auto nx = u.shape(2);
+    auto wx = py::array_t<double>({nz, ny, nx});
+    auto wy = py::array_t<double>({nz, ny, nx});
+    auto wz = py::array_t<double>({nz, ny, nx});
+    const double* up = u.data();
+    const double* vp = v.data();
+    const double* wp = w.data();
+    double* wxp = wx.mutable_data();
+    double* wyp = wy.mutable_data();
+    double* wzp = wz.mutable_data();
+
+    for (py::ssize_t z = 0; z < nz; ++z) {
+        for (py::ssize_t y = 0; y < ny; ++y) {
+            for (py::ssize_t x = 0; x < nx; ++x) {
+                const py::ssize_t index = idx3(z, y, x, ny, nx);
+                const double du_dy = grad3_axis1(up, nz, ny, nx, z, y, x, dy);
+                const double du_dz = grad3_axis0(up, nz, ny, nx, z, y, x, dz);
+                const double dv_dx = grad3_axis2(vp, nz, ny, nx, z, y, x, dx);
+                const double dv_dz = grad3_axis0(vp, nz, ny, nx, z, y, x, dz);
+                const double dw_dx = grad3_axis2(wp, nz, ny, nx, z, y, x, dx);
+                const double dw_dy = grad3_axis1(wp, nz, ny, nx, z, y, x, dy);
+                wxp[index] = dw_dy - dv_dz;
+                wyp[index] = du_dz - dw_dx;
+                wzp[index] = dv_dx - du_dy;
+            }
+        }
+    }
+    return py::make_tuple(wx, wy, wz);
+}
+
+static inline void load_grad_3x3(const double* gp, py::ssize_t n, py::ssize_t idx, bool flat9, double j[3][3]) {
+    const double* row = gp + (flat9 ? idx * 9 : idx * 9);
+    (void)n;
+    j[0][0] = row[0];
+    j[0][1] = row[1];
+    j[0][2] = row[2];
+    j[1][0] = row[3];
+    j[1][1] = row[4];
+    j[1][2] = row[5];
+    j[2][0] = row[6];
+    j[2][1] = row[7];
+    j[2][2] = row[8];
+}
+
+static py::ssize_t grad_count(const ArrayD& grad) {
+    if (grad.ndim() == 2 && grad.shape(1) == 9) {
+        return grad.shape(0);
+    }
+    if (grad.ndim() == 3 && grad.shape(1) == 3 && grad.shape(2) == 3) {
+        return grad.shape(0);
+    }
+    throw std::invalid_argument("gradient must have shape (N, 9) or (N, 3, 3)");
+}
+
+static std::array<double, 3> sorted_symmetric_eigenvalues(double a00, double a01, double a02, double a11, double a12, double a22) {
+    const double p1 = a01 * a01 + a02 * a02 + a12 * a12;
+    if (p1 == 0.0) {
+        std::array<double, 3> eig = {a00, a11, a22};
+        std::sort(eig.begin(), eig.end());
+        return eig;
+    }
+
+    const double q = (a00 + a11 + a22) / 3.0;
+    const double b00 = a00 - q;
+    const double b11 = a11 - q;
+    const double b22 = a22 - q;
+    const double p2 = b00 * b00 + b11 * b11 + b22 * b22 + 2.0 * p1;
+    const double p = std::sqrt(p2 / 6.0);
+    if (p == 0.0) {
+        return {q, q, q};
+    }
+
+    const double c00 = b00 / p;
+    const double c01 = a01 / p;
+    const double c02 = a02 / p;
+    const double c11 = b11 / p;
+    const double c12 = a12 / p;
+    const double c22 = b22 / p;
+    const double det_c =
+        c00 * (c11 * c22 - c12 * c12) -
+        c01 * (c01 * c22 - c12 * c02) +
+        c02 * (c01 * c12 - c11 * c02);
+    double r = 0.5 * det_c;
+    r = std::max(-1.0, std::min(1.0, r));
+
+    constexpr double pi = 3.141592653589793238462643383279502884;
+    const double phi = std::acos(r) / 3.0;
+    const double eig1 = q + 2.0 * p * std::cos(phi);
+    const double eig3 = q + 2.0 * p * std::cos(phi + (2.0 * pi / 3.0));
+    const double eig2 = 3.0 * q - eig1 - eig3;
+    std::array<double, 3> eig = {eig1, eig2, eig3};
+    std::sort(eig.begin(), eig.end());
+    return eig;
+}
+
+static inline double middle3(double a, double b, double c) {
+    const double lo = std::min(a, std::min(b, c));
+    const double hi = std::max(a, std::max(b, c));
+    return a + b + c - lo - hi;
+}
+
+static double middle_symmetric_eigenvalue(double a00, double a01, double a02, double a11, double a12, double a22) {
+    const double p1 = a01 * a01 + a02 * a02 + a12 * a12;
+    if (p1 == 0.0) {
+        return middle3(a00, a11, a22);
+    }
+
+    const double q = (a00 + a11 + a22) / 3.0;
+    const double b00 = a00 - q;
+    const double b11 = a11 - q;
+    const double b22 = a22 - q;
+    const double p2 = b00 * b00 + b11 * b11 + b22 * b22 + 2.0 * p1;
+    const double p = std::sqrt(p2 / 6.0);
+    if (p == 0.0) {
+        return q;
+    }
+
+    const double c00 = b00 / p;
+    const double c01 = a01 / p;
+    const double c02 = a02 / p;
+    const double c11 = b11 / p;
+    const double c12 = a12 / p;
+    const double c22 = b22 / p;
+    const double det_c =
+        c00 * (c11 * c22 - c12 * c12) -
+        c01 * (c01 * c22 - c12 * c02) +
+        c02 * (c01 * c12 - c11 * c02);
+    double r = 0.5 * det_c;
+    r = std::max(-1.0, std::min(1.0, r));
+
+    constexpr double pi = 3.141592653589793238462643383279502884;
+    const double phi = std::acos(r) / 3.0;
+    const double eig1 = q + 2.0 * p * std::cos(phi);
+    const double eig3 = q + 2.0 * p * std::cos(phi + (2.0 * pi / 3.0));
+    const double eig2 = 3.0 * q - eig1 - eig3;
+    return middle3(eig1, eig2, eig3);
+}
+
+static py::tuple q_criterion_from_grad_3d(ArrayD grad) {
+    const py::ssize_t n = grad_count(grad);
+    auto q = py::array_t<double>({n});
+    auto vort = py::array_t<double>({n, static_cast<py::ssize_t>(3)});
+    const double* gp = grad.data();
+    double* qp = q.mutable_data();
+    double* vp = vort.mutable_data();
+
+    {
+        py::gil_scoped_release release;
+        for (py::ssize_t idx = 0; idx < n; ++idx) {
+            const double* row = gp + idx * 9;
+            const double j00 = row[0];
+            const double j01 = row[1];
+            const double j02 = row[2];
+            const double j10 = row[3];
+            const double j11 = row[4];
+            const double j12 = row[5];
+            const double j20 = row[6];
+            const double j21 = row[7];
+            const double j22 = row[8];
+
+            const double s01 = 0.5 * (j01 + j10);
+            const double s02 = 0.5 * (j02 + j20);
+            const double s12 = 0.5 * (j12 + j21);
+            const double o01 = 0.5 * (j01 - j10);
+            const double o02 = 0.5 * (j02 - j20);
+            const double o12 = 0.5 * (j12 - j21);
+
+            const double s_norm =
+                j00 * j00 + j11 * j11 + j22 * j22 +
+                2.0 * (s01 * s01 + s02 * s02 + s12 * s12);
+            const double o_norm = 2.0 * (o01 * o01 + o02 * o02 + o12 * o12);
+            qp[idx] = 0.5 * (o_norm - s_norm);
+            vp[idx * 3 + 0] = j21 - j12;
+            vp[idx * 3 + 1] = j02 - j20;
+            vp[idx * 3 + 2] = j10 - j01;
+        }
+    }
+    return py::make_tuple(q, vort);
+}
+
+static py::array_t<double> lambda2_from_grad_3d(ArrayD grad) {
+    const py::ssize_t n = grad_count(grad);
+    auto out = py::array_t<double>({n});
+    const double* gp = grad.data();
+    double* op = out.mutable_data();
+
+    {
+        py::gil_scoped_release release;
+        parallel_for(n, [&](py::ssize_t begin, py::ssize_t end) {
+            for (py::ssize_t idx = begin; idx < end; ++idx) {
+                const double* row = gp + idx * 9;
+                const double j00 = row[0];
+                const double j01 = row[1];
+                const double j02 = row[2];
+                const double j10 = row[3];
+                const double j11 = row[4];
+                const double j12 = row[5];
+                const double j20 = row[6];
+                const double j21 = row[7];
+                const double j22 = row[8];
+
+                const double s01 = 0.5 * (j01 + j10);
+                const double s02 = 0.5 * (j02 + j20);
+                const double s12 = 0.5 * (j12 + j21);
+                const double o01 = 0.5 * (j01 - j10);
+                const double o02 = 0.5 * (j02 - j20);
+                const double o12 = 0.5 * (j12 - j21);
+
+                const double m00 = j00 * j00 + s01 * s01 + s02 * s02 - o01 * o01 - o02 * o02;
+                const double m11 = s01 * s01 + j11 * j11 + s12 * s12 - o01 * o01 - o12 * o12;
+                const double m22 = s02 * s02 + s12 * s12 + j22 * j22 - o02 * o02 - o12 * o12;
+                const double m01 = j00 * s01 + s01 * j11 + s02 * s12 - o02 * o12;
+                const double m02 = j00 * s02 + s01 * s12 + s02 * j22 + o01 * o12;
+                const double m12 = s01 * s02 + j11 * s12 + s12 * j22 - o01 * o02;
+
+                op[idx] = middle_symmetric_eigenvalue(m00, m01, m02, m11, m12, m22);
+            }
+        });
+    }
+    return out;
+}
+
+static py::tuple decompose_j_3x3(py::array_t<double, py::array::c_style | py::array::forcecast> j) {
+    if (j.ndim() != 2 || j.shape(0) != 3 || j.shape(1) != 3) {
+        throw std::invalid_argument("3x3 expected");
+    }
+    auto s = py::array_t<double>({static_cast<py::ssize_t>(3), static_cast<py::ssize_t>(3)});
+    auto w = py::array_t<double>({static_cast<py::ssize_t>(3), static_cast<py::ssize_t>(3)});
+    const double* jp = j.data();
+    double* sp = s.mutable_data();
+    double* wp = w.mutable_data();
+    for (py::ssize_t r = 0; r < 3; ++r) {
+        for (py::ssize_t c = 0; c < 3; ++c) {
+            const double a = jp[r * 3 + c];
+            const double b = jp[c * 3 + r];
+            sp[r * 3 + c] = 0.5 * (a + b);
+            wp[r * 3 + c] = 0.5 * (a - b);
+        }
+    }
+    return py::make_tuple(s, w);
+}
+
+static py::array_t<double> symmetric_eigenvalues_3x3(py::array_t<double, py::array::c_style | py::array::forcecast> j) {
+    if (j.ndim() != 2 || j.shape(0) != 3 || j.shape(1) != 3) {
+        throw std::invalid_argument("3x3 expected");
+    }
+    const double* a = j.data();
+    const double a00 = a[0];
+    const double a01 = 0.5 * (a[1] + a[3]);
+    const double a02 = 0.5 * (a[2] + a[6]);
+    const double a11 = a[4];
+    const double a12 = 0.5 * (a[5] + a[7]);
+    const double a22 = a[8];
+    const auto eig = sorted_symmetric_eigenvalues(a00, a01, a02, a11, a12, a22);
+    auto out = py::array_t<double>({static_cast<py::ssize_t>(3)});
+    double* op = out.mutable_data();
+    op[0] = eig[0];
+    op[1] = eig[1];
+    op[2] = eig[2];
+    return out;
+}
+
+static py::dict invariants_3x3(py::array_t<double, py::array::c_style | py::array::forcecast> j) {
+    if (j.ndim() != 2 || j.shape(0) != 3 || j.shape(1) != 3) {
+        throw std::invalid_argument("3x3 expected");
+    }
+    const double* a = j.data();
+    const double trace = a[0] + a[4] + a[8];
+    const double j2_trace =
+        a[0] * a[0] + a[1] * a[3] + a[2] * a[6] +
+        a[3] * a[1] + a[4] * a[4] + a[5] * a[7] +
+        a[6] * a[2] + a[7] * a[5] + a[8] * a[8];
+    const double det =
+        a[0] * (a[4] * a[8] - a[5] * a[7]) -
+        a[1] * (a[3] * a[8] - a[5] * a[6]) +
+        a[2] * (a[3] * a[7] - a[4] * a[6]);
+    const double p = -trace;
+    const double q = 0.5 * (p * p - j2_trace);
+    const double r = -det;
+    py::dict out;
+    out["P"] = p;
+    out["Q"] = q;
+    out["R"] = r;
+    return out;
+}
+
+static void check_square_matrix(const ArrayD& a) {
+    if (a.ndim() != 2 || a.shape(0) != a.shape(1)) {
+        throw std::invalid_argument("square matrix expected");
+    }
+}
+
+static std::vector<double> contiguous_vector(const ArrayD& x, py::ssize_t n, const char* name) {
+    if (x.ndim() != 1 || x.shape(0) != n) {
+        throw std::invalid_argument(std::string(name) + " must have shape (N,)");
+    }
+    const double* xp = x.data();
+    return std::vector<double>(xp, xp + n);
+}
+
+static double dot(const std::vector<double>& a, const std::vector<double>& b) {
+    double out = 0.0;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        out += a[i] * b[i];
+    }
+    return out;
+}
+
+static double vec_norm(const std::vector<double>& x) {
+    return std::sqrt(dot(x, x));
+}
+
+static std::vector<double> matvec(const double* a, py::ssize_t n, const std::vector<double>& x) {
+    std::vector<double> out(static_cast<std::size_t>(n), 0.0);
+    for (py::ssize_t r = 0; r < n; ++r) {
+        double acc = 0.0;
+        for (py::ssize_t c = 0; c < n; ++c) {
+            acc += a[r * n + c] * x[static_cast<std::size_t>(c)];
+        }
+        out[static_cast<std::size_t>(r)] = acc;
+    }
+    return out;
+}
+
+static void normalize_in_place(std::vector<double>& x) {
+    const double scale = vec_norm(x) + 1e-30;
+    for (double& value : x) {
+        value /= scale;
+    }
+}
+
+static py::array_t<double> vector_to_numpy(const std::vector<double>& x) {
+    auto out = py::array_t<double>({static_cast<py::ssize_t>(x.size())});
+    double* op = out.mutable_data();
+    std::copy(x.begin(), x.end(), op);
+    return out;
+}
+
+static std::vector<double> solve_linear_system(std::vector<double> m, std::vector<double> rhs, py::ssize_t n) {
+    for (py::ssize_t k = 0; k < n; ++k) {
+        py::ssize_t pivot = k;
+        double pivot_abs = std::abs(m[k * n + k]);
+        for (py::ssize_t r = k + 1; r < n; ++r) {
+            const double candidate = std::abs(m[r * n + k]);
+            if (candidate > pivot_abs) {
+                pivot_abs = candidate;
+                pivot = r;
+            }
+        }
+        if (pivot_abs == 0.0) {
+            throw std::invalid_argument("singular matrix in inverse_power");
+        }
+        if (pivot != k) {
+            for (py::ssize_t c = 0; c < n; ++c) {
+                std::swap(m[k * n + c], m[pivot * n + c]);
+            }
+            std::swap(rhs[static_cast<std::size_t>(k)], rhs[static_cast<std::size_t>(pivot)]);
+        }
+        for (py::ssize_t r = k + 1; r < n; ++r) {
+            const double factor = m[r * n + k] / m[k * n + k];
+            m[r * n + k] = 0.0;
+            for (py::ssize_t c = k + 1; c < n; ++c) {
+                m[r * n + c] -= factor * m[k * n + c];
+            }
+            rhs[static_cast<std::size_t>(r)] -= factor * rhs[static_cast<std::size_t>(k)];
+        }
+    }
+
+    std::vector<double> x(static_cast<std::size_t>(n), 0.0);
+    for (py::ssize_t r = n - 1; r >= 0; --r) {
+        double acc = rhs[static_cast<std::size_t>(r)];
+        for (py::ssize_t c = r + 1; c < n; ++c) {
+            acc -= m[r * n + c] * x[static_cast<std::size_t>(c)];
+        }
+        x[static_cast<std::size_t>(r)] = acc / m[r * n + r];
+        if (r == 0) {
+            break;
+        }
+    }
+    return x;
+}
+
+static py::array_t<double> solve_square_native(ArrayD a, ArrayD b) {
+    check_square_matrix(a);
+    const py::ssize_t n = a.shape(0);
+    if (b.ndim() != 1 && b.ndim() != 2) {
+        throw std::invalid_argument("b must have shape (N,) or (N, K)");
+    }
+    if (b.shape(0) != n) {
+        throw std::invalid_argument("A and b dimensions do not match");
+    }
+
+    const double* ap = a.data();
+    std::vector<double> matrix(ap, ap + n * n);
+    const double* bp = b.data();
+    if (b.ndim() == 1) {
+        std::vector<double> rhs(bp, bp + n);
+        std::vector<double> x = solve_linear_system(matrix, rhs, n);
+        return vector_to_numpy(x);
+    }
+
+    const py::ssize_t cols = b.shape(1);
+    auto out = py::array_t<double>({n, cols});
+    double* op = out.mutable_data();
+    for (py::ssize_t col = 0; col < cols; ++col) {
+        std::vector<double> rhs(static_cast<std::size_t>(n), 0.0);
+        for (py::ssize_t row = 0; row < n; ++row) {
+            rhs[static_cast<std::size_t>(row)] = bp[row * cols + col];
+        }
+        std::vector<double> x = solve_linear_system(matrix, rhs, n);
+        for (py::ssize_t row = 0; row < n; ++row) {
+            op[row * cols + col] = x[static_cast<std::size_t>(row)];
+        }
+    }
+    return out;
+}
+
+static double determinant_square(const double* a, py::ssize_t d) {
+    if (d == 2) {
+        return a[0] * a[3] - a[1] * a[2];
+    }
+    if (d == 3) {
+        return
+            a[0] * (a[4] * a[8] - a[5] * a[7]) -
+            a[1] * (a[3] * a[8] - a[5] * a[6]) +
+            a[2] * (a[3] * a[7] - a[4] * a[6]);
+    }
+
+    std::vector<double> m(a, a + d * d);
+    double det = 1.0;
+    int sign = 1;
+    for (py::ssize_t k = 0; k < d; ++k) {
+        py::ssize_t pivot = k;
+        double pivot_abs = std::abs(m[k * d + k]);
+        for (py::ssize_t r = k + 1; r < d; ++r) {
+            const double candidate = std::abs(m[r * d + k]);
+            if (candidate > pivot_abs) {
+                pivot_abs = candidate;
+                pivot = r;
+            }
+        }
+        if (pivot_abs == 0.0) {
+            return 0.0;
+        }
+        if (pivot != k) {
+            for (py::ssize_t c = 0; c < d; ++c) {
+                std::swap(m[k * d + c], m[pivot * d + c]);
+            }
+            sign = -sign;
+        }
+        const double pivot_value = m[k * d + k];
+        det *= pivot_value;
+        for (py::ssize_t r = k + 1; r < d; ++r) {
+            const double factor = m[r * d + k] / pivot_value;
+            for (py::ssize_t c = k + 1; c < d; ++c) {
+                m[r * d + c] -= factor * m[k * d + c];
+            }
+        }
+    }
+    return sign * det;
+}
+
+static py::array_t<double> determinant_batch(ArrayD a) {
+    if (a.ndim() < 2 || a.shape(a.ndim() - 1) != a.shape(a.ndim() - 2)) {
+        throw std::invalid_argument("array of square matrices expected");
+    }
+    const py::ssize_t d = a.shape(a.ndim() - 1);
+    std::vector<py::ssize_t> out_shape;
+    py::ssize_t count = 1;
+    for (py::ssize_t axis = 0; axis < a.ndim() - 2; ++axis) {
+        out_shape.push_back(a.shape(axis));
+        count *= a.shape(axis);
+    }
+    if (out_shape.empty()) {
+        out_shape.push_back(1);
+    }
+
+    auto out = py::array_t<double>(out_shape);
+    const double* ap = a.data();
+    double* op = out.mutable_data();
+    const py::ssize_t stride = d * d;
+    for (py::ssize_t i = 0; i < count; ++i) {
+        op[i] = determinant_square(ap + i * stride, d);
+    }
+    return out;
+}
+
+static py::tuple power_iteration_native(ArrayD a, int n_iter, ArrayD x0, double tol) {
+    check_square_matrix(a);
+    const py::ssize_t n = a.shape(0);
+    std::vector<double> x = contiguous_vector(x0, n, "x0");
+    normalize_in_place(x);
+    const double* ap = a.data();
+    double lam_prev = 0.0;
+    double lam = 0.0;
+    for (int iter = 0; iter < n_iter; ++iter) {
+        std::vector<double> y = matvec(ap, n, x);
+        normalize_in_place(y);
+        x = std::move(y);
+        lam = dot(x, matvec(ap, n, x));
+        if (std::abs(lam - lam_prev) < tol * std::max(1.0, std::abs(lam))) {
+            break;
+        }
+        lam_prev = lam;
+    }
+    return py::make_tuple(lam, vector_to_numpy(x));
+}
+
+static py::tuple inverse_power_native(ArrayD a, double shift, int n_iter, ArrayD x0) {
+    check_square_matrix(a);
+    const py::ssize_t n = a.shape(0);
+    const double* ap = a.data();
+    std::vector<double> shifted(static_cast<std::size_t>(n * n), 0.0);
+    for (py::ssize_t r = 0; r < n; ++r) {
+        for (py::ssize_t c = 0; c < n; ++c) {
+            shifted[static_cast<std::size_t>(r * n + c)] = ap[r * n + c] - (r == c ? shift : 0.0);
+        }
+    }
+
+    std::vector<double> x = contiguous_vector(x0, n, "x0");
+    normalize_in_place(x);
+    for (int iter = 0; iter < n_iter; ++iter) {
+        x = solve_linear_system(shifted, x, n);
+        normalize_in_place(x);
+    }
+    const double lam = dot(x, matvec(ap, n, x));
+    return py::make_tuple(lam, vector_to_numpy(x));
+}
+
+static py::tuple pcg_jacobi_native(ArrayD a, ArrayD b, ArrayD x0, int max_iter, double tol) {
+    check_square_matrix(a);
+    const py::ssize_t n = a.shape(0);
+    std::vector<double> rhs = contiguous_vector(b, n, "b");
+    std::vector<double> x = contiguous_vector(x0, n, "x0");
+    const double* ap = a.data();
+    std::vector<double> inv_d(static_cast<std::size_t>(n), 0.0);
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const double d = ap[i * n + i];
+        if (d == 0.0) {
+            throw std::invalid_argument("zero diagonal");
+        }
+        inv_d[static_cast<std::size_t>(i)] = 1.0 / d;
+    }
+
+    std::vector<double> ax = matvec(ap, n, x);
+    std::vector<double> r(static_cast<std::size_t>(n), 0.0);
+    std::vector<double> z(static_cast<std::size_t>(n), 0.0);
+    for (py::ssize_t i = 0; i < n; ++i) {
+        r[static_cast<std::size_t>(i)] = rhs[static_cast<std::size_t>(i)] - ax[static_cast<std::size_t>(i)];
+        z[static_cast<std::size_t>(i)] = inv_d[static_cast<std::size_t>(i)] * r[static_cast<std::size_t>(i)];
+    }
+    std::vector<double> p = z;
+    double rz = dot(r, z);
+    int iter_count = max_iter;
+    bool converged = false;
+    double residual = vec_norm(r);
+
+    for (int iter = 0; iter < max_iter; ++iter) {
+        std::vector<double> ap_vec = matvec(ap, n, p);
+        const double alpha = rz / (dot(p, ap_vec) + 1e-30);
+        for (py::ssize_t i = 0; i < n; ++i) {
+            x[static_cast<std::size_t>(i)] += alpha * p[static_cast<std::size_t>(i)];
+            r[static_cast<std::size_t>(i)] -= alpha * ap_vec[static_cast<std::size_t>(i)];
+        }
+        residual = vec_norm(r);
+        if (residual < tol) {
+            iter_count = iter + 1;
+            converged = true;
+            break;
+        }
+        for (py::ssize_t i = 0; i < n; ++i) {
+            z[static_cast<std::size_t>(i)] = inv_d[static_cast<std::size_t>(i)] * r[static_cast<std::size_t>(i)];
+        }
+        const double rz_new = dot(r, z);
+        const double beta = rz_new / rz;
+        for (py::ssize_t i = 0; i < n; ++i) {
+            p[static_cast<std::size_t>(i)] = z[static_cast<std::size_t>(i)] + beta * p[static_cast<std::size_t>(i)];
+        }
+        rz = rz_new;
+    }
+
+    py::dict info;
+    info["iters"] = iter_count;
+    info["residual"] = residual;
+    info["converged"] = converged;
+    return py::make_tuple(vector_to_numpy(x), info);
+}
+
+static py::tuple bicgstab_dense_native(ArrayD a, ArrayD b, ArrayD x0, int max_iter, double tol) {
+    check_square_matrix(a);
+    const py::ssize_t n = a.shape(0);
+    std::vector<double> rhs = contiguous_vector(b, n, "b");
+    std::vector<double> x = contiguous_vector(x0, n, "x0");
+    const double* ap = a.data();
+
+    std::vector<double> ax = matvec(ap, n, x);
+    std::vector<double> r(static_cast<std::size_t>(n), 0.0);
+    for (py::ssize_t i = 0; i < n; ++i) {
+        r[static_cast<std::size_t>(i)] = rhs[static_cast<std::size_t>(i)] - ax[static_cast<std::size_t>(i)];
+    }
+    std::vector<double> r_hat = r;
+    double rho_prev = 1.0;
+    double alpha = 1.0;
+    double omega = 1.0;
+    std::vector<double> v(static_cast<std::size_t>(n), 0.0);
+    std::vector<double> p(static_cast<std::size_t>(n), 0.0);
+    int iter_count = max_iter;
+    bool converged = false;
+    double residual = vec_norm(r);
+
+    for (int iter = 0; iter < max_iter; ++iter) {
+        const double rho = dot(r_hat, r);
+        if (std::abs(rho) < 1e-30) {
+            break;
+        }
+        const double beta = (rho / rho_prev) * (alpha / (omega + 1e-30));
+        for (py::ssize_t i = 0; i < n; ++i) {
+            p[static_cast<std::size_t>(i)] =
+                r[static_cast<std::size_t>(i)] +
+                beta * (p[static_cast<std::size_t>(i)] - omega * v[static_cast<std::size_t>(i)]);
+        }
+        std::vector<double> y = p;
+        v = matvec(ap, n, y);
+        alpha = rho / (dot(r_hat, v) + 1e-30);
+        std::vector<double> s(static_cast<std::size_t>(n), 0.0);
+        for (py::ssize_t i = 0; i < n; ++i) {
+            s[static_cast<std::size_t>(i)] = r[static_cast<std::size_t>(i)] - alpha * v[static_cast<std::size_t>(i)];
+        }
+        if (vec_norm(s) < tol) {
+            for (py::ssize_t i = 0; i < n; ++i) {
+                x[static_cast<std::size_t>(i)] += alpha * y[static_cast<std::size_t>(i)];
+            }
+            std::vector<double> new_ax = matvec(ap, n, x);
+            for (py::ssize_t i = 0; i < n; ++i) {
+                r[static_cast<std::size_t>(i)] = rhs[static_cast<std::size_t>(i)] - new_ax[static_cast<std::size_t>(i)];
+            }
+            residual = vec_norm(r);
+            iter_count = iter + 1;
+            converged = true;
+            break;
+        }
+        std::vector<double> z = s;
+        std::vector<double> t = matvec(ap, n, z);
+        omega = dot(t, s) / (dot(t, t) + 1e-30);
+        for (py::ssize_t i = 0; i < n; ++i) {
+            x[static_cast<std::size_t>(i)] += alpha * y[static_cast<std::size_t>(i)] + omega * z[static_cast<std::size_t>(i)];
+            r[static_cast<std::size_t>(i)] = s[static_cast<std::size_t>(i)] - omega * t[static_cast<std::size_t>(i)];
+        }
+        residual = vec_norm(r);
+        if (residual < tol) {
+            iter_count = iter + 1;
+            converged = true;
+            break;
+        }
+        rho_prev = rho;
+    }
+
+    if (!converged) {
+        std::vector<double> new_ax = matvec(ap, n, x);
+        for (py::ssize_t i = 0; i < n; ++i) {
+            r[static_cast<std::size_t>(i)] = rhs[static_cast<std::size_t>(i)] - new_ax[static_cast<std::size_t>(i)];
+        }
+        residual = vec_norm(r);
+    }
+
+    py::dict info;
+    info["iters"] = iter_count;
+    info["residual"] = residual;
+    info["converged"] = converged;
+    return py::make_tuple(vector_to_numpy(x), info);
+}
+
+static py::array_t<double> thomas_solve_native(ArrayD a, ArrayD b, ArrayD c, ArrayD d) {
+    if (d.ndim() != 1) {
+        throw std::invalid_argument("d must have shape (N,)");
+    }
+    const py::ssize_t n = d.shape(0);
+    std::vector<double> aa = contiguous_vector(a, n, "a");
+    std::vector<double> bb = contiguous_vector(b, n, "b");
+    std::vector<double> cc = contiguous_vector(c, n, "c");
+    std::vector<double> dd = contiguous_vector(d, n, "d");
+    for (py::ssize_t i = 1; i < n; ++i) {
+        const double m = aa[static_cast<std::size_t>(i)] / bb[static_cast<std::size_t>(i - 1)];
+        bb[static_cast<std::size_t>(i)] -= m * cc[static_cast<std::size_t>(i - 1)];
+        dd[static_cast<std::size_t>(i)] -= m * dd[static_cast<std::size_t>(i - 1)];
+    }
+    std::vector<double> x(static_cast<std::size_t>(n), 0.0);
+    x[static_cast<std::size_t>(n - 1)] = dd[static_cast<std::size_t>(n - 1)] / bb[static_cast<std::size_t>(n - 1)];
+    for (py::ssize_t i = n - 2; i >= 0; --i) {
+        x[static_cast<std::size_t>(i)] =
+            (dd[static_cast<std::size_t>(i)] - cc[static_cast<std::size_t>(i)] * x[static_cast<std::size_t>(i + 1)]) /
+            bb[static_cast<std::size_t>(i)];
+        if (i == 0) {
+            break;
+        }
+    }
+    return vector_to_numpy(x);
+}
+
+static double dense_residual_norm(const double* a, py::ssize_t n, const std::vector<double>& x, const std::vector<double>& b) {
+    std::vector<double> ax = matvec(a, n, x);
+    double total = 0.0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const double ri = ax[static_cast<std::size_t>(i)] - b[static_cast<std::size_t>(i)];
+        total += ri * ri;
+    }
+    return std::sqrt(total);
+}
+
+static py::tuple jacobi_dense_native(ArrayD a, ArrayD b, ArrayD x0, int max_iter, double tol) {
+    check_square_matrix(a);
+    const py::ssize_t n = a.shape(0);
+    std::vector<double> rhs = contiguous_vector(b, n, "b");
+    std::vector<double> x = contiguous_vector(x0, n, "x0");
+    const double* ap = a.data();
+    std::vector<double> d(static_cast<std::size_t>(n), 0.0);
+    for (py::ssize_t i = 0; i < n; ++i) {
+        d[static_cast<std::size_t>(i)] = ap[i * n + i];
+        if (d[static_cast<std::size_t>(i)] == 0.0) {
+            throw std::invalid_argument("zero diagonal");
+        }
+    }
+    std::vector<double> x_new(static_cast<std::size_t>(n), 0.0);
+    bool converged = false;
+    int iter_count = max_iter;
+    double residual = dense_residual_norm(ap, n, x, rhs);
+    for (int iter = 0; iter < max_iter; ++iter) {
+        for (py::ssize_t row = 0; row < n; ++row) {
+            double offdiag = 0.0;
+            for (py::ssize_t col = 0; col < n; ++col) {
+                if (col != row) {
+                    offdiag += ap[row * n + col] * x[static_cast<std::size_t>(col)];
+                }
+            }
+            x_new[static_cast<std::size_t>(row)] = (rhs[static_cast<std::size_t>(row)] - offdiag) / d[static_cast<std::size_t>(row)];
+        }
+        x = x_new;
+        residual = dense_residual_norm(ap, n, x, rhs);
+        if (residual < tol) {
+            converged = true;
+            iter_count = iter + 1;
+            break;
+        }
+    }
+    py::dict info;
+    info["iters"] = iter_count;
+    info["residual"] = residual;
+    info["converged"] = converged;
+    return py::make_tuple(vector_to_numpy(x), info);
+}
+
+static py::tuple gauss_seidel_dense_native(ArrayD a, ArrayD b, ArrayD x0, int max_iter, double tol) {
+    check_square_matrix(a);
+    const py::ssize_t n = a.shape(0);
+    std::vector<double> rhs = contiguous_vector(b, n, "b");
+    std::vector<double> x = contiguous_vector(x0, n, "x0");
+    const double* ap = a.data();
+    bool converged = false;
+    int iter_count = max_iter;
+    double residual = dense_residual_norm(ap, n, x, rhs);
+    for (int iter = 0; iter < max_iter; ++iter) {
+        for (py::ssize_t row = 0; row < n; ++row) {
+            double s = rhs[static_cast<std::size_t>(row)];
+            for (py::ssize_t col = 0; col < row; ++col) {
+                s -= ap[row * n + col] * x[static_cast<std::size_t>(col)];
+            }
+            for (py::ssize_t col = row + 1; col < n; ++col) {
+                s -= ap[row * n + col] * x[static_cast<std::size_t>(col)];
+            }
+            x[static_cast<std::size_t>(row)] = s / ap[row * n + row];
+        }
+        residual = dense_residual_norm(ap, n, x, rhs);
+        if (residual < tol) {
+            converged = true;
+            iter_count = iter + 1;
+            break;
+        }
+    }
+    py::dict info;
+    info["iters"] = iter_count;
+    info["residual"] = residual;
+    info["converged"] = converged;
+    return py::make_tuple(vector_to_numpy(x), info);
+}
+
+static py::tuple conjugate_gradient_dense_native(ArrayD a, ArrayD b, ArrayD x0, int max_iter, double tol) {
+    check_square_matrix(a);
+    const py::ssize_t n = a.shape(0);
+    std::vector<double> rhs = contiguous_vector(b, n, "b");
+    std::vector<double> x = contiguous_vector(x0, n, "x0");
+    const double* ap = a.data();
+    std::vector<double> ax = matvec(ap, n, x);
+    std::vector<double> r(static_cast<std::size_t>(n), 0.0);
+    for (py::ssize_t i = 0; i < n; ++i) {
+        r[static_cast<std::size_t>(i)] = rhs[static_cast<std::size_t>(i)] - ax[static_cast<std::size_t>(i)];
+    }
+    std::vector<double> p = r;
+    double rs_old = dot(r, r);
+    double residual = std::sqrt(rs_old);
+    bool converged = false;
+    int iter_count = max_iter;
+    for (int iter = 0; iter < max_iter; ++iter) {
+        std::vector<double> ap_vec = matvec(ap, n, p);
+        const double alpha = rs_old / (dot(p, ap_vec) + 1e-30);
+        for (py::ssize_t i = 0; i < n; ++i) {
+            x[static_cast<std::size_t>(i)] += alpha * p[static_cast<std::size_t>(i)];
+            r[static_cast<std::size_t>(i)] -= alpha * ap_vec[static_cast<std::size_t>(i)];
+        }
+        const double rs_new = dot(r, r);
+        residual = std::sqrt(rs_new);
+        if (residual < tol) {
+            converged = true;
+            iter_count = iter + 1;
+            break;
+        }
+        const double beta = rs_new / rs_old;
+        for (py::ssize_t i = 0; i < n; ++i) {
+            p[static_cast<std::size_t>(i)] = r[static_cast<std::size_t>(i)] + beta * p[static_cast<std::size_t>(i)];
+        }
+        rs_old = rs_new;
+    }
+    py::dict info;
+    info["iters"] = iter_count;
+    info["residual"] = residual;
+    info["converged"] = converged;
+    return py::make_tuple(vector_to_numpy(x), info);
+}
+
+static py::tuple arnoldi_native(ArrayD a, ArrayD b, int k_in) {
+    check_square_matrix(a);
+    const py::ssize_t n = a.shape(0);
+    const int k = std::min(k_in, static_cast<int>(n));
+    std::vector<double> q0 = contiguous_vector(b, n, "b");
+    normalize_in_place(q0);
+    auto q_arr = py::array_t<double>({n, static_cast<py::ssize_t>(k + 1)});
+    auto h_arr = py::array_t<double>({static_cast<py::ssize_t>(k + 1), static_cast<py::ssize_t>(k)});
+    double* qp = q_arr.mutable_data();
+    double* hp = h_arr.mutable_data();
+    std::fill(qp, qp + n * (k + 1), 0.0);
+    std::fill(hp, hp + (k + 1) * k, 0.0);
+    for (py::ssize_t row = 0; row < n; ++row) {
+        qp[row * (k + 1)] = q0[static_cast<std::size_t>(row)];
+    }
+
+    const double* ap = a.data();
+    int cols = k + 1;
+    int h_cols = k;
+    for (int j = 0; j < k; ++j) {
+        std::vector<double> qj(static_cast<std::size_t>(n), 0.0);
+        for (py::ssize_t row = 0; row < n; ++row) {
+            qj[static_cast<std::size_t>(row)] = qp[row * cols + j];
+        }
+        std::vector<double> v = matvec(ap, n, qj);
+        for (int i = 0; i <= j; ++i) {
+            std::vector<double> qi(static_cast<std::size_t>(n), 0.0);
+            for (py::ssize_t row = 0; row < n; ++row) {
+                qi[static_cast<std::size_t>(row)] = qp[row * cols + i];
+            }
+            const double hij = dot(qi, v);
+            hp[i * h_cols + j] = hij;
+            for (py::ssize_t row = 0; row < n; ++row) {
+                v[static_cast<std::size_t>(row)] -= hij * qi[static_cast<std::size_t>(row)];
+            }
+        }
+        const double h_next = vec_norm(v);
+        hp[(j + 1) * h_cols + j] = h_next;
+        if (h_next < 1e-14) {
+            const py::ssize_t q_cols = j + 1;
+            auto q_small = py::array_t<double>({n, q_cols});
+            auto h_small = py::array_t<double>({q_cols, q_cols});
+            double* qsp = q_small.mutable_data();
+            double* hsp = h_small.mutable_data();
+            for (py::ssize_t row = 0; row < n; ++row) {
+                for (py::ssize_t col = 0; col < q_cols; ++col) {
+                    qsp[row * q_cols + col] = qp[row * cols + col];
+                }
+            }
+            for (py::ssize_t row = 0; row < q_cols; ++row) {
+                for (py::ssize_t col = 0; col < q_cols; ++col) {
+                    hsp[row * q_cols + col] = hp[row * h_cols + col];
+                }
+            }
+            return py::make_tuple(q_small, h_small);
+        }
+        for (py::ssize_t row = 0; row < n; ++row) {
+            qp[row * cols + j + 1] = v[static_cast<std::size_t>(row)] / h_next;
+        }
+    }
+    return py::make_tuple(q_arr, h_arr);
+}
+
+static py::array_t<double> dtw_matrix_native(ArrayD a, ArrayD b) {
+    if (a.ndim() != 1 || b.ndim() != 1) {
+        throw std::invalid_argument("1D arrays expected");
+    }
+    const py::ssize_t n = a.shape(0);
+    const py::ssize_t m = b.shape(0);
+    auto out = py::array_t<double>({n + 1, m + 1});
+    const double* ap = a.data();
+    const double* bp = b.data();
+    double* dp = out.mutable_data();
+    const double inf = std::numeric_limits<double>::infinity();
+    std::fill(dp, dp + (n + 1) * (m + 1), inf);
+    dp[0] = 0.0;
+    const py::ssize_t cols = m + 1;
+    for (py::ssize_t i = 1; i <= n; ++i) {
+        for (py::ssize_t j = 1; j <= m; ++j) {
+            const double cost = std::abs(ap[i - 1] - bp[j - 1]);
+            const double prev = std::min({dp[(i - 1) * cols + j], dp[i * cols + j - 1], dp[(i - 1) * cols + j - 1]});
+            dp[i * cols + j] = cost + prev;
+        }
+    }
+    return out;
+}
+
+static double dtw_distance_native(ArrayD a, ArrayD b, py::object window) {
+    if (a.ndim() != 1 || b.ndim() != 1) {
+        throw std::invalid_argument("1D arrays expected");
+    }
+    const py::ssize_t n = a.shape(0);
+    const py::ssize_t m = b.shape(0);
+    py::ssize_t w = std::max(n, m);
+    if (!window.is_none()) {
+        w = window.cast<py::ssize_t>();
+    }
+    std::vector<double> d(static_cast<std::size_t>((n + 1) * (m + 1)), std::numeric_limits<double>::infinity());
+    const double* ap = a.data();
+    const double* bp = b.data();
+    const py::ssize_t cols = m + 1;
+    d[0] = 0.0;
+    for (py::ssize_t i = 1; i <= n; ++i) {
+        const py::ssize_t jlo = std::max(static_cast<py::ssize_t>(1), i - w);
+        const py::ssize_t jhi = std::min(m, i + w);
+        for (py::ssize_t j = jlo; j <= jhi; ++j) {
+            const double cost = std::abs(ap[i - 1] - bp[j - 1]);
+            const double prev = std::min({d[static_cast<std::size_t>((i - 1) * cols + j)], d[static_cast<std::size_t>(i * cols + j - 1)], d[static_cast<std::size_t>((i - 1) * cols + j - 1)]});
+            d[static_cast<std::size_t>(i * cols + j)] = cost + prev;
+        }
+    }
+    return d[static_cast<std::size_t>(n * cols + m)];
+}
+
+static py::array_t<long long> dbscan_native(ArrayD points, double eps, int min_samples) {
+    if (points.ndim() != 2) {
+        throw std::invalid_argument("points must have shape (N, D)");
+    }
+    const py::ssize_t n = points.shape(0);
+    const py::ssize_t dim = points.shape(1);
+    const double* xp = points.data();
+    const double eps2 = eps * eps;
+    std::vector<std::vector<int>> neighbors(static_cast<std::size_t>(n));
+    for (py::ssize_t i = 0; i < n; ++i) {
+        for (py::ssize_t j = 0; j < n; ++j) {
+            double dist2 = 0.0;
+            for (py::ssize_t c = 0; c < dim; ++c) {
+                const double diff = xp[i * dim + c] - xp[j * dim + c];
+                dist2 += diff * diff;
+            }
+            if (dist2 <= eps2) {
+                neighbors[static_cast<std::size_t>(i)].push_back(static_cast<int>(j));
+            }
+        }
+    }
+
+    auto labels = py::array_t<long long>({n});
+    long long* lp = labels.mutable_data();
+    std::fill(lp, lp + n, -1);
+    long long cluster = 0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        if (lp[i] != -1) {
+            continue;
+        }
+        if (static_cast<int>(neighbors[static_cast<std::size_t>(i)].size()) < min_samples) {
+            continue;
+        }
+        lp[i] = cluster;
+        std::vector<int> seeds = neighbors[static_cast<std::size_t>(i)];
+        while (!seeds.empty()) {
+            const int j = seeds.back();
+            seeds.pop_back();
+            if (lp[j] == -1) {
+                lp[j] = cluster;
+            } else if (lp[j] != cluster) {
+                continue;
+            }
+            if (static_cast<int>(neighbors[static_cast<std::size_t>(j)].size()) >= min_samples) {
+                for (const int candidate : neighbors[static_cast<std::size_t>(j)]) {
+                    if (lp[candidate] == -1) {
+                        seeds.push_back(candidate);
+                    }
+                }
+            }
+        }
+        cluster += 1;
+    }
+    return labels;
+}
+
+static int cusum_detect_native(ArrayD x, double threshold, double mean, double sigma, double k) {
+    if (x.ndim() != 1) {
+        throw std::invalid_argument("x must have shape (N,)");
+    }
+    const double* xp = x.data();
+    double s_pos = 0.0;
+    double s_neg = 0.0;
+    for (py::ssize_t i = 0; i < x.shape(0); ++i) {
+        const double z = (xp[i] - mean) / sigma;
+        s_pos = std::max(0.0, s_pos + z - k);
+        s_neg = std::min(0.0, s_neg + z + k);
+        if (s_pos > threshold || -s_neg > threshold) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+static py::dict rom_energy_spectrum_native(ArrayD singular_values) {
+    if (singular_values.ndim() != 1) {
+        throw std::invalid_argument("singular_values must have shape (N,)");
+    }
+    const double* sv = singular_values.data();
+    const py::ssize_t n = singular_values.shape(0);
+    double total = 1e-30;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        total += sv[i] * sv[i];
+    }
+    py::dict out;
+    out["total"] = 1.0;
+    const int ks[5] = {1, 3, 5, 10, 20};
+    for (const int k : ks) {
+        if (k <= n) {
+            double partial = 0.0;
+            for (int i = 0; i < k; ++i) {
+                partial += sv[i] * sv[i];
+            }
+            out[py::str(std::string("top") + std::to_string(k))] = partial / total;
+        }
+    }
+    return out;
+}
+
+static py::array_t<double> radial_energy_sum(ArrayD k_values, ArrayD energy, ArrayD edges) {
+    if (k_values.ndim() != 2 || energy.ndim() != 2 || edges.ndim() != 1) {
+        throw std::invalid_argument("K and energy must be 2D, edges must be 1D");
+    }
+    if (k_values.shape(0) != energy.shape(0) || k_values.shape(1) != energy.shape(1)) {
+        throw std::invalid_argument("K and energy shapes must match");
+    }
+    const py::ssize_t bins = edges.shape(0) - 1;
+    auto out = py::array_t<double>({bins});
+    const double* kp = k_values.data();
+    const double* ep = energy.data();
+    const double* edp = edges.data();
+    double* op = out.mutable_data();
+    std::fill(op, op + bins, 0.0);
+    const py::ssize_t total = k_values.shape(0) * k_values.shape(1);
+    for (py::ssize_t idx = 0; idx < total; ++idx) {
+        const double kval = kp[idx];
+        const double eval = ep[idx];
+        for (py::ssize_t bin = 0; bin < bins; ++bin) {
+            if (kval >= edp[bin] && kval < edp[bin + 1]) {
+                op[bin] += eval;
+                break;
+            }
+        }
+    }
+    return out;
+}
+
+static py::list dominant_frequencies_from_power(ArrayD freqs, ArrayD power, int top_k) {
+    if (freqs.ndim() != 1 || power.ndim() != 1 || freqs.shape(0) != power.shape(0)) {
+        throw std::invalid_argument("freqs and power must be matching 1D arrays");
+    }
+    const py::ssize_t n = freqs.shape(0);
+    const double* fp = freqs.data();
+    const double* pp = power.data();
+    std::vector<py::ssize_t> idx(static_cast<std::size_t>(n));
+    for (py::ssize_t i = 0; i < n; ++i) {
+        idx[static_cast<std::size_t>(i)] = i;
+    }
+    std::sort(idx.begin(), idx.end(), [pp](py::ssize_t lhs, py::ssize_t rhs) {
+        return pp[lhs] > pp[rhs];
+    });
+    const py::ssize_t count = std::min(static_cast<py::ssize_t>(top_k), n);
+    py::list out;
+    for (py::ssize_t i = 0; i < count; ++i) {
+        const py::ssize_t j = idx[static_cast<std::size_t>(i)];
+        out.append(py::make_tuple(fp[j], pp[j]));
+    }
+    return out;
+}
+
+static py::array_t<double> deposit_cic_1d(ArrayD x, ArrayD weights, int n_grid, double dx, double x0) {
+    if (x.ndim() != 1 || weights.ndim() != 1 || x.shape(0) != weights.shape(0)) {
+        throw std::invalid_argument("x and weights must be matching 1D arrays");
+    }
+    if (n_grid < 0) {
+        throw std::invalid_argument("n_grid must be non-negative");
+    }
+    if (dx == 0.0) {
+        throw std::invalid_argument("dx must be non-zero");
+    }
+    auto out = py::array_t<double>({static_cast<py::ssize_t>(n_grid)});
+    double* op = out.mutable_data();
+    std::fill(op, op + n_grid, 0.0);
+
+    const double* xp = x.data();
+    const double* wp = weights.data();
+    const py::ssize_t n = x.shape(0);
+    for (py::ssize_t k = 0; k < n; ++k) {
+        const double pos = (xp[k] - x0) / dx;
+        const auto i = static_cast<py::ssize_t>(std::floor(pos));
+        const double f = pos - static_cast<double>(i);
+        if (0 <= i && i < n_grid) {
+            op[i] += wp[k] * (1.0 - f);
+        }
+        if (0 <= i + 1 && i + 1 < n_grid) {
+            op[i + 1] += wp[k] * f;
+        }
+    }
+    return out;
+}
+
+static inline double cubic_spline_1d_value(double r, double h) {
+    const double q = std::abs(r) / h;
+    const double sigma = 2.0 / 3.0 / h;
+    if (q < 1.0) {
+        return sigma * (1.0 - 1.5 * q * q + 0.75 * q * q * q);
+    }
+    if (q < 2.0) {
+        const double d = 2.0 - q;
+        return sigma * 0.25 * d * d * d;
+    }
+    return 0.0;
+}
+
+static py::array_t<double> sph_density_1d(ArrayD positions, ArrayD masses, double h) {
+    if (positions.ndim() != 1 || masses.ndim() != 1 || positions.shape(0) != masses.shape(0)) {
+        throw std::invalid_argument("positions and masses must be matching 1D arrays");
+    }
+    if (h == 0.0) {
+        throw std::invalid_argument("h must be non-zero");
+    }
+    const py::ssize_t n = positions.shape(0);
+    auto out = py::array_t<double>({n});
+    const double* pp = positions.data();
+    const double* mp = masses.data();
+    double* op = out.mutable_data();
+    for (py::ssize_t i = 0; i < n; ++i) {
+        double rho = 0.0;
+        for (py::ssize_t j = 0; j < n; ++j) {
+            rho += mp[j] * cubic_spline_1d_value(pp[j] - pp[i], h);
+        }
+        op[i] = rho;
+    }
+    return out;
+}
+
+static double reaction_rate_native(double k, py::sequence concentrations, py::sequence orders) {
+    const auto n = py::len(concentrations);
+    if (py::len(orders) != n) {
+        throw py::value_error("zip() argument 2 is shorter or longer than argument 1");
+    }
+    double rate = k;
+    for (py::size_t i = 0; i < n; ++i) {
+        const double c = py::cast<double>(concentrations[i]);
+        const double order = py::cast<double>(orders[i]);
+        rate *= std::pow(std::max(c, 0.0), order);
+    }
+    return rate;
+}
+
+static py::array_t<double> vof_step_1d(ArrayD alpha, ArrayD u, double dt, double dx) {
+    if (alpha.ndim() != 1 || u.ndim() != 1 || alpha.shape(0) != u.shape(0)) {
+        throw std::invalid_argument("alpha and u must be matching 1D arrays");
+    }
+    if (dx == 0.0) {
+        throw std::invalid_argument("dx must be non-zero");
+    }
+    const py::ssize_t n = alpha.shape(0);
+    auto out = py::array_t<double>({n});
+    const double* ap = alpha.data();
+    const double* up = u.data();
+    double* op = out.mutable_data();
+    for (py::ssize_t i = 0; i < n; ++i) {
+        op[i] = ap[i];
+    }
+    const double c = dt / dx;
+    for (py::ssize_t i = 1; i < n - 1; ++i) {
+        if (up[i] >= 0.0) {
+            op[i] = ap[i] - c * up[i] * (ap[i] - ap[i - 1]);
+        } else {
+            op[i] = ap[i] - c * up[i] * (ap[i + 1] - ap[i]);
+        }
+    }
+    for (py::ssize_t i = 0; i < n; ++i) {
+        op[i] = std::min(1.0, std::max(0.0, op[i]));
+    }
+    return out;
+}
+
+static py::array_t<double> levelset_advect_step_1d(ArrayD phi, ArrayD u, double dt, double dx) {
+    if (phi.ndim() != 1 || u.ndim() != 1 || phi.shape(0) != u.shape(0)) {
+        throw std::invalid_argument("phi and u must be matching 1D arrays");
+    }
+    if (dx == 0.0) {
+        throw std::invalid_argument("dx must be non-zero");
+    }
+    const py::ssize_t n = phi.shape(0);
+    auto out = py::array_t<double>({n});
+    const double* pp = phi.data();
+    const double* up = u.data();
+    double* op = out.mutable_data();
+    for (py::ssize_t i = 0; i < n; ++i) {
+        op[i] = pp[i];
+    }
+    const double c = dt / dx;
+    for (py::ssize_t i = 1; i < n - 1; ++i) {
+        if (up[i] >= 0.0) {
+            op[i] = pp[i] - c * up[i] * (pp[i] - pp[i - 1]);
+        } else {
+            op[i] = pp[i] - c * up[i] * (pp[i + 1] - pp[i]);
+        }
+    }
+    return out;
+}
+
+static inline double jensen_wake_velocity(double v0, double x, double r, double a, double k) {
+    if (x <= 0.0) {
+        return v0;
+    }
+    const double denom = 1.0 + k * x / r;
+    const double deficit = 2.0 * a / (denom * denom);
+    return v0 * (1.0 - deficit);
+}
+
+static py::list jensen_farm_velocity(double v0, py::sequence distances, double r, double a, double k) {
+    py::list out;
+    out.append(v0);
+    double current = v0;
+    const auto n = py::len(distances);
+    for (py::size_t i = 0; i < n; ++i) {
+        current = jensen_wake_velocity(current, py::cast<double>(distances[i]), r, a, k);
+        out.append(current);
+    }
+    return out;
+}
+
+static py::array_t<double> conservative_remap_1d(ArrayD x_old_edges, ArrayD u_old, ArrayD x_new_edges) {
+    if (x_old_edges.ndim() != 1 || u_old.ndim() != 1 || x_new_edges.ndim() != 1) {
+        throw std::invalid_argument("x_old_edges, u_old, and x_new_edges must be 1D arrays");
+    }
+    if (x_old_edges.shape(0) != u_old.shape(0) + 1) {
+        throw std::invalid_argument("u_old length must be one less than x_old_edges length");
+    }
+    const py::ssize_t n_new = x_new_edges.shape(0) - 1;
+    auto out = py::array_t<double>({n_new});
+    const double* xo = x_old_edges.data();
+    const double* uo = u_old.data();
+    const double* xn = x_new_edges.data();
+    double* op = out.mutable_data();
+    const py::ssize_t n_old = u_old.shape(0);
+    for (py::ssize_t i = 0; i < n_new; ++i) {
+        const double a = xn[i];
+        const double b = xn[i + 1];
+        double total = 0.0;
+        for (py::ssize_t j = 0; j < n_old; ++j) {
+            const double ov_a = std::max(a, xo[j]);
+            const double ov_b = std::min(b, xo[j + 1]);
+            if (ov_b > ov_a) {
+                total += (ov_b - ov_a) * uo[j];
+            }
+        }
+        op[i] = total / (b - a);
+    }
+    return out;
+}
+
+static py::tuple fd_heat_1d_evolve(ArrayD u0, int n_steps, double coef, double dt) {
+    if (u0.ndim() != 1) {
+        throw std::invalid_argument("u0 must be a 1D array");
+    }
+    if (n_steps < 0) {
+        throw std::invalid_argument("n_steps must be non-negative");
+    }
+    const py::ssize_t nx = u0.shape(0);
+    const py::ssize_t nt = static_cast<py::ssize_t>(n_steps) + 1;
+    auto t = py::array_t<double>({nt});
+    auto U = py::array_t<double>({nx, nt});
+    double* tp = t.mutable_data();
+    double* Up = U.mutable_data();
+    std::vector<double> u(static_cast<std::size_t>(nx));
+    std::vector<double> u_new(static_cast<std::size_t>(nx));
+    const double* u0p = u0.data();
+    for (py::ssize_t i = 0; i < nx; ++i) {
+        u[static_cast<std::size_t>(i)] = u0p[i];
+        Up[i * nt] = u0p[i];
+    }
+    tp[0] = 0.0;
+    for (int k = 0; k < n_steps; ++k) {
+        u_new = u;
+        for (py::ssize_t i = 1; i < nx - 1; ++i) {
+            u_new[static_cast<std::size_t>(i)] = u[static_cast<std::size_t>(i)]
+                + coef * (u[static_cast<std::size_t>(i + 1)] - 2.0 * u[static_cast<std::size_t>(i)] + u[static_cast<std::size_t>(i - 1)]);
+        }
+        if (nx > 0) {
+            u_new[0] = 0.0;
+            u_new[static_cast<std::size_t>(nx - 1)] = 0.0;
+        }
+        u.swap(u_new);
+        const py::ssize_t col = static_cast<py::ssize_t>(k) + 1;
+        for (py::ssize_t i = 0; i < nx; ++i) {
+            Up[i * nt + col] = u[static_cast<std::size_t>(i)];
+        }
+        tp[col] = static_cast<double>(k + 1) * dt;
+    }
+    return py::make_tuple(t, U);
+}
+
+static py::tuple conservation_1d_linear_native(
+    int n_cells, double L, double T, const std::string& scheme, double dt_factor, double c_max
+) {
+    if (n_cells <= 0) {
+        throw std::invalid_argument("n_cells must be positive");
+    }
+    if (c_max == 0.0) {
+        throw std::invalid_argument("c_max must be non-zero");
+    }
+    const double dx = L / static_cast<double>(n_cells);
+    double dt = dt_factor * dx / c_max;
+    const int n_steps = static_cast<int>(std::ceil(T / dt));
+    if (n_steps <= 0) {
+        throw std::invalid_argument("n_steps must be positive");
+    }
+    dt = T / static_cast<double>(n_steps);
+
+    const py::ssize_t nx = static_cast<py::ssize_t>(n_cells);
+    const py::ssize_t nt = static_cast<py::ssize_t>(n_steps) + 1;
+    auto x = py::array_t<double>({nx});
+    auto t = py::array_t<double>({nt});
+    auto U = py::array_t<double>({nx, nt});
+    double* xp = x.mutable_data();
+    double* tp = t.mutable_data();
+    double* Up = U.mutable_data();
+    std::vector<double> u(static_cast<std::size_t>(n_cells));
+    std::vector<double> u_new(static_cast<std::size_t>(n_cells));
+    const double pi = std::acos(-1.0);
+
+    for (int i = 0; i < n_cells; ++i) {
+        const double xi = 0.5 * dx + static_cast<double>(i) * dx;
+        xp[i] = xi;
+        u[static_cast<std::size_t>(i)] = std::sin(2.0 * pi * xi / L);
+        Up[static_cast<py::ssize_t>(i) * nt] = u[static_cast<std::size_t>(i)];
+    }
+    tp[0] = 0.0;
+
+    for (int k = 0; k < n_steps; ++k) {
+        for (int i = 0; i < n_cells; ++i) {
+            const int il = (i + n_cells - 1) % n_cells;
+            const int ir = (i + 1) % n_cells;
+            const double ui = u[static_cast<std::size_t>(i)];
+            const double u_l = u[static_cast<std::size_t>(il)];
+            const double u_r = u[static_cast<std::size_t>(ir)];
+            double flux_right = ui;
+            double flux_left = u_l;
+            if (scheme == "lxf") {
+                flux_right = 0.5 * (ui + u_r) - 0.5 * (dx / dt) * (u_r - ui);
+                flux_left = 0.5 * (u_l + ui) - 0.5 * (dx / dt) * (ui - u_l);
+            }
+            u_new[static_cast<std::size_t>(i)] = ui - dt / dx * (flux_right - flux_left);
+        }
+        u.swap(u_new);
+        const py::ssize_t col = static_cast<py::ssize_t>(k) + 1;
+        for (int i = 0; i < n_cells; ++i) {
+            Up[static_cast<py::ssize_t>(i) * nt + col] = u[static_cast<std::size_t>(i)];
+        }
+        tp[col] = static_cast<double>(k + 1) * dt;
+    }
+    return py::make_tuple(x, t, U);
+}
+
+static inline double minmod_scalar(double a, double b) {
+    const double sa = (a > 0.0) - (a < 0.0);
+    const double sb = (b > 0.0) - (b < 0.0);
+    return 0.5 * (sa + sb) * std::min(std::abs(a), std::abs(b));
+}
+
+static py::tuple fvm_upwind_1d_native(ArrayD u0, double c, double L, double T, double cfl) {
+    if (u0.ndim() != 1) {
+        throw std::invalid_argument("u0 must be a 1D array");
+    }
+    if (c == 0.0) {
+        throw std::invalid_argument("c must be non-zero");
+    }
+    const py::ssize_t n = u0.shape(0);
+    const double dx = L / static_cast<double>(n);
+    const double dt = cfl * dx / std::abs(c);
+    const int n_steps = static_cast<int>(T / dt) + 1;
+    auto times = py::array_t<double>({static_cast<py::ssize_t>(n_steps)});
+    auto U = py::array_t<double>({static_cast<py::ssize_t>(n_steps), n});
+    double* tp = times.mutable_data();
+    double* Up = U.mutable_data();
+    const double* u0p = u0.data();
+    std::vector<double> u(static_cast<std::size_t>(n));
+    std::vector<double> next(static_cast<std::size_t>(n));
+
+    if (n_steps == 1) {
+        tp[0] = dt;
+    } else {
+        const double step = (T - dt) / static_cast<double>(n_steps - 1);
+        for (int k = 0; k < n_steps; ++k) {
+            tp[k] = dt + static_cast<double>(k) * step;
+        }
+    }
+    for (py::ssize_t i = 0; i < n; ++i) {
+        u[static_cast<std::size_t>(i)] = u0p[i];
+    }
+    for (int k = 0; k < n_steps; ++k) {
+        for (py::ssize_t i = 0; i < n; ++i) {
+            const py::ssize_t im = (i + n - 1) % n;
+            const py::ssize_t ip = (i + 1) % n;
+            const double ui = u[static_cast<std::size_t>(i)];
+            if (c > 0.0) {
+                next[static_cast<std::size_t>(i)] = ui - cfl * (ui - u[static_cast<std::size_t>(im)]);
+            } else {
+                next[static_cast<std::size_t>(i)] = ui - cfl * (u[static_cast<std::size_t>(ip)] - ui);
+            }
+        }
+        u.swap(next);
+        const py::ssize_t row = static_cast<py::ssize_t>(k) * n;
+        for (py::ssize_t i = 0; i < n; ++i) {
+            Up[row + i] = u[static_cast<std::size_t>(i)];
+        }
+    }
+    return py::make_tuple(times, U);
+}
+
+static py::tuple fvm_musclhancock_1d_native(ArrayD u0, double c, double L, double T, double cfl) {
+    if (u0.ndim() != 1) {
+        throw std::invalid_argument("u0 must be a 1D array");
+    }
+    if (c == 0.0) {
+        throw std::invalid_argument("c must be non-zero");
+    }
+    const py::ssize_t n = u0.shape(0);
+    const double dx = L / static_cast<double>(n);
+    const double dt = cfl * dx / std::abs(c);
+    const int n_steps = static_cast<int>(T / dt) + 1;
+    auto times = py::array_t<double>({static_cast<py::ssize_t>(n_steps)});
+    auto U = py::array_t<double>({static_cast<py::ssize_t>(n_steps), n});
+    double* tp = times.mutable_data();
+    double* Up = U.mutable_data();
+    const double* u0p = u0.data();
+    std::vector<double> u(static_cast<std::size_t>(n));
+    std::vector<double> slope(static_cast<std::size_t>(n));
+    std::vector<double> flux(static_cast<std::size_t>(n));
+    std::vector<double> next(static_cast<std::size_t>(n));
+
+    if (n_steps == 1) {
+        tp[0] = dt;
+    } else {
+        const double step = (T - dt) / static_cast<double>(n_steps - 1);
+        for (int k = 0; k < n_steps; ++k) {
+            tp[k] = dt + static_cast<double>(k) * step;
+        }
+    }
+    for (py::ssize_t i = 0; i < n; ++i) {
+        u[static_cast<std::size_t>(i)] = u0p[i];
+    }
+    for (int k = 0; k < n_steps; ++k) {
+        for (py::ssize_t i = 0; i < n; ++i) {
+            const py::ssize_t im = (i + n - 1) % n;
+            const py::ssize_t ip = (i + 1) % n;
+            const double dup = u[static_cast<std::size_t>(ip)] - u[static_cast<std::size_t>(i)];
+            const double dum = u[static_cast<std::size_t>(i)] - u[static_cast<std::size_t>(im)];
+            slope[static_cast<std::size_t>(i)] = minmod_scalar(dum, dup);
+        }
+        for (py::ssize_t i = 0; i < n; ++i) {
+            const py::ssize_t ip = (i + 1) % n;
+            if (c > 0.0) {
+                flux[static_cast<std::size_t>(i)] = c * (u[static_cast<std::size_t>(i)] + 0.5 * slope[static_cast<std::size_t>(i)]);
+            } else {
+                flux[static_cast<std::size_t>(i)] = c * (u[static_cast<std::size_t>(ip)] - 0.5 * slope[static_cast<std::size_t>(ip)]);
+            }
+        }
+        for (py::ssize_t i = 0; i < n; ++i) {
+            const py::ssize_t im = (i + n - 1) % n;
+            next[static_cast<std::size_t>(i)] = u[static_cast<std::size_t>(i)]
+                - (dt / dx) * (flux[static_cast<std::size_t>(i)] - flux[static_cast<std::size_t>(im)]);
+        }
+        u.swap(next);
+        const py::ssize_t row = static_cast<py::ssize_t>(k) * n;
+        for (py::ssize_t i = 0; i < n; ++i) {
+            Up[row + i] = u[static_cast<std::size_t>(i)];
+        }
+    }
+    return py::make_tuple(times, U);
+}
+
+static py::tuple fd_burgers_1d_evolve(ArrayD u0, int n_steps, double dt, double dx, double nu) {
+    if (u0.ndim() != 1) {
+        throw std::invalid_argument("u0 must be a 1D array");
+    }
+    if (n_steps < 0) {
+        throw std::invalid_argument("n_steps must be non-negative");
+    }
+    if (dx == 0.0) {
+        throw std::invalid_argument("dx must be non-zero");
+    }
+    const py::ssize_t nx = u0.shape(0);
+    const py::ssize_t nt = static_cast<py::ssize_t>(n_steps) + 1;
+    auto t = py::array_t<double>({nt});
+    auto U = py::array_t<double>({nx, nt});
+    double* tp = t.mutable_data();
+    double* Up = U.mutable_data();
+    std::vector<double> u(static_cast<std::size_t>(nx));
+    std::vector<double> u_new(static_cast<std::size_t>(nx));
+    const double* u0p = u0.data();
+    for (py::ssize_t i = 0; i < nx; ++i) {
+        u[static_cast<std::size_t>(i)] = u0p[i];
+        Up[i * nt] = u0p[i];
+    }
+    tp[0] = 0.0;
+    for (int k = 0; k < n_steps; ++k) {
+        u_new = u;
+        for (py::ssize_t i = 1; i < nx - 1; ++i) {
+            const double du = (u[static_cast<std::size_t>(i + 1)] - u[static_cast<std::size_t>(i - 1)]) / (2.0 * dx);
+            const double d2u = (
+                u[static_cast<std::size_t>(i + 1)] - 2.0 * u[static_cast<std::size_t>(i)] + u[static_cast<std::size_t>(i - 1)]
+            ) / (dx * dx);
+            u_new[static_cast<std::size_t>(i)] = u[static_cast<std::size_t>(i)] + dt * (-u[static_cast<std::size_t>(i)] * du + nu * d2u);
+        }
+        if (nx > 0) {
+            u_new[0] = 0.0;
+            u_new[static_cast<std::size_t>(nx - 1)] = 0.0;
+        }
+        u.swap(u_new);
+        const py::ssize_t col = static_cast<py::ssize_t>(k) + 1;
+        for (py::ssize_t i = 0; i < nx; ++i) {
+            Up[i * nt + col] = u[static_cast<std::size_t>(i)];
+        }
+        tp[col] = static_cast<double>(k + 1) * dt;
+    }
+    return py::make_tuple(t, U);
+}
+
+static py::tuple poisson_2d_jacobi_native(Array2D f, double dx, double dy, int max_iter, double tol) {
+    if (dx == 0.0 || dy == 0.0) {
+        throw std::invalid_argument("dx and dy must be non-zero");
+    }
+    if (max_iter < 0) {
+        throw std::invalid_argument("max_iter must be non-negative");
+    }
+    const py::ssize_t nx = f.shape(0);
+    const py::ssize_t ny = f.shape(1);
+    auto out = py::array_t<double>({nx, ny});
+    double* op = out.mutable_data();
+    const double* fp = f.data();
+    const py::ssize_t total = nx * ny;
+    std::vector<double> p(static_cast<std::size_t>(total), 0.0);
+    std::vector<double> p_new(static_cast<std::size_t>(total), 0.0);
+    const double inv_dx2 = 1.0 / (dx * dx);
+    const double inv_dy2 = 1.0 / (dy * dy);
+    const double denom = 2.0 * (inv_dx2 + inv_dy2);
+    double err = 0.0;
+    for (int it = 0; it < max_iter; ++it) {
+        p_new = p;
+        for (py::ssize_t i = 1; i < nx - 1; ++i) {
+            for (py::ssize_t j = 1; j < ny - 1; ++j) {
+                const py::ssize_t idx = i * ny + j;
+                p_new[static_cast<std::size_t>(idx)] = (
+                    (p[static_cast<std::size_t>((i + 1) * ny + j)] + p[static_cast<std::size_t>((i - 1) * ny + j)]) * inv_dx2
+                    + (p[static_cast<std::size_t>(i * ny + j + 1)] + p[static_cast<std::size_t>(i * ny + j - 1)]) * inv_dy2
+                    - fp[idx]
+                ) / denom;
+            }
+        }
+        for (py::ssize_t i = 0; i < nx; ++i) {
+            p_new[static_cast<std::size_t>(i * ny)] = 0.0;
+            p_new[static_cast<std::size_t>(i * ny + ny - 1)] = 0.0;
+        }
+        for (py::ssize_t j = 0; j < ny; ++j) {
+            p_new[static_cast<std::size_t>(j)] = 0.0;
+            p_new[static_cast<std::size_t>((nx - 1) * ny + j)] = 0.0;
+        }
+        err = 0.0;
+        for (py::ssize_t idx = 0; idx < total; ++idx) {
+            err = std::max(err, std::abs(p_new[static_cast<std::size_t>(idx)] - p[static_cast<std::size_t>(idx)]));
+        }
+        p.swap(p_new);
+        if (err < tol) {
+            for (py::ssize_t idx = 0; idx < total; ++idx) {
+                op[idx] = p[static_cast<std::size_t>(idx)];
+            }
+            py::dict info;
+            info["iters"] = it + 1;
+            info["err"] = err;
+            info["converged"] = true;
+            return py::make_tuple(out, info);
+        }
+    }
+    for (py::ssize_t idx = 0; idx < total; ++idx) {
+        op[idx] = p[static_cast<std::size_t>(idx)];
+    }
+    py::dict info;
+    info["iters"] = max_iter;
+    info["err"] = err;
+    info["converged"] = false;
+    return py::make_tuple(out, info);
+}
+
+static py::array_t<double> levelset_reinit_1d(ArrayD phi, double dx, int n_iter) {
+    if (phi.ndim() != 1) {
+        throw std::invalid_argument("phi must be a 1D array");
+    }
+    if (dx == 0.0) {
+        throw std::invalid_argument("dx must be non-zero");
+    }
+    if (n_iter < 0) {
+        throw std::invalid_argument("n_iter must be non-negative");
+    }
+    const py::ssize_t n = phi.shape(0);
+    const double* phip = phi.data();
+    std::vector<double> p(static_cast<std::size_t>(n));
+    std::vector<double> p_new(static_cast<std::size_t>(n));
+    std::vector<double> s0(static_cast<std::size_t>(n));
+    for (py::ssize_t i = 0; i < n; ++i) {
+        p[static_cast<std::size_t>(i)] = phip[i];
+        s0[static_cast<std::size_t>(i)] = (phip[i] > 0.0) ? 1.0 : ((phip[i] < 0.0) ? -1.0 : 0.0);
+    }
+    const double dt = 0.3 * dx;
+    for (int iter = 0; iter < n_iter; ++iter) {
+        for (py::ssize_t i = 0; i < n; ++i) {
+            const double dxp = (i == n - 1) ? 0.0 : (p[static_cast<std::size_t>(i + 1)] - p[static_cast<std::size_t>(i)]) / dx;
+            const double dxm = (i == 0) ? 0.0 : (p[static_cast<std::size_t>(i)] - p[static_cast<std::size_t>(i - 1)]) / dx;
+            double gp;
+            if (s0[static_cast<std::size_t>(i)] > 0.0) {
+                const double a = std::max(dxm, 0.0);
+                const double b = std::min(dxp, 0.0);
+                gp = std::max(a * a, b * b);
+            } else {
+                const double a = std::max(dxp, 0.0);
+                const double b = std::min(dxm, 0.0);
+                gp = std::max(a * a, b * b);
+            }
+            const double grad = std::sqrt(gp);
+            p_new[static_cast<std::size_t>(i)] = p[static_cast<std::size_t>(i)] - dt * s0[static_cast<std::size_t>(i)] * (grad - 1.0);
+        }
+        p.swap(p_new);
+    }
+    auto out = py::array_t<double>({n});
+    double* op = out.mutable_data();
+    for (py::ssize_t i = 0; i < n; ++i) {
+        op[i] = p[static_cast<std::size_t>(i)];
+    }
+    return out;
+}
+
+static py::array_t<double> fast_march_1d(ArrayD phi, double dx) {
+    if (phi.ndim() != 1) {
+        throw std::invalid_argument("phi must be a 1D array");
+    }
+    const py::ssize_t n = phi.shape(0);
+    const double* pp = phi.data();
+    std::vector<double> iface_locs;
+    iface_locs.reserve(static_cast<std::size_t>(n));
+    for (py::ssize_t i = 0; i < n - 1; ++i) {
+        if (pp[i] == 0.0) {
+            iface_locs.push_back(static_cast<double>(i) * dx);
+        } else if (pp[i] * pp[i + 1] < 0.0) {
+            const double t = pp[i] / (pp[i] - pp[i + 1]);
+            iface_locs.push_back((static_cast<double>(i) + t) * dx);
+        }
+    }
+    auto out = py::array_t<double>({n});
+    double* op = out.mutable_data();
+    if (iface_locs.empty()) {
+        for (py::ssize_t i = 0; i < n; ++i) {
+            op[i] = pp[i];
+        }
+        return out;
+    }
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const double x = static_cast<double>(i) * dx;
+        double d = std::numeric_limits<double>::infinity();
+        for (const double loc : iface_locs) {
+            d = std::min(d, std::abs(x - loc));
+        }
+        const double sign = (pp[i] > 0.0) ? 1.0 : ((pp[i] < 0.0) ? -1.0 : 0.0);
+        op[i] = d * sign;
+    }
+    return out;
+}
+
+static py::tuple mesh_refine_by_gradient(ArrayD x_in, ArrayD f_in, double threshold, int max_passes) {
+    if (x_in.ndim() != 1 || f_in.ndim() != 1 || x_in.shape(0) != f_in.shape(0)) {
+        throw std::invalid_argument("x and f must be matching 1D arrays");
+    }
+    if (max_passes < 0) {
+        throw std::invalid_argument("max_passes must be non-negative");
+    }
+    std::vector<double> x(x_in.data(), x_in.data() + x_in.shape(0));
+    std::vector<double> f(f_in.data(), f_in.data() + f_in.shape(0));
+    for (int pass = 0; pass < max_passes; ++pass) {
+        const std::size_t n = x.size();
+        bool any = false;
+        std::vector<char> mask(n > 0 ? n - 1 : 0, 0);
+        for (std::size_t i = 0; i + 1 < n; ++i) {
+            if (std::abs(f[i + 1] - f[i]) > threshold) {
+                mask[i] = 1;
+                any = true;
+            }
+        }
+        if (!any) {
+            break;
+        }
+        std::vector<double> new_x;
+        std::vector<double> new_f;
+        new_x.reserve(n * 2);
+        new_f.reserve(n * 2);
+        for (std::size_t i = 0; i + 1 < n; ++i) {
+            new_x.push_back(x[i]);
+            new_f.push_back(f[i]);
+            if (mask[i]) {
+                new_x.push_back(0.5 * (x[i] + x[i + 1]));
+                new_f.push_back(0.5 * (f[i] + f[i + 1]));
+            }
+        }
+        if (n > 0) {
+            new_x.push_back(x.back());
+            new_f.push_back(f.back());
+        }
+        x.swap(new_x);
+        f.swap(new_f);
+    }
+    auto x_out = py::array_t<double>({static_cast<py::ssize_t>(x.size())});
+    auto f_out = py::array_t<double>({static_cast<py::ssize_t>(f.size())});
+    std::copy(x.begin(), x.end(), x_out.mutable_data());
+    std::copy(f.begin(), f.end(), f_out.mutable_data());
+    return py::make_tuple(x_out, f_out);
+}
+
+static py::tuple mesh_coarsen_by_tolerance(ArrayD x, ArrayD f, double tol) {
+    if (x.ndim() != 1 || f.ndim() != 1 || x.shape(0) != f.shape(0)) {
+        throw std::invalid_argument("x and f must be matching 1D arrays");
+    }
+    const py::ssize_t n = x.shape(0);
+    const double* xp = x.data();
+    const double* fp = f.data();
+    std::vector<double> x_keep;
+    std::vector<double> f_keep;
+    x_keep.reserve(static_cast<std::size_t>(n));
+    f_keep.reserve(static_cast<std::size_t>(n));
+    for (py::ssize_t i = 0; i < n; ++i) {
+        bool keep = (i == 0 || i == n - 1);
+        if (!keep) {
+            const double d2 = fp[i - 1] - 2.0 * fp[i] + fp[i + 1];
+            keep = std::abs(d2) >= tol;
+        }
+        if (keep) {
+            x_keep.push_back(xp[i]);
+            f_keep.push_back(fp[i]);
+        }
+    }
+    auto x_out = py::array_t<double>({static_cast<py::ssize_t>(x_keep.size())});
+    auto f_out = py::array_t<double>({static_cast<py::ssize_t>(f_keep.size())});
+    std::copy(x_keep.begin(), x_keep.end(), x_out.mutable_data());
+    std::copy(f_keep.begin(), f_keep.end(), f_out.mutable_data());
+    return py::make_tuple(x_out, f_out);
+}
+
+static py::array_t<double> laplacian_smooth_native(ArrayD verts, ArrayI edges, int n_iter, double alpha, ArrayI fixed) {
+    if (verts.ndim() != 2) {
+        throw std::invalid_argument("verts must be a 2D array");
+    }
+    if (edges.ndim() != 2 || edges.shape(1) != 2) {
+        throw std::invalid_argument("edges must be a 2D array with shape (n_edges, 2)");
+    }
+    if (fixed.ndim() != 1) {
+        throw std::invalid_argument("fixed must be a 1D array");
+    }
+    if (n_iter < 0) {
+        throw std::invalid_argument("n_iter must be non-negative");
+    }
+    const py::ssize_t n = verts.shape(0);
+    const py::ssize_t dim = verts.shape(1);
+    const py::ssize_t n_edges = edges.shape(0);
+    std::vector<std::vector<py::ssize_t>> adj(static_cast<std::size_t>(n));
+    const long long* ep = edges.data();
+    for (py::ssize_t e = 0; e < n_edges; ++e) {
+        const auto a = static_cast<py::ssize_t>(ep[2 * e]);
+        const auto b = static_cast<py::ssize_t>(ep[2 * e + 1]);
+        if (a < 0 || b < 0 || a >= n || b >= n) {
+            throw std::out_of_range("edge index out of range");
+        }
+        adj[static_cast<std::size_t>(a)].push_back(b);
+        adj[static_cast<std::size_t>(b)].push_back(a);
+    }
+    std::vector<char> is_fixed(static_cast<std::size_t>(n), 0);
+    const long long* fp = fixed.data();
+    for (py::ssize_t i = 0; i < fixed.shape(0); ++i) {
+        const auto idx = static_cast<py::ssize_t>(fp[i]);
+        if (idx >= 0 && idx < n) {
+            is_fixed[static_cast<std::size_t>(idx)] = 1;
+        }
+    }
+    const py::ssize_t total = n * dim;
+    std::vector<double> v(verts.data(), verts.data() + total);
+    std::vector<double> v_new(static_cast<std::size_t>(total));
+    for (int iter = 0; iter < n_iter; ++iter) {
+        v_new = v;
+        for (py::ssize_t i = 0; i < n; ++i) {
+            const auto& neighbors = adj[static_cast<std::size_t>(i)];
+            if (is_fixed[static_cast<std::size_t>(i)] || neighbors.empty()) {
+                continue;
+            }
+            for (py::ssize_t d = 0; d < dim; ++d) {
+                double mean = 0.0;
+                for (const py::ssize_t j : neighbors) {
+                    mean += v[static_cast<std::size_t>(j * dim + d)];
+                }
+                mean /= static_cast<double>(neighbors.size());
+                const py::ssize_t idx = i * dim + d;
+                v_new[static_cast<std::size_t>(idx)] = (1.0 - alpha) * v[static_cast<std::size_t>(idx)] + alpha * mean;
+            }
+        }
+        v.swap(v_new);
+    }
+    auto out = py::array_t<double>({n, dim});
+    std::copy(v.begin(), v.end(), out.mutable_data());
+    return out;
+}
+
+static inline double dist2d(const double* p, py::ssize_t dim, py::ssize_t a, py::ssize_t b) {
+    const double dx = p[a * dim] - p[b * dim];
+    const double dy = p[a * dim + 1] - p[b * dim + 1];
+    return std::sqrt(dx * dx + dy * dy);
+}
+
+static inline double triangle_aspect_from_points(const double* p, py::ssize_t dim, py::ssize_t ia, py::ssize_t ib, py::ssize_t ic) {
+    const double a = dist2d(p, dim, ib, ic);
+    const double b = dist2d(p, dim, ia, ic);
+    const double c = dist2d(p, dim, ia, ib);
+    const double s = 0.5 * (a + b + c);
+    const double area_arg = std::max(s * (s - a) * (s - b) * (s - c), 1e-30);
+    const double area = std::max(std::sqrt(area_arg), 1e-30);
+    const double R = (a * b * c) / (4.0 * area);
+    const double r = area / s;
+    return R / (2.0 * r);
+}
+
+static inline double triangle_angle_deg(const double* p, py::ssize_t dim, py::ssize_t ip, py::ssize_t iq, py::ssize_t ir) {
+    const double ux = p[iq * dim] - p[ip * dim];
+    const double uy = p[iq * dim + 1] - p[ip * dim + 1];
+    const double vx = p[ir * dim] - p[ip * dim];
+    const double vy = p[ir * dim + 1] - p[ip * dim + 1];
+    const double un = std::sqrt(ux * ux + uy * uy);
+    const double vn = std::sqrt(vx * vx + vy * vy);
+    double cosv = (ux * vx + uy * vy) / (un * vn + 1e-30);
+    cosv = std::min(1.0, std::max(-1.0, cosv));
+    return std::acos(cosv) * 180.0 / 3.141592653589793238462643383279502884;
+}
+
+static py::dict mesh_quality_report_native(ArrayD points, ArrayI simplices) {
+    if (points.ndim() != 2 || points.shape(1) < 2) {
+        throw std::invalid_argument("points must have shape (n, >=2)");
+    }
+    if (simplices.ndim() != 2 || simplices.shape(1) != 3) {
+        throw std::invalid_argument("simplices must have shape (n, 3)");
+    }
+    const py::ssize_t dim = points.shape(1);
+    const py::ssize_t n_tri = simplices.shape(0);
+    const double* pp = points.data();
+    const long long* sp = simplices.data();
+    double sum_aspect = 0.0;
+    double max_aspect = -std::numeric_limits<double>::infinity();
+    double sum_skew = 0.0;
+    double max_skew = -std::numeric_limits<double>::infinity();
+    double min_angle = std::numeric_limits<double>::infinity();
+    for (py::ssize_t t = 0; t < n_tri; ++t) {
+        const auto ia = static_cast<py::ssize_t>(sp[3 * t]);
+        const auto ib = static_cast<py::ssize_t>(sp[3 * t + 1]);
+        const auto ic = static_cast<py::ssize_t>(sp[3 * t + 2]);
+        const double aspect = triangle_aspect_from_points(pp, dim, ia, ib, ic);
+        const double angle = std::min({
+            triangle_angle_deg(pp, dim, ia, ib, ic),
+            triangle_angle_deg(pp, dim, ib, ia, ic),
+            triangle_angle_deg(pp, dim, ic, ia, ib),
+        });
+        const double skew = std::max(0.0, (60.0 - angle) / 60.0);
+        sum_aspect += aspect;
+        max_aspect = std::max(max_aspect, aspect);
+        sum_skew += skew;
+        max_skew = std::max(max_skew, skew);
+        min_angle = std::min(min_angle, angle);
+    }
+    py::dict out;
+    out["mean_aspect"] = sum_aspect / static_cast<double>(n_tri);
+    out["max_aspect"] = max_aspect;
+    out["mean_skew"] = sum_skew / static_cast<double>(n_tri);
+    out["max_skew"] = max_skew;
+    out["min_angle_deg"] = min_angle;
+    return out;
+}
+
+static py::dict order_table_native(ArrayD h, ArrayD err) {
+    if (h.ndim() != 1 || err.ndim() != 1 || h.shape(0) != err.shape(0)) {
+        throw std::invalid_argument("h and err must be matching 1D arrays");
+    }
+    const py::ssize_t n = h.shape(0);
+    const double* hp = h.data();
+    const double* ep = err.data();
+    py::list h_list;
+    py::list err_list;
+    py::list p_pair;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        h_list.append(hp[i]);
+        err_list.append(ep[i]);
+    }
+    for (py::ssize_t i = 0; i < n - 1; ++i) {
+        const double p = std::log(ep[i] / ep[i + 1]) / std::log(hp[i] / hp[i + 1]);
+        p_pair.append(p);
+    }
+    py::dict out;
+    out["h"] = h_list;
+    out["err"] = err_list;
+    out["p_pair"] = p_pair;
+    return out;
+}
+
+static inline double cubic_spline_grad_1d_value(double r, double h) {
+    const double q = std::abs(r) / h;
+    const double sigma = 2.0 / 3.0 / h;
+    const double sign = (r > 0.0) ? 1.0 : ((r < 0.0) ? -1.0 : 0.0);
+    if (q < 1.0) {
+        return sigma * sign * (-3.0 * q + 2.25 * q * q) / h;
+    }
+    if (q < 2.0) {
+        const double d = 2.0 - q;
+        return sigma * sign * -0.75 * d * d / h;
+    }
+    return 0.0;
+}
+
+static py::array_t<double> sph_acceleration_1d(ArrayD x, ArrayD m, ArrayD rho, ArrayD p, double h) {
+    if (x.ndim() != 1 || m.ndim() != 1 || rho.ndim() != 1 || p.ndim() != 1) {
+        throw std::invalid_argument("x, m, rho, and p must be 1D arrays");
+    }
+    const py::ssize_t n = x.shape(0);
+    if (m.shape(0) != n || rho.shape(0) != n || p.shape(0) != n) {
+        throw std::invalid_argument("x, m, rho, and p must have matching lengths");
+    }
+    const double* xp = x.data();
+    const double* mp = m.data();
+    const double* rp = rho.data();
+    const double* pp = p.data();
+    auto out = py::array_t<double>({n});
+    double* op = out.mutable_data();
+    for (py::ssize_t i = 0; i < n; ++i) {
+        double acc = 0.0;
+        const double pi_over_rhoi2 = pp[i] / (rp[i] * rp[i]);
+        for (py::ssize_t j = 0; j < n; ++j) {
+            const double dW = cubic_spline_grad_1d_value(xp[i] - xp[j], h);
+            acc += mp[j] * (pi_over_rhoi2 + pp[j] / (rp[j] * rp[j])) * dW;
+        }
+        op[i] = -acc;
+    }
+    return out;
+}
+
+static constexpr int D2Q9_E[9][2] = {
+    {0, 0}, {1, 0}, {0, 1}, {-1, 0}, {0, -1}, {1, 1}, {-1, 1}, {-1, -1}, {1, -1}
+};
+
+static constexpr double D2Q9_W[9] = {
+    4.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0,
+    1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0
+};
+
+static py::array_t<double> lbm_equilibrium(Array2D rho, py::array_t<double, py::array::c_style | py::array::forcecast> u) {
+    if (u.ndim() != 3 || u.shape(0) != 2 || u.shape(1) != rho.shape(0) || u.shape(2) != rho.shape(1)) {
+        throw std::invalid_argument("u must have shape (2, X, Y) matching rho");
+    }
+    const py::ssize_t nx = rho.shape(0);
+    const py::ssize_t ny = rho.shape(1);
+    auto out = py::array_t<double>({static_cast<py::ssize_t>(9), nx, ny});
+    const double* rp = rho.data();
+    const double* up = u.data();
+    double* op = out.mutable_data();
+    const py::ssize_t plane = nx * ny;
+    for (int k = 0; k < 9; ++k) {
+        for (py::ssize_t i = 0; i < nx; ++i) {
+            for (py::ssize_t j = 0; j < ny; ++j) {
+                const py::ssize_t idx = i * ny + j;
+                const double ux = up[idx];
+                const double uy = up[plane + idx];
+                const double u_sq = ux * ux + uy * uy;
+                const double eu = D2Q9_E[k][0] * ux + D2Q9_E[k][1] * uy;
+                op[k * plane + idx] = D2Q9_W[k] * rp[idx] * (1.0 + 3.0 * eu + 4.5 * eu * eu - 1.5 * u_sq);
+            }
+        }
+    }
+    return out;
+}
+
+static py::array_t<double> lbm_step(ArrayD f, double omega) {
+    if (f.ndim() != 3 || f.shape(0) != 9) {
+        throw std::invalid_argument("f must have shape (9, X, Y)");
+    }
+    const py::ssize_t nx = f.shape(1);
+    const py::ssize_t ny = f.shape(2);
+    const py::ssize_t plane = nx * ny;
+    const double* fp = f.data();
+    std::vector<double> rho(static_cast<std::size_t>(plane), 0.0);
+    std::vector<double> ux(static_cast<std::size_t>(plane), 0.0);
+    std::vector<double> uy(static_cast<std::size_t>(plane), 0.0);
+    std::vector<double> collided(static_cast<std::size_t>(9 * plane), 0.0);
+    for (int k = 0; k < 9; ++k) {
+        for (py::ssize_t idx = 0; idx < plane; ++idx) {
+            const double val = fp[k * plane + idx];
+            rho[static_cast<std::size_t>(idx)] += val;
+            ux[static_cast<std::size_t>(idx)] += D2Q9_E[k][0] * val;
+            uy[static_cast<std::size_t>(idx)] += D2Q9_E[k][1] * val;
+        }
+    }
+    for (py::ssize_t idx = 0; idx < plane; ++idx) {
+        const double denom = std::max(rho[static_cast<std::size_t>(idx)], 1e-30);
+        ux[static_cast<std::size_t>(idx)] /= denom;
+        uy[static_cast<std::size_t>(idx)] /= denom;
+    }
+    for (int k = 0; k < 9; ++k) {
+        for (py::ssize_t idx = 0; idx < plane; ++idx) {
+            const double u_sq = ux[static_cast<std::size_t>(idx)] * ux[static_cast<std::size_t>(idx)]
+                + uy[static_cast<std::size_t>(idx)] * uy[static_cast<std::size_t>(idx)];
+            const double eu = D2Q9_E[k][0] * ux[static_cast<std::size_t>(idx)] + D2Q9_E[k][1] * uy[static_cast<std::size_t>(idx)];
+            const double feq = D2Q9_W[k] * rho[static_cast<std::size_t>(idx)] * (1.0 + 3.0 * eu + 4.5 * eu * eu - 1.5 * u_sq);
+            collided[static_cast<std::size_t>(k * plane + idx)] = fp[k * plane + idx] - omega * (fp[k * plane + idx] - feq);
+        }
+    }
+    auto out = py::array_t<double>({static_cast<py::ssize_t>(9), nx, ny});
+    double* op = out.mutable_data();
+    std::fill(op, op + 9 * plane, 0.0);
+    for (int k = 0; k < 9; ++k) {
+        const py::ssize_t sx = D2Q9_E[k][0];
+        const py::ssize_t sy = D2Q9_E[k][1];
+        for (py::ssize_t i = 0; i < nx; ++i) {
+            for (py::ssize_t j = 0; j < ny; ++j) {
+                const py::ssize_t dst_i = (i + sx + nx) % nx;
+                const py::ssize_t dst_j = (j + sy + ny) % ny;
+                op[k * plane + dst_i * ny + dst_j] = collided[static_cast<std::size_t>(k * plane + i * ny + j)];
+            }
+        }
+    }
+    return out;
+}
+
+static bool is_monotone_decreasing_native(py::sequence errs, double atol) {
+    const auto n = py::len(errs);
+    if (n < 2) {
+        return true;
+    }
+    double prev = py::cast<double>(errs[0]);
+    for (py::size_t i = 1; i < n; ++i) {
+        const double cur = py::cast<double>(errs[i]);
+        if (cur > prev + atol) {
+            return false;
+        }
+        prev = cur;
+    }
+    return true;
+}
+
+static py::list convergence_ratio_native(py::sequence errs) {
+    const auto n = py::len(errs);
+    py::list out;
+    if (n < 2) {
+        return out;
+    }
+    double prev = py::cast<double>(errs[0]);
+    for (py::size_t i = 1; i < n; ++i) {
+        const double cur = py::cast<double>(errs[i]);
+        out.append(cur / std::max(std::abs(prev), 1e-30));
+        prev = cur;
+    }
+    return out;
+}
+
+static double combined_disc_uncertainty_native(py::sequence uncs) {
+    const auto n = py::len(uncs);
+    double total = 0.0;
+    for (py::size_t i = 0; i < n; ++i) {
+        const double u = py::cast<double>(uncs[i]);
+        total += u * u;
+    }
+    return std::sqrt(total);
+}
+
+static double friction_colebrook_native(double re, double eps_over_d, int n_iter) {
+    double f = 0.02;
+    for (int i = 0; i < n_iter; ++i) {
+        const double rhs = -2.0 * std::log10(eps_over_d / 3.7 + 2.51 / (re * std::sqrt(f) + 1e-30));
+        const double f_new = 1.0 / (rhs * rhs);
+        if (std::abs(f_new - f) < 1e-10) {
+            return f_new;
+        }
+        f = f_new;
+    }
+    return f;
+}
+
+static double delta99_scan(ArrayD y, ArrayD u, double target) {
+    if (y.ndim() != 1 || u.ndim() != 1 || y.shape(0) != u.shape(0)) {
+        throw std::invalid_argument("y and u must be matching 1D arrays");
+    }
+    const py::ssize_t n = u.shape(0);
+    if (n == 0) {
+        throw std::invalid_argument("y and u must be non-empty");
+    }
+    const double* yp = y.data();
+    const double* up = u.data();
+    for (py::ssize_t i = 0; i < n - 1; ++i) {
+        if ((up[i] <= target && target <= up[i + 1]) || (up[i] >= target && target >= up[i + 1])) {
+            if (up[i + 1] == up[i]) {
+                return yp[i];
+            }
+            const double frac = (target - up[i]) / (up[i + 1] - up[i]);
+            return yp[i] + frac * (yp[i + 1] - yp[i]);
+        }
+    }
+    return yp[n - 1];
+}
+
+static py::array_t<double> scale_to_bounds_native(ArrayD unit, Array2D bounds) {
+    if (unit.ndim() != 2 || bounds.shape(1) != 2 || bounds.shape(0) != unit.shape(1)) {
+        throw std::invalid_argument("unit must be (n, d), bounds must be (d, 2)");
+    }
+    const py::ssize_t n = unit.shape(0);
+    const py::ssize_t dim = unit.shape(1);
+    const double* up = unit.data();
+    const double* bp = bounds.data();
+    auto out = py::array_t<double>({n, dim});
+    double* op = out.mutable_data();
+    for (py::ssize_t i = 0; i < n; ++i) {
+        for (py::ssize_t d = 0; d < dim; ++d) {
+            const double lo = bp[d * 2];
+            const double hi = bp[d * 2 + 1];
+            op[i * dim + d] = lo + up[i * dim + d] * (hi - lo);
+        }
+    }
+    return out;
+}
+
+static py::array_t<double> regular_grid_points(Array2D bounds, int per) {
+    if (bounds.shape(1) != 2) {
+        throw std::invalid_argument("bounds must have shape (d, 2)");
+    }
+    if (per < 1) {
+        throw std::invalid_argument("per must be positive");
+    }
+    const py::ssize_t dim = bounds.shape(0);
+    py::ssize_t total = 1;
+    for (py::ssize_t d = 0; d < dim; ++d) {
+        total *= per;
+    }
+    const double* bp = bounds.data();
+    auto out = py::array_t<double>({total, dim});
+    double* op = out.mutable_data();
+    for (py::ssize_t row = 0; row < total; ++row) {
+        py::ssize_t div = total;
+        for (py::ssize_t d = 0; d < dim; ++d) {
+            div /= per;
+            const py::ssize_t idx = (row / div) % per;
+            const double lo = bp[d * 2];
+            const double hi = bp[d * 2 + 1];
+            const double value = (per == 1) ? lo : lo + (hi - lo) * static_cast<double>(idx) / static_cast<double>(per - 1);
+            op[row * dim + d] = value;
+        }
+    }
+    return out;
+}
+
+static py::array_t<double> norm_cdf(ArrayD x) {
+    const py::ssize_t n = x.size();
+    auto out = py::array_t<double>({n});
+    const double* xp = x.data();
+    double* op = out.mutable_data();
+    const double inv_sqrt2 = 0.707106781186547524400844362104849039;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        op[i] = 0.5 * (1.0 + std::erf(xp[i] * inv_sqrt2));
+    }
+    return out;
+}
+
+static py::array_t<long long> greedy_batch_acquisition_native(
+    ArrayD acq, Array2D candidates, int batch_size, double min_distance, bool use_distance
+) {
+    if (acq.ndim() != 1 || candidates.shape(0) != acq.shape(0)) {
+        throw std::invalid_argument("acq must be 1D and candidates must have matching rows");
+    }
+    if (batch_size <= 0) {
+        throw std::invalid_argument("batch_size must be positive");
+    }
+    const py::ssize_t n = acq.shape(0);
+    const py::ssize_t dim = candidates.shape(1);
+    const double* ap = acq.data();
+    const double* cp = candidates.data();
+    std::vector<py::ssize_t> order(static_cast<std::size_t>(n));
+    for (py::ssize_t i = 0; i < n; ++i) {
+        order[static_cast<std::size_t>(i)] = i;
+    }
+    std::sort(order.begin(), order.end(), [ap](py::ssize_t lhs, py::ssize_t rhs) {
+        return ap[lhs] > ap[rhs];
+    });
+    std::vector<long long> selected;
+    selected.reserve(static_cast<std::size_t>(batch_size));
+    for (const py::ssize_t idx : order) {
+        if (static_cast<int>(selected.size()) >= batch_size) {
+            break;
+        }
+        if (use_distance && !selected.empty()) {
+            double min_dist2 = std::numeric_limits<double>::infinity();
+            for (const long long sel : selected) {
+                double dist2 = 0.0;
+                for (py::ssize_t d = 0; d < dim; ++d) {
+                    const double diff = cp[idx * dim + d] - cp[static_cast<py::ssize_t>(sel) * dim + d];
+                    dist2 += diff * diff;
+                }
+                min_dist2 = std::min(min_dist2, dist2);
+            }
+            if (std::sqrt(min_dist2) < min_distance) {
+                continue;
+            }
+        }
+        selected.push_back(static_cast<long long>(idx));
+    }
+    auto out = py::array_t<long long>({static_cast<py::ssize_t>(selected.size())});
+    std::copy(selected.begin(), selected.end(), out.mutable_data());
+    return out;
+}
+
+static inline double tet_volume_from_vertices(const double* v, const int ids[4], py::ssize_t dim) {
+    const double ax = v[ids[1] * dim] - v[ids[0] * dim];
+    const double ay = v[ids[1] * dim + 1] - v[ids[0] * dim + 1];
+    const double az = v[ids[1] * dim + 2] - v[ids[0] * dim + 2];
+    const double bx = v[ids[2] * dim] - v[ids[0] * dim];
+    const double by = v[ids[2] * dim + 1] - v[ids[0] * dim + 1];
+    const double bz = v[ids[2] * dim + 2] - v[ids[0] * dim + 2];
+    const double cx = v[ids[3] * dim] - v[ids[0] * dim];
+    const double cy = v[ids[3] * dim + 1] - v[ids[0] * dim + 1];
+    const double cz = v[ids[3] * dim + 2] - v[ids[0] * dim + 2];
+    const double cross_x = by * cz - bz * cy;
+    const double cross_y = bz * cx - bx * cz;
+    const double cross_z = bx * cy - by * cx;
+    const double triple = ax * cross_x + ay * cross_y + az * cross_z;
+    return std::abs(triple) / 6.0;
+}
+
+static double hex_volume_native(Array2D vertices) {
+    if (vertices.shape(0) != 8 || vertices.shape(1) != 3) {
+        throw std::invalid_argument("vertices must have shape (8, 3)");
+    }
+    static constexpr int tets[5][4] = {
+        {0, 1, 3, 4},
+        {1, 2, 3, 6},
+        {1, 3, 4, 6},
+        {3, 4, 6, 7},
+        {1, 4, 5, 6},
+    };
+    double volume = 0.0;
+    for (const auto& tet : tets) {
+        volume += tet_volume_from_vertices(vertices.data(), tet, 3);
+    }
+    return volume;
+}
+
+static py::tuple trigger_average_accum(ArrayD signal, ArrayI valid_indices, int half_window, bool return_std) {
+    if (signal.ndim() < 1) {
+        throw std::invalid_argument("signal must have at least one dimension");
+    }
+    if (valid_indices.ndim() != 1) {
+        throw std::invalid_argument("valid_indices must be 1D");
+    }
+    const py::ssize_t n_t = signal.shape(0);
+    const py::ssize_t win_len = 2 * static_cast<py::ssize_t>(half_window) + 1;
+    py::ssize_t frame_size = 1;
+    std::vector<py::ssize_t> out_shape;
+    out_shape.push_back(win_len);
+    for (py::ssize_t axis = 1; axis < signal.ndim(); ++axis) {
+        out_shape.push_back(signal.shape(axis));
+        frame_size *= signal.shape(axis);
+    }
+    auto mean = py::array_t<double>(out_shape);
+    double* mp = mean.mutable_data();
+    const py::ssize_t out_size = win_len * frame_size;
+    std::fill(mp, mp + out_size, 0.0);
+    auto std_arr = py::array_t<double>(out_shape);
+    double* sp = std_arr.mutable_data();
+    if (return_std) {
+        std::fill(sp, sp + out_size, 0.0);
+    }
+    const double* sig = signal.data();
+    const long long* idxp = valid_indices.data();
+    const py::ssize_t count = valid_indices.shape(0);
+    for (py::ssize_t idx_i = 0; idx_i < count; ++idx_i) {
+        const py::ssize_t center = static_cast<py::ssize_t>(idxp[idx_i]);
+        if (center - half_window < 0 || center + half_window >= n_t) {
+            continue;
+        }
+        for (py::ssize_t w = 0; w < win_len; ++w) {
+            const py::ssize_t src_frame = center - half_window + w;
+            for (py::ssize_t q = 0; q < frame_size; ++q) {
+                const double value = sig[src_frame * frame_size + q];
+                const py::ssize_t out_idx = w * frame_size + q;
+                mp[out_idx] += value;
+                if (return_std) {
+                    sp[out_idx] += value * value;
+                }
+            }
+        }
+    }
+    if (count == 0) {
+        if (return_std) {
+            return py::make_tuple(mean, std_arr, 0);
+        }
+        return py::make_tuple(mean, 0);
+    }
+    for (py::ssize_t i = 0; i < out_size; ++i) {
+        mp[i] /= static_cast<double>(count);
+    }
+    if (return_std) {
+        for (py::ssize_t i = 0; i < out_size; ++i) {
+            const double var = sp[i] / static_cast<double>(count) - mp[i] * mp[i];
+            sp[i] = std::sqrt(std::max(var, 0.0));
+        }
+        return py::make_tuple(mean, std_arr, static_cast<int>(count));
+    }
+    return py::make_tuple(mean, static_cast<int>(count));
+}
+
+static py::dict quadrant_split_native(ArrayD up, ArrayD vp, double hole) {
+    if (up.ndim() != 1 || vp.ndim() != 1 || up.shape(0) != vp.shape(0)) {
+        throw std::invalid_argument("up and vp must be matching 1D arrays");
+    }
+    if (hole < 0.0) {
+        throw std::invalid_argument("hole must be non-negative");
+    }
+    const py::ssize_t n = up.shape(0);
+    const double* upv = up.data();
+    const double* vpv = vp.data();
+    double sum_u2 = 0.0;
+    double sum_v2 = 0.0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        sum_u2 += upv[i] * upv[i];
+        sum_v2 += vpv[i] * vpv[i];
+    }
+    const double denom_n = static_cast<double>(std::max<py::ssize_t>(n, 1));
+    const double u_rms = std::sqrt(sum_u2 / denom_n) + 1e-30;
+    const double v_rms = std::sqrt(sum_v2 / denom_n) + 1e-30;
+    const double threshold = hole * u_rms * v_rms;
+    std::array<int, 5> counts = {0, 0, 0, 0, 0};
+    std::array<double, 5> sums = {0.0, 0.0, 0.0, 0.0, 0.0};
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const double uv = upv[i] * vpv[i];
+        const bool in_hole = std::abs(uv) < threshold;
+        int bucket = in_hole ? 4 : -1;
+        if (!in_hole) {
+            if (upv[i] > 0.0 && vpv[i] > 0.0) {
+                bucket = 0;
+            } else if (upv[i] < 0.0 && vpv[i] > 0.0) {
+                bucket = 1;
+            } else if (upv[i] < 0.0 && vpv[i] < 0.0) {
+                bucket = 2;
+            } else if (upv[i] > 0.0 && vpv[i] < 0.0) {
+                bucket = 3;
+            }
+        }
+        if (bucket >= 0) {
+            counts[static_cast<std::size_t>(bucket)] += 1;
+            sums[static_cast<std::size_t>(bucket)] += uv;
+        }
+    }
+    const char* names[5] = {"Q1", "Q2", "Q3", "Q4", "hole"};
+    py::dict out;
+    for (int b = 0; b < 5; ++b) {
+        py::dict item;
+        item["count"] = counts[static_cast<std::size_t>(b)];
+        item["fraction"] = static_cast<double>(counts[static_cast<std::size_t>(b)]) / denom_n;
+        item["mean_uv"] = counts[static_cast<std::size_t>(b)] > 0 ? sums[static_cast<std::size_t>(b)] / counts[static_cast<std::size_t>(b)] : 0.0;
+        item["contribution"] = sums[static_cast<std::size_t>(b)] / denom_n;
+        out[names[b]] = item;
+    }
+    return out;
+}
+
+static double kolmogorov_pvalue(double d, double n) {
+    if (d <= 0.0) {
+        return 1.0;
+    }
+    const double s = std::sqrt(n);
+    const double en = s + 0.12 + 0.11 / s;
+    const double lam = en * d;
+    if (lam < 0.18) {
+        return 1.0;
+    }
+    double sum_p = 0.0;
+    double sign = 1.0;
+    for (int j = 1; j <= 100; ++j) {
+        const double term = sign * std::exp(-2.0 * static_cast<double>(j * j) * lam * lam);
+        sum_p += term;
+        if (std::abs(term) < 1e-9 * std::abs(sum_p)) {
+            break;
+        }
+        sign = -sign;
+    }
+    return std::min(1.0, std::max(0.0, 2.0 * sum_p));
+}
+
+static int number_peaks_native(ArrayD x, int support) {
+    if (x.ndim() != 1) {
+        throw std::invalid_argument("x must be a 1D array");
+    }
+    if (support <= 0) {
+        return static_cast<int>(x.shape(0) - 2 * static_cast<py::ssize_t>(support));
+    }
+    const py::ssize_t n = x.shape(0);
+    if (n < 2 * static_cast<py::ssize_t>(support) + 1) {
+        return 0;
+    }
+    const double* xp = x.data();
+    int count = 0;
+    for (py::ssize_t i = support; i < n - support; ++i) {
+        bool is_peak = true;
+        for (int k = 1; k <= support; ++k) {
+            if (xp[i] <= xp[i - k] || xp[i] <= xp[i + k]) {
+                is_peak = false;
+                break;
+            }
+        }
+        if (is_peak) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+static double jackknife_mean_var_native(ArrayD data) {
+    if (data.ndim() != 1) {
+        throw std::invalid_argument("data must be a 1D array");
+    }
+    const py::ssize_t n = data.shape(0);
+    if (n == 0) {
+        throw std::invalid_argument("data must not be empty");
+    }
+    if (n == 1) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    const double* xp = data.data();
+    double total = 0.0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        total += xp[i];
+    }
+    std::vector<double> theta(static_cast<std::size_t>(n));
+    double theta_dot = 0.0;
+    const double denom = static_cast<double>(n - 1);
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const double value = (total - xp[i]) / denom;
+        theta[static_cast<std::size_t>(i)] = value;
+        theta_dot += value;
+    }
+    theta_dot /= static_cast<double>(n);
+    double ss = 0.0;
+    for (double value : theta) {
+        const double diff = value - theta_dot;
+        ss += diff * diff;
+    }
+    return static_cast<double>(n - 1) / static_cast<double>(n) * ss;
+}
+
+static py::array_t<double> probe_time_series_native(ArrayD snapshots, ArrayD coords, ArrayD probes, const std::string& method, int k) {
+    if (snapshots.ndim() != 2 || coords.ndim() != 2 || probes.ndim() != 2) {
+        throw std::invalid_argument("snapshots, coords, and probes must be 2D arrays");
+    }
+    const py::ssize_t n_points = snapshots.shape(0);
+    const py::ssize_t n_times = snapshots.shape(1);
+    if (coords.shape(0) != n_points || probes.shape(1) != coords.shape(1)) {
+        throw std::invalid_argument("shape mismatch among snapshots, coords, and probes");
+    }
+    if (method != "nearest" && method != "idw") {
+        throw std::invalid_argument("unknown probe interpolation method");
+    }
+    const py::ssize_t dim = coords.shape(1);
+    const py::ssize_t n_probes = probes.shape(0);
+    auto out = py::array_t<double>({n_probes, n_times});
+    double* op = out.mutable_data();
+    const double* sp = snapshots.data();
+    const double* cp = coords.data();
+    const double* pp = probes.data();
+    const int kk = std::max(1, std::min(k, static_cast<int>(n_points)));
+    std::vector<std::pair<double, py::ssize_t>> dist_idx(static_cast<std::size_t>(n_points));
+    for (py::ssize_t p = 0; p < n_probes; ++p) {
+        for (py::ssize_t i = 0; i < n_points; ++i) {
+            double d2 = 0.0;
+            for (py::ssize_t d = 0; d < dim; ++d) {
+                const double diff = pp[p * dim + d] - cp[i * dim + d];
+                d2 += diff * diff;
+            }
+            dist_idx[static_cast<std::size_t>(i)] = {d2, i};
+        }
+        std::partial_sort(
+            dist_idx.begin(), dist_idx.begin() + kk, dist_idx.end(),
+            [](const auto& a, const auto& b) {
+                if (a.first == b.first) {
+                    return a.second < b.second;
+                }
+                return a.first < b.first;
+            }
+        );
+        for (py::ssize_t t = 0; t < n_times; ++t) {
+            double value = 0.0;
+            if (method == "nearest") {
+                value = sp[dist_idx[0].second * n_times + t];
+            } else {
+                double weight_sum = 0.0;
+                double weighted = 0.0;
+                for (int j = 0; j < kk; ++j) {
+                    const py::ssize_t src_i = dist_idx[static_cast<std::size_t>(j)].second;
+                    const double weight = 1.0 / (dist_idx[static_cast<std::size_t>(j)].first + 1e-12);
+                    weight_sum += weight;
+                    weighted += weight * sp[src_i * n_times + t];
+                }
+                value = weighted / weight_sum;
+            }
+            op[p * n_times + t] = value;
+        }
+    }
+    return out;
+}
+
+static double bingham_stress_native(double gamma_dot, double tau_y, double mu_p) {
+    if (gamma_dot == 0.0) {
+        return 0.0;
+    }
+    const double sign = gamma_dot > 0.0 ? 1.0 : -1.0;
+    return sign * (tau_y + mu_p * std::abs(gamma_dot));
+}
+
+static double bingham_apparent_viscosity_native(double gamma_dot, double tau_y, double mu_p, double eps) {
+    const double g = std::max(std::abs(gamma_dot), eps);
+    return tau_y / g + mu_p;
+}
+
+static std::array<double, 3> barycentric_values_2d(const double* tri, const double* p) {
+    const double v0x = tri[2] - tri[0];
+    const double v0y = tri[3] - tri[1];
+    const double v1x = tri[4] - tri[0];
+    const double v1y = tri[5] - tri[1];
+    const double v2x = p[0] - tri[0];
+    const double v2y = p[1] - tri[1];
+    const double d00 = v0x * v0x + v0y * v0y;
+    const double d01 = v0x * v1x + v0y * v1y;
+    const double d11 = v1x * v1x + v1y * v1y;
+    const double d20 = v2x * v0x + v2y * v0y;
+    const double d21 = v2x * v1x + v2y * v1y;
+    const double denom = d00 * d11 - d01 * d01;
+    if (std::abs(denom) < 1e-20) {
+        throw std::invalid_argument("degenerate triangle");
+    }
+    const double v = (d11 * d20 - d01 * d21) / denom;
+    const double w = (d00 * d21 - d01 * d20) / denom;
+    return {1.0 - v - w, v, w};
+}
+
+static py::array_t<double> barycentric_2d_native(ArrayD triangle, ArrayD p) {
+    if (triangle.ndim() != 2 || triangle.shape(0) != 3 || triangle.shape(1) != 2 || p.ndim() != 1 || p.shape(0) != 2) {
+        throw std::invalid_argument("triangle must be (3, 2) and p must be (2,)");
+    }
+    const auto bc = barycentric_values_2d(triangle.data(), p.data());
+    auto out = py::array_t<double>({static_cast<py::ssize_t>(3)});
+    double* op = out.mutable_data();
+    op[0] = bc[0];
+    op[1] = bc[1];
+    op[2] = bc[2];
+    return out;
+}
+
+static int locate_triangle_native(ArrayD points, ArrayI simplices, ArrayD p) {
+    if (points.ndim() != 2 || points.shape(1) != 2 || simplices.ndim() != 2 || simplices.shape(1) != 3 || p.ndim() != 1 || p.shape(0) != 2) {
+        throw std::invalid_argument("points must be (N, 2), simplices must be (M, 3), and p must be (2,)");
+    }
+    const double* pts = points.data();
+    const long long* sim = simplices.data();
+    const py::ssize_t n_tri = simplices.shape(0);
+    for (py::ssize_t i = 0; i < n_tri; ++i) {
+        double tri[6];
+        bool valid = true;
+        for (py::ssize_t j = 0; j < 3; ++j) {
+            const long long idx = sim[i * 3 + j];
+            if (idx < 0 || idx >= points.shape(0)) {
+                valid = false;
+                break;
+            }
+            tri[2 * j] = pts[idx * 2];
+            tri[2 * j + 1] = pts[idx * 2 + 1];
+        }
+        if (!valid) {
+            continue;
+        }
+        try {
+            const auto bc = barycentric_values_2d(tri, p.data());
+            if (bc[0] >= -1e-10 && bc[1] >= -1e-10 && bc[2] >= -1e-10) {
+                return static_cast<int>(i);
+            }
+        } catch (const std::invalid_argument&) {
+            continue;
+        }
+    }
+    return -1;
+}
+
+static py::array_t<double> friction_velocity_native(ArrayD wall_shear_stress, double rho) {
+    if (rho <= 0.0) {
+        throw std::invalid_argument("rho must be positive");
+    }
+    if (wall_shear_stress.ndim() == 1) {
+        double tau2 = 0.0;
+        const double* wp = wall_shear_stress.data();
+        for (py::ssize_t j = 0; j < wall_shear_stress.shape(0); ++j) {
+            tau2 += wp[j] * wp[j];
+        }
+        auto out = py::array_t<double>({static_cast<py::ssize_t>(1)});
+        out.mutable_data()[0] = std::sqrt(std::sqrt(tau2) / rho);
+        return out;
+    }
+    if (wall_shear_stress.ndim() != 2) {
+        throw std::invalid_argument("wall_shear_stress must be a 1D vector or 2D array");
+    }
+    const py::ssize_t n = wall_shear_stress.shape(0);
+    const py::ssize_t dim = wall_shear_stress.shape(1);
+    auto out = py::array_t<double>({n});
+    const double* wp = wall_shear_stress.data();
+    double* op = out.mutable_data();
+    for (py::ssize_t i = 0; i < n; ++i) {
+        double tau2 = 0.0;
+        for (py::ssize_t j = 0; j < dim; ++j) {
+            const double value = wp[i * dim + j];
+            tau2 += value * value;
+        }
+        op[i] = std::sqrt(std::sqrt(tau2) / rho);
+    }
+    return out;
+}
+
+static double estimate_first_cell_height_native(double y_plus_target, double Re, double rho, double U_inf, double nu) {
+    const double Cf = 0.026 * std::pow(Re, -1.0 / 7.0);
+    const double tau_w = Cf * 0.5 * rho * U_inf * U_inf;
+    const double u_tau = std::sqrt(tau_w / rho);
+    if (u_tau < 1e-16) {
+        throw std::invalid_argument("friction velocity is too small");
+    }
+    return y_plus_target * nu / u_tau;
+}
+
+static py::tuple cht_iterate_native(ArrayD T_solid, ArrayD T_fluid, double k_s, double k_f, int n_iter) {
+    if (T_solid.ndim() != 1 || T_fluid.ndim() != 1) {
+        throw std::invalid_argument("T_solid and T_fluid must be 1D arrays");
+    }
+    if (T_solid.shape(0) < 2 || T_fluid.shape(0) < 2) {
+        throw std::invalid_argument("T_solid and T_fluid must have at least two nodes");
+    }
+    if (k_s + k_f == 0.0) {
+        throw std::invalid_argument("k_s + k_f must be non-zero");
+    }
+    const py::ssize_t ns = T_solid.shape(0);
+    const py::ssize_t nf = T_fluid.shape(0);
+    auto Ts = py::array_t<double>({ns});
+    auto Tf = py::array_t<double>({nf});
+    std::copy(T_solid.data(), T_solid.data() + ns, Ts.mutable_data());
+    std::copy(T_fluid.data(), T_fluid.data() + nf, Tf.mutable_data());
+    double* tsp = Ts.mutable_data();
+    double* tfp = Tf.mutable_data();
+    for (int it = 0; it < n_iter; ++it) {
+        for (py::ssize_t i = 1; i < ns - 1; ++i) {
+            tsp[i] = 0.5 * (tsp[i + 1] + tsp[i - 1]);
+        }
+        for (py::ssize_t i = 1; i < nf - 1; ++i) {
+            tfp[i] = 0.5 * (tfp[i + 1] + tfp[i - 1]);
+        }
+        const double T_iface = (k_s * tsp[ns - 2] + k_f * tfp[1]) / (k_s + k_f);
+        tsp[ns - 1] = T_iface;
+        tfp[0] = T_iface;
+    }
+    return py::make_tuple(Ts, Tf);
+}
+
+static double battery_temperature_step_native(double T, double T_amb, double Q_gen, double h, double A, double m, double cp, double dt) {
+    const double dTdt = (Q_gen - h * A * (T - T_amb)) / (m * cp);
+    return T + dt * dTdt;
+}
+
+static double battery_steady_temperature_native(double T_amb, double Q_gen, double h, double A) {
+    return T_amb + Q_gen / (h * A);
+}
+
+static double greenhouse_temperature_step_native(double T_in, double T_out, double Q_solar, double U, double A, double m, double cp, double dt) {
+    const double dTdt = (Q_solar - U * A * (T_in - T_out)) / (m * cp);
+    return T_in + dt * dTdt;
+}
+
+static double vector_l2_norm_native(ArrayD x) {
+    const double* xp = x.data();
+    double ss = 0.0;
+    for (py::ssize_t i = 0; i < x.size(); ++i) {
+        ss += xp[i] * xp[i];
+    }
+    return std::sqrt(ss);
+}
+
+static double vector_dot_native(ArrayD a, ArrayD b) {
+    if (a.size() != b.size()) {
+        throw std::invalid_argument("a and b must have the same size");
+    }
+    const double* ap = a.data();
+    const double* bp = b.data();
+    double out = 0.0;
+    for (py::ssize_t i = 0; i < a.size(); ++i) {
+        out += ap[i] * bp[i];
+    }
+    return out;
+}
+
+static double aitken_relax_native(double omega_prev, ArrayD r_prev, ArrayD r_curr) {
+    if (r_prev.size() != r_curr.size()) {
+        throw std::invalid_argument("r_prev and r_curr must have the same size");
+    }
+    const double* rp = r_prev.data();
+    const double* rc = r_curr.data();
+    double num = 0.0;
+    double denom = 1e-30;
+    for (py::ssize_t i = 0; i < r_prev.size(); ++i) {
+        const double dr = rc[i] - rp[i];
+        num += rp[i] * dr;
+        denom += dr * dr;
+    }
+    return -omega_prev * num / denom;
+}
+
+static py::tuple mean_std_axis0_native(ArrayD values) {
+    if (values.ndim() != 2) {
+        throw std::invalid_argument("values must be a 2D array");
+    }
+    const py::ssize_t n = values.shape(0);
+    const py::ssize_t d = values.shape(1);
+    auto mean = py::array_t<double>({d});
+    auto std_arr = py::array_t<double>({d});
+    double* mp = mean.mutable_data();
+    double* sp = std_arr.mutable_data();
+    std::fill(mp, mp + d, 0.0);
+    std::fill(sp, sp + d, 0.0);
+    const double* vp = values.data();
+    if (n == 0) {
+        std::fill(mp, mp + d, std::numeric_limits<double>::quiet_NaN());
+        std::fill(sp, sp + d, std::numeric_limits<double>::quiet_NaN());
+        return py::make_tuple(mean, std_arr);
+    }
+    for (py::ssize_t i = 0; i < n; ++i) {
+        for (py::ssize_t j = 0; j < d; ++j) {
+            const double value = vp[i * d + j];
+            mp[j] += value;
+            sp[j] += value * value;
+        }
+    }
+    for (py::ssize_t j = 0; j < d; ++j) {
+        mp[j] /= static_cast<double>(n);
+        const double var = sp[j] / static_cast<double>(n) - mp[j] * mp[j];
+        sp[j] = std::sqrt(std::max(0.0, var));
+    }
+    return py::make_tuple(mean, std_arr);
+}
+
+static py::tuple winslow_smooth_native(ArrayD X, ArrayD Y, int n_iter) {
+    if (X.ndim() != 2 || Y.ndim() != 2 || X.shape(0) != Y.shape(0) || X.shape(1) != Y.shape(1)) {
+        throw std::invalid_argument("X and Y must be matching 2D arrays");
+    }
+    const py::ssize_t nx = X.shape(0);
+    const py::ssize_t ny = X.shape(1);
+    auto Xout = py::array_t<double>({nx, ny});
+    auto Yout = py::array_t<double>({nx, ny});
+    const py::ssize_t size = nx * ny;
+    std::copy(X.data(), X.data() + size, Xout.mutable_data());
+    std::copy(Y.data(), Y.data() + size, Yout.mutable_data());
+    std::vector<double> x_next(static_cast<std::size_t>(size));
+    std::vector<double> y_next(static_cast<std::size_t>(size));
+    double* xp = Xout.mutable_data();
+    double* yp = Yout.mutable_data();
+    for (int it = 0; it < n_iter; ++it) {
+        std::copy(xp, xp + size, x_next.begin());
+        std::copy(yp, yp + size, y_next.begin());
+        for (py::ssize_t i = 1; i < nx - 1; ++i) {
+            for (py::ssize_t j = 1; j < ny - 1; ++j) {
+                const py::ssize_t idx = i * ny + j;
+                x_next[static_cast<std::size_t>(idx)] = 0.25 * (xp[(i + 1) * ny + j] + xp[(i - 1) * ny + j] + xp[i * ny + j + 1] + xp[i * ny + j - 1]);
+                y_next[static_cast<std::size_t>(idx)] = 0.25 * (yp[(i + 1) * ny + j] + yp[(i - 1) * ny + j] + yp[i * ny + j + 1] + yp[i * ny + j - 1]);
+            }
+        }
+        std::copy(x_next.begin(), x_next.end(), xp);
+        std::copy(y_next.begin(), y_next.end(), yp);
+    }
+    return py::make_tuple(Xout, Yout);
+}
+
+static py::tuple fd_heat_2d_evolve(ArrayD u0, int n_steps, double cx, double cy, double dt) {
+    if (u0.ndim() != 2) {
+        throw std::invalid_argument("u0 must be a 2D array");
+    }
+    const py::ssize_t nx = u0.shape(0);
+    const py::ssize_t ny = u0.shape(1);
+    auto t = py::array_t<double>({static_cast<py::ssize_t>(n_steps + 1)});
+    auto U = py::array_t<double>({nx, ny, static_cast<py::ssize_t>(n_steps + 1)});
+    double* tp = t.mutable_data();
+    double* Up = U.mutable_data();
+    std::vector<double> u(static_cast<std::size_t>(nx * ny));
+    std::vector<double> u_new(static_cast<std::size_t>(nx * ny));
+    std::copy(u0.data(), u0.data() + nx * ny, u.begin());
+    for (py::ssize_t i = 0; i < nx; ++i) {
+        for (py::ssize_t j = 0; j < ny; ++j) {
+            Up[(i * ny + j) * (n_steps + 1)] = u[static_cast<std::size_t>(i * ny + j)];
+        }
+    }
+    tp[0] = 0.0;
+    for (int k = 0; k < n_steps; ++k) {
+        u_new = u;
+        for (py::ssize_t i = 1; i < nx - 1; ++i) {
+            for (py::ssize_t j = 1; j < ny - 1; ++j) {
+                const py::ssize_t idx = i * ny + j;
+                const double lap = cx * (u[(i + 1) * ny + j] - 2.0 * u[idx] + u[(i - 1) * ny + j])
+                    + cy * (u[i * ny + j + 1] - 2.0 * u[idx] + u[i * ny + j - 1]);
+                u_new[static_cast<std::size_t>(idx)] = u[static_cast<std::size_t>(idx)] + lap;
+            }
+        }
+        for (py::ssize_t i = 0; i < nx; ++i) {
+            u_new[static_cast<std::size_t>(i * ny)] = 0.0;
+            u_new[static_cast<std::size_t>(i * ny + ny - 1)] = 0.0;
+        }
+        for (py::ssize_t j = 0; j < ny; ++j) {
+            u_new[static_cast<std::size_t>(j)] = 0.0;
+            u_new[static_cast<std::size_t>((nx - 1) * ny + j)] = 0.0;
+        }
+        u.swap(u_new);
+        tp[k + 1] = static_cast<double>(k + 1) * dt;
+        for (py::ssize_t i = 0; i < nx; ++i) {
+            for (py::ssize_t j = 0; j < ny; ++j) {
+                Up[(i * ny + j) * (n_steps + 1) + k + 1] = u[static_cast<std::size_t>(i * ny + j)];
+            }
+        }
+    }
+    return py::make_tuple(t, U);
+}
+
+static void thomas_constant_tridiag(
+    const std::vector<double>& rhs, py::ssize_t systems, py::ssize_t n, double lower, double diag, double upper,
+    std::vector<double>& out
+) {
+    if (n <= 0) {
+        return;
+    }
+    std::vector<double> cp(static_cast<std::size_t>(systems * n), 0.0);
+    std::vector<double> dp(static_cast<std::size_t>(systems * n), 0.0);
+
+    for (py::ssize_t sys = 0; sys < systems; ++sys) {
+        const py::ssize_t base = sys * n;
+        cp[static_cast<std::size_t>(base)] = n == 1 ? 0.0 : upper / diag;
+        dp[static_cast<std::size_t>(base)] = rhs[static_cast<std::size_t>(base)] / diag;
+        for (py::ssize_t k = 1; k < n; ++k) {
+            const double a = lower;
+            const double c = k == n - 1 ? 0.0 : upper;
+            const double denom = diag - a * cp[static_cast<std::size_t>(base + k - 1)];
+            cp[static_cast<std::size_t>(base + k)] = c / denom;
+            dp[static_cast<std::size_t>(base + k)] =
+                (rhs[static_cast<std::size_t>(base + k)] - a * dp[static_cast<std::size_t>(base + k - 1)]) / denom;
+        }
+        out[static_cast<std::size_t>(base + n - 1)] = dp[static_cast<std::size_t>(base + n - 1)];
+        for (py::ssize_t k = n - 2; k >= 0; --k) {
+            out[static_cast<std::size_t>(base + k)] =
+                dp[static_cast<std::size_t>(base + k)] -
+                cp[static_cast<std::size_t>(base + k)] * out[static_cast<std::size_t>(base + k + 1)];
+            if (k == 0) {
+                break;
+            }
+        }
+    }
+}
+
+static py::array_t<double> adi_heat_2d_step_native(Array2D u, double dt, double dx, double dy, double alpha) {
+    if (u.ndim() != 2) {
+        throw std::invalid_argument("u must be a 2D array");
+    }
+    if (dx == 0.0 || dy == 0.0) {
+        throw std::invalid_argument("dx and dy must be non-zero");
+    }
+    const py::ssize_t nx = u.shape(0);
+    const py::ssize_t ny = u.shape(1);
+    if (nx < 3 || ny < 3) {
+        throw std::invalid_argument("u must have at least three points on each axis");
+    }
+
+    const double rx = alpha * dt / (2.0 * dx * dx);
+    const double ry = alpha * dt / (2.0 * dy * dy);
+    const py::ssize_t mx = nx - 2;
+    const py::ssize_t my = ny - 2;
+    const double* up = u.data();
+
+    std::vector<double> rhs_x(static_cast<std::size_t>(my * mx), 0.0);
+    for (py::ssize_t j = 0; j < my; ++j) {
+        const py::ssize_t col = j + 1;
+        for (py::ssize_t i = 0; i < mx; ++i) {
+            const py::ssize_t row = i + 1;
+            const double center = up[row * ny + col];
+            rhs_x[static_cast<std::size_t>(j * mx + i)] =
+                center + ry * (up[row * ny + col + 1] - 2.0 * center + up[row * ny + col - 1]);
+        }
+    }
+
+    std::vector<double> half_x(static_cast<std::size_t>(my * mx), 0.0);
+    thomas_constant_tridiag(rhs_x, my, mx, -rx, 1.0 + 2.0 * rx, -rx, half_x);
+
+    std::vector<double> rhs_y(static_cast<std::size_t>(mx * my), 0.0);
+    for (py::ssize_t i = 0; i < mx; ++i) {
+        for (py::ssize_t j = 0; j < my; ++j) {
+            const double center = half_x[static_cast<std::size_t>(j * mx + i)];
+            const double lower_i = i == 0 ? 0.0 : half_x[static_cast<std::size_t>(j * mx + i - 1)];
+            const double upper_i = i == mx - 1 ? 0.0 : half_x[static_cast<std::size_t>(j * mx + i + 1)];
+            rhs_y[static_cast<std::size_t>(i * my + j)] = center + rx * (upper_i - 2.0 * center + lower_i);
+        }
+    }
+
+    std::vector<double> inner(static_cast<std::size_t>(mx * my), 0.0);
+    thomas_constant_tridiag(rhs_y, mx, my, -ry, 1.0 + 2.0 * ry, -ry, inner);
+
+    auto out = py::array_t<double>({nx, ny});
+    double* op = out.mutable_data();
+    std::fill(op, op + nx * ny, 0.0);
+    for (py::ssize_t i = 0; i < mx; ++i) {
+        for (py::ssize_t j = 0; j < my; ++j) {
+            op[(i + 1) * ny + (j + 1)] = inner[static_cast<std::size_t>(i * my + j)];
+        }
+    }
+    return out;
+}
+
+static py::tuple conv_diff_2d_evolve_native(
+    Array2D c0, int n_steps, double u0, double v0, double diffusivity, double dx, double dy, double dt
+) {
+    if (c0.ndim() != 2) {
+        throw std::invalid_argument("c0 must be a 2D array");
+    }
+    if (n_steps < 0) {
+        throw std::invalid_argument("n_steps must be non-negative");
+    }
+    if (dx == 0.0 || dy == 0.0) {
+        throw std::invalid_argument("dx and dy must be non-zero");
+    }
+    const py::ssize_t nx = c0.shape(0);
+    const py::ssize_t ny = c0.shape(1);
+    const py::ssize_t nt = static_cast<py::ssize_t>(n_steps + 1);
+    auto t = py::array_t<double>({nt});
+    auto C = py::array_t<double>({nx, ny, nt});
+    double* tp = t.mutable_data();
+    double* Cp = C.mutable_data();
+    std::vector<double> c(static_cast<std::size_t>(nx * ny));
+    std::vector<double> next(static_cast<std::size_t>(nx * ny));
+    std::copy(c0.data(), c0.data() + nx * ny, c.begin());
+
+    for (py::ssize_t i = 0; i < nx; ++i) {
+        for (py::ssize_t j = 0; j < ny; ++j) {
+            Cp[(i * ny + j) * nt] = c[static_cast<std::size_t>(i * ny + j)];
+        }
+    }
+    tp[0] = 0.0;
+
+    for (int k = 0; k < n_steps; ++k) {
+        next = c;
+        for (py::ssize_t i = 1; i < nx - 1; ++i) {
+            for (py::ssize_t j = 1; j < ny - 1; ++j) {
+                const py::ssize_t idx = i * ny + j;
+                const double center = c[static_cast<std::size_t>(idx)];
+                const double dcdx = u0 >= 0.0
+                    ? (center - c[static_cast<std::size_t>((i - 1) * ny + j)]) / dx
+                    : (c[static_cast<std::size_t>((i + 1) * ny + j)] - center) / dx;
+                const double dcdy = v0 >= 0.0
+                    ? (center - c[static_cast<std::size_t>(i * ny + j - 1)]) / dy
+                    : (c[static_cast<std::size_t>(i * ny + j + 1)] - center) / dy;
+                const double d2c =
+                    (c[static_cast<std::size_t>((i + 1) * ny + j)] - 2.0 * center +
+                     c[static_cast<std::size_t>((i - 1) * ny + j)]) /
+                        (dx * dx) +
+                    (c[static_cast<std::size_t>(i * ny + j + 1)] - 2.0 * center +
+                     c[static_cast<std::size_t>(i * ny + j - 1)]) /
+                        (dy * dy);
+                next[static_cast<std::size_t>(idx)] = center + dt * (-u0 * dcdx - v0 * dcdy + diffusivity * d2c);
+            }
+        }
+        c.swap(next);
+        tp[k + 1] = static_cast<double>(k + 1) * dt;
+        for (py::ssize_t i = 0; i < nx; ++i) {
+            for (py::ssize_t j = 0; j < ny; ++j) {
+                Cp[(i * ny + j) * nt + k + 1] = c[static_cast<std::size_t>(i * ny + j)];
+            }
+        }
+    }
+    return py::make_tuple(t, C);
+}
+
+static py::array_t<double> kep_flux_native(ArrayD UL, ArrayD UR, double gamma) {
+    if (UL.ndim() != 1 || UR.ndim() != 1 || UL.shape(0) < 3 || UR.shape(0) < 3) {
+        throw std::invalid_argument("UL and UR must be 1D conservative states with at least three entries");
+    }
+    const double* L = UL.data();
+    const double* R = UR.data();
+    const double rL = L[0];
+    const double uL = L[1] / std::max(rL, 1e-30);
+    const double pL = (gamma - 1.0) * (L[2] - 0.5 * rL * uL * uL);
+    const double HL = (L[2] + pL) / std::max(rL, 1e-30);
+    const double rR = R[0];
+    const double uR = R[1] / std::max(rR, 1e-30);
+    const double pR = (gamma - 1.0) * (R[2] - 0.5 * rR * uR * uR);
+    const double HR = (R[2] + pR) / std::max(rR, 1e-30);
+    const double rho_bar = 0.5 * (rL + rR);
+    const double u_bar = 0.5 * (uL + uR);
+    const double p_bar = 0.5 * (pL + pR);
+    const double H_bar = 0.5 * (HL + HR);
+    auto out = py::array_t<double>({static_cast<py::ssize_t>(3)});
+    double* op = out.mutable_data();
+    op[0] = rho_bar * u_bar;
+    op[1] = rho_bar * u_bar * u_bar + p_bar;
+    op[2] = rho_bar * u_bar * H_bar;
+    return out;
+}
+
+static py::tuple ppm_face_values_native(ArrayD u) {
+    if (u.ndim() != 1 || u.shape(0) < 5) {
+        throw std::invalid_argument("u must be a 1D array with at least five values");
+    }
+    const double* up = u.data();
+    const double u_face_left = (7.0 / 12.0) * (up[1] + up[2]) - (1.0 / 12.0) * (up[0] + up[3]);
+    const double u_face_right = (7.0 / 12.0) * (up[2] + up[3]) - (1.0 / 12.0) * (up[1] + up[4]);
+    return py::make_tuple(u_face_left, u_face_right);
+}
+
+static py::tuple ppm_monotonize_native(double u_im, double u_i, double u_ip, double uL, double uR) {
+    (void)u_im;
+    (void)u_ip;
+    if ((uR - u_i) * (u_i - uL) <= 0.0) {
+        uL = u_i;
+        uR = u_i;
+    } else if (6.0 * (uR - uL) * (u_i - 0.5 * (uL + uR)) > (uR - uL) * (uR - uL)) {
+        uL = 3.0 * u_i - 2.0 * uR;
+    } else if (6.0 * (uR - uL) * (u_i - 0.5 * (uL + uR)) < -(uR - uL) * (uR - uL)) {
+        uR = 3.0 * u_i - 2.0 * uL;
+    }
+    return py::make_tuple(uL, uR);
+}
+
+static py::array_t<double> bl_grid_native(ArrayD wall_pts, ArrayD wall_normals, int n_layers, double first, double growth) {
+    if (wall_pts.ndim() != 2 || wall_normals.ndim() != 2 || wall_pts.shape(0) != wall_normals.shape(0) || wall_pts.shape(1) != wall_normals.shape(1)) {
+        throw std::invalid_argument("wall_pts and wall_normals must be matching 2D arrays");
+    }
+    const py::ssize_t n_pts = wall_pts.shape(0);
+    const py::ssize_t dim = wall_pts.shape(1);
+    auto out = py::array_t<double>({n_pts, static_cast<py::ssize_t>(n_layers), dim});
+    const double* wp = wall_pts.data();
+    const double* wn = wall_normals.data();
+    double* op = out.mutable_data();
+    double y = 0.0;
+    double h = first;
+    for (int layer = 0; layer < n_layers; ++layer) {
+        y += h;
+        for (py::ssize_t i = 0; i < n_pts; ++i) {
+            for (py::ssize_t d = 0; d < dim; ++d) {
+                op[(i * n_layers + layer) * dim + d] = wp[i * dim + d] + wn[i * dim + d] * y;
+            }
+        }
+        h *= growth;
+    }
+    return out;
+}
+
+static py::array_t<double> metric_from_hessian_2d_native(ArrayD H, double h_min, double h_max) {
+    if (H.ndim() < 2 || H.shape(H.ndim() - 1) != 2 || H.shape(H.ndim() - 2) != 2) {
+        throw std::invalid_argument("H must have trailing shape (2, 2)");
+    }
+    const py::ssize_t n = H.size() / 4;
+    auto out = py::array_t<double>(H.request().shape);
+    const double* hp = H.data();
+    double* op = out.mutable_data();
+    const double lo = 1.0 / (h_max * h_max);
+    const double hi = 1.0 / (h_min * h_min);
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const double h00 = hp[4 * i];
+        const double h01 = 0.5 * (hp[4 * i + 1] + hp[4 * i + 2]);
+        const double h11 = hp[4 * i + 3];
+        const double tr = h00 + h11;
+        const double diff = h00 - h11;
+        const double disc = std::sqrt(0.25 * diff * diff + h01 * h01);
+        const double lam1 = 0.5 * tr + disc;
+        const double lam2 = 0.5 * tr - disc;
+        const double mu1 = std::min(hi, std::max(lo, std::abs(lam1)));
+        const double mu2 = std::min(hi, std::max(lo, std::abs(lam2)));
+        double v0 = h01;
+        double v1 = lam1 - h00;
+        double norm = std::sqrt(v0 * v0 + v1 * v1);
+        if (norm < 1e-30) {
+            v0 = 1.0;
+            v1 = 0.0;
+            norm = 1.0;
+        }
+        v0 /= norm;
+        v1 /= norm;
+        const double w0 = -v1;
+        const double w1 = v0;
+        op[4 * i] = mu1 * v0 * v0 + mu2 * w0 * w0;
+        op[4 * i + 1] = mu1 * v0 * v1 + mu2 * w0 * w1;
+        op[4 * i + 2] = op[4 * i + 1];
+        op[4 * i + 3] = mu1 * v1 * v1 + mu2 * w1 * w1;
+    }
+    return out;
+}
+
+static double edge_length_metric_native(ArrayD M_a, ArrayD M_b, ArrayD a, ArrayD b) {
+    if (M_a.ndim() != 2 || M_b.ndim() != 2 || M_a.shape(0) != M_a.shape(1) || M_b.shape(0) != M_b.shape(1) || M_a.shape(0) != M_b.shape(0)) {
+        throw std::invalid_argument("M_a and M_b must be square matrices of the same size");
+    }
+    const py::ssize_t n = M_a.shape(0);
+    if (a.size() != n || b.size() != n) {
+        throw std::invalid_argument("a and b must match metric dimension");
+    }
+    const double* Map = M_a.data();
+    const double* Mbp = M_b.data();
+    const double* ap = a.data();
+    const double* bp = b.data();
+    double q = 0.0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const double ei = bp[i] - ap[i];
+        for (py::ssize_t j = 0; j < n; ++j) {
+            const double ej = bp[j] - ap[j];
+            q += ei * 0.5 * (Map[i * n + j] + Mbp[i * n + j]) * ej;
+        }
+    }
+    return std::sqrt(std::max(q, 0.0));
+}
+
+static py::array_t<double> box_filter_2d_native(ArrayD field, int width) {
+    if (field.ndim() != 2) {
+        throw std::invalid_argument("field must be a 2D array");
+    }
+    if (width <= 0) {
+        throw std::invalid_argument("width must be positive");
+    }
+    const py::ssize_t ny = field.shape(0);
+    const py::ssize_t nx = field.shape(1);
+    const int pad = width / 2;
+    auto out = py::array_t<double>({ny, nx});
+    const double* fp = field.data();
+    double* op = out.mutable_data();
+    const double denom = static_cast<double>(width * width);
+    for (py::ssize_t i = 0; i < ny; ++i) {
+        for (py::ssize_t j = 0; j < nx; ++j) {
+            double sum = 0.0;
+            for (int di = 0; di < width; ++di) {
+                const py::ssize_t ii = std::min<py::ssize_t>(ny - 1, std::max<py::ssize_t>(0, i + di - pad));
+                for (int dj = 0; dj < width; ++dj) {
+                    const py::ssize_t jj = std::min<py::ssize_t>(nx - 1, std::max<py::ssize_t>(0, j + dj - pad));
+                    sum += fp[ii * nx + jj];
+                }
+            }
+            op[i * nx + j] = sum / denom;
+        }
+    }
+    return out;
+}
+
+static double bilinear_sample_2d(const double* field, py::ssize_t ny, py::ssize_t nx, double x, double y, double Lx, double Ly) {
+    double fx = x / Lx * static_cast<double>(nx - 1);
+    double fy = y / Ly * static_cast<double>(ny - 1);
+    fx = std::min(static_cast<double>(nx - 1) - 1e-12, std::max(0.0, fx));
+    fy = std::min(static_cast<double>(ny - 1) - 1e-12, std::max(0.0, fy));
+    const py::ssize_t ix = static_cast<py::ssize_t>(std::floor(fx));
+    const py::ssize_t iy = static_cast<py::ssize_t>(std::floor(fy));
+    const double tx = fx - static_cast<double>(ix);
+    const double ty = fy - static_cast<double>(iy);
+    const double v00 = field[iy * nx + ix];
+    const double v10 = field[iy * nx + ix + 1];
+    const double v01 = field[(iy + 1) * nx + ix];
+    const double v11 = field[(iy + 1) * nx + ix + 1];
+    return (1.0 - tx) * (1.0 - ty) * v00 + tx * (1.0 - ty) * v10
+        + (1.0 - tx) * ty * v01 + tx * ty * v11;
+}
+
+static py::array_t<double> track_particles_2d_native(ArrayD u, ArrayD v, ArrayD seeds, double Lx, double Ly, double dt, int n_steps) {
+    if (u.ndim() != 2 || v.ndim() != 2 || u.shape(0) != v.shape(0) || u.shape(1) != v.shape(1)) {
+        throw std::invalid_argument("u and v must be matching 2D arrays");
+    }
+    if (seeds.ndim() != 2 || seeds.shape(1) != 2) {
+        throw std::invalid_argument("seeds must be (N, 2)");
+    }
+    const py::ssize_t ny = u.shape(0);
+    const py::ssize_t nx = u.shape(1);
+    const py::ssize_t n = seeds.shape(0);
+    auto trails = py::array_t<double>({n, static_cast<py::ssize_t>(n_steps + 1), static_cast<py::ssize_t>(2)});
+    double* tp = trails.mutable_data();
+    const double* up = u.data();
+    const double* vp = v.data();
+    const double* sp = seeds.data();
+    auto vel = [&](double px, double py) {
+        return std::array<double, 2>{
+            bilinear_sample_2d(up, ny, nx, px, py, Lx, Ly),
+            bilinear_sample_2d(vp, ny, nx, px, py, Lx, Ly),
+        };
+    };
+    for (py::ssize_t i = 0; i < n; ++i) {
+        double px = sp[2 * i];
+        double py = sp[2 * i + 1];
+        tp[(i * (n_steps + 1)) * 2] = px;
+        tp[(i * (n_steps + 1)) * 2 + 1] = py;
+        for (int k = 0; k < n_steps; ++k) {
+            const auto k1 = vel(px, py);
+            const auto k2 = vel(px + 0.5 * dt * k1[0], py + 0.5 * dt * k1[1]);
+            const auto k3 = vel(px + 0.5 * dt * k2[0], py + 0.5 * dt * k2[1]);
+            const auto k4 = vel(px + dt * k3[0], py + dt * k3[1]);
+            px += (dt / 6.0) * (k1[0] + 2.0 * k2[0] + 2.0 * k3[0] + k4[0]);
+            py += (dt / 6.0) * (k1[1] + 2.0 * k2[1] + 2.0 * k3[1] + k4[1]);
+            px = std::min(Lx, std::max(0.0, px));
+            py = std::min(Ly, std::max(0.0, py));
+            const py::ssize_t base = (i * (n_steps + 1) + k + 1) * 2;
+            tp[base] = px;
+            tp[base + 1] = py;
+        }
+    }
+    return trails;
+}
+
+static py::tuple multi_output_r2_raw_native(ArrayD y_true, ArrayD y_pred) {
+    if (y_true.ndim() != 2 || y_pred.ndim() != 2 || y_true.shape(0) != y_pred.shape(0) || y_true.shape(1) != y_pred.shape(1)) {
+        throw std::invalid_argument("y_true and y_pred must be matching 2D arrays");
+    }
+    const py::ssize_t n = y_true.shape(0);
+    const py::ssize_t k = y_true.shape(1);
+    auto r2 = py::array_t<double>({k});
+    auto var = py::array_t<double>({k});
+    double* r2p = r2.mutable_data();
+    double* varp = var.mutable_data();
+    const double* yt = y_true.data();
+    const double* yp = y_pred.data();
+    for (py::ssize_t j = 0; j < k; ++j) {
+        double mean = 0.0;
+        for (py::ssize_t i = 0; i < n; ++i) {
+            mean += yt[i * k + j];
+        }
+        mean /= static_cast<double>(std::max<py::ssize_t>(n, 1));
+        double ss_res = 0.0;
+        double ss_tot = 0.0;
+        for (py::ssize_t i = 0; i < n; ++i) {
+            const double err = yt[i * k + j] - yp[i * k + j];
+            const double centered = yt[i * k + j] - mean;
+            ss_res += err * err;
+            ss_tot += centered * centered;
+        }
+        varp[j] = ss_tot;
+        r2p[j] = ss_tot < 1e-30 ? std::numeric_limits<double>::quiet_NaN() : 1.0 - ss_res / ss_tot;
+    }
+    return py::make_tuple(r2, var);
+}
+
+static py::array_t<double> cross_channel_correlation_native(ArrayD y_true, ArrayD y_pred) {
+    if (y_true.ndim() != 2 || y_pred.ndim() != 2 || y_true.shape(0) != y_pred.shape(0) || y_true.shape(1) != y_pred.shape(1)) {
+        throw std::invalid_argument("y_true and y_pred must be matching 2D arrays");
+    }
+    const py::ssize_t n = y_true.shape(0);
+    const py::ssize_t k = y_true.shape(1);
+    auto out = py::array_t<double>({k});
+    double* op = out.mutable_data();
+    const double* yt = y_true.data();
+    const double* yp = y_pred.data();
+    for (py::ssize_t j = 0; j < k; ++j) {
+        double mt = 0.0;
+        double mp = 0.0;
+        for (py::ssize_t i = 0; i < n; ++i) {
+            mt += yt[i * k + j];
+            mp += yp[i * k + j];
+        }
+        mt /= static_cast<double>(std::max<py::ssize_t>(n, 1));
+        mp /= static_cast<double>(std::max<py::ssize_t>(n, 1));
+        double dot_ab = 0.0;
+        double dot_a = 0.0;
+        double dot_b = 0.0;
+        for (py::ssize_t i = 0; i < n; ++i) {
+            const double a = yt[i * k + j] - mt;
+            const double b = yp[i * k + j] - mp;
+            dot_ab += a * b;
+            dot_a += a * a;
+            dot_b += b * b;
+        }
+        op[j] = dot_ab / (std::sqrt(dot_a * dot_b) + 1e-30);
+    }
+    return out;
+}
+
+static py::array_t<double> svgd_step_update_native(Array2D x, Array2D grad_logp, double lr, double h) {
+    if (x.ndim() != 2 || grad_logp.ndim() != 2 || x.shape(0) != grad_logp.shape(0) || x.shape(1) != grad_logp.shape(1)) {
+        throw std::invalid_argument("x and grad_logp must be matching 2D arrays");
+    }
+    const py::ssize_t n = x.shape(0);
+    const py::ssize_t d = x.shape(1);
+    const double* xp = x.data();
+    const double* gp = grad_logp.data();
+
+    double bandwidth = h;
+    if (!(bandwidth > 0.0)) {
+        if (n > 1) {
+            std::vector<double> sq;
+            sq.reserve(static_cast<std::size_t>(n * n));
+            for (py::ssize_t i = 0; i < n; ++i) {
+                for (py::ssize_t j = 0; j < n; ++j) {
+                    double acc = 0.0;
+                    for (py::ssize_t k = 0; k < d; ++k) {
+                        const double diff = xp[i * d + k] - xp[j * d + k];
+                        acc += diff * diff;
+                    }
+                    sq.push_back(acc);
+                }
+            }
+            std::sort(sq.begin(), sq.end());
+            const std::size_t m = sq.size();
+            const double med = (m % 2 == 1) ? sq[m / 2] : 0.5 * (sq[m / 2 - 1] + sq[m / 2]);
+            bandwidth = std::max(med / std::log(static_cast<double>(std::max<py::ssize_t>(n, 2))), 1e-6);
+        } else {
+            bandwidth = std::max(1.0 / std::log(2.0), 1e-6);
+        }
+    }
+
+    auto out = py::array_t<double>({n, d});
+    double* op = out.mutable_data();
+    const double inv_n = 1.0 / static_cast<double>(std::max<py::ssize_t>(n, 1));
+    for (py::ssize_t i = 0; i < n; ++i) {
+        for (py::ssize_t k = 0; k < d; ++k) {
+            double phi = 0.0;
+            for (py::ssize_t j = 0; j < n; ++j) {
+                double sq = 0.0;
+                for (py::ssize_t q = 0; q < d; ++q) {
+                    const double diff = xp[i * d + q] - xp[j * d + q];
+                    sq += diff * diff;
+                }
+                const double kernel = std::exp(-sq / (2.0 * bandwidth));
+                phi += kernel * gp[j * d + k];
+                phi += ((xp[i * d + k] - xp[j * d + k]) / bandwidth) * kernel;
+            }
+            op[i * d + k] = xp[i * d + k] + lr * phi * inv_n;
+        }
+    }
+    return out;
+}
+
+static py::tuple duct_modes_dirichlet_native(double L, double c, int n_modes, int n_points) {
+    if (n_modes < 0 || n_points < 0) {
+        throw std::invalid_argument("n_modes and n_points must be non-negative");
+    }
+    auto freqs = py::array_t<double>({static_cast<py::ssize_t>(n_modes)});
+    auto modes = py::array_t<double>({static_cast<py::ssize_t>(n_points), static_cast<py::ssize_t>(n_modes)});
+    double* fp = freqs.mutable_data();
+    double* mp = modes.mutable_data();
+    const double denom = (n_points > 1) ? static_cast<double>(n_points - 1) : 1.0;
+    constexpr double pi = 3.141592653589793238462643383279502884;
+    for (int m = 1; m <= n_modes; ++m) {
+        fp[m - 1] = static_cast<double>(m) * c / (2.0 * L);
+    }
+    for (int i = 0; i < n_points; ++i) {
+        const double x = (n_points > 1) ? L * static_cast<double>(i) / denom : 0.0;
+        for (int m = 1; m <= n_modes; ++m) {
+            mp[i * n_modes + (m - 1)] = std::sin(static_cast<double>(m) * pi * x / L);
+        }
+    }
+    return py::make_tuple(freqs, modes);
+}
+
+static py::tuple duct_modes_neumann_native(double L, double c, int n_modes, int n_points) {
+    if (n_modes < 0 || n_points < 0) {
+        throw std::invalid_argument("n_modes and n_points must be non-negative");
+    }
+    auto freqs = py::array_t<double>({static_cast<py::ssize_t>(n_modes)});
+    auto modes = py::array_t<double>({static_cast<py::ssize_t>(n_points), static_cast<py::ssize_t>(n_modes)});
+    double* fp = freqs.mutable_data();
+    double* mp = modes.mutable_data();
+    const double denom = (n_points > 1) ? static_cast<double>(n_points - 1) : 1.0;
+    constexpr double pi = 3.141592653589793238462643383279502884;
+    for (int m = 0; m < n_modes; ++m) {
+        fp[m] = static_cast<double>(m) * c / (2.0 * L);
+    }
+    for (int i = 0; i < n_points; ++i) {
+        const double x = (n_points > 1) ? L * static_cast<double>(i) / denom : 0.0;
+        for (int m = 0; m < n_modes; ++m) {
+            mp[i * n_modes + m] = std::cos(static_cast<double>(m) * pi * x / L);
+        }
+    }
+    return py::make_tuple(freqs, modes);
+}
+
+static py::array_t<double> clenshaw_curtis_weights_native(int N) {
+    if (N < 2) {
+        throw std::invalid_argument("N >= 2");
+    }
+    auto w = py::array_t<double>({static_cast<py::ssize_t>(N + 1)});
+    double* wp = w.mutable_data();
+    constexpr double pi = 3.141592653589793238462643383279502884;
+    const double endpoint = 1.0 / (static_cast<double>(N) * static_cast<double>(N) - 1.0 + static_cast<double>(N % 2));
+    wp[0] = endpoint;
+    wp[N] = endpoint;
+    for (int j = 1; j < N; ++j) {
+        const double theta_j = pi * static_cast<double>(j) / static_cast<double>(N);
+        double s = 0.0;
+        for (int k = 1; k <= N / 2; ++k) {
+            const double b = (2 * k < N) ? 1.0 : 0.5;
+            s += b * std::cos(2.0 * static_cast<double>(k) * theta_j) / (4.0 * k * k - 1.0);
+        }
+        wp[j] = (2.0 / static_cast<double>(N)) * (1.0 - 2.0 * s);
+    }
+    return w;
+}
+
+static py::array_t<double> chebyshev_points_native(int N) {
+    if (N < 1) {
+        throw std::invalid_argument("N >= 1 required");
+    }
+    auto out = py::array_t<double>({static_cast<py::ssize_t>(N + 1)});
+    double* op = out.mutable_data();
+    constexpr double pi = 3.141592653589793238462643383279502884;
+    for (int i = 0; i <= N; ++i) {
+        op[i] = std::cos(pi * static_cast<double>(i) / static_cast<double>(N));
+    }
+    return out;
+}
+
+static py::array_t<double> chebyshev_diff_matrix_native(int N) {
+    if (N < 1) {
+        throw std::invalid_argument("N >= 1 required");
+    }
+    const int m = N + 1;
+    constexpr double pi = 3.141592653589793238462643383279502884;
+    std::vector<double> x(static_cast<std::size_t>(m));
+    std::vector<double> c(static_cast<std::size_t>(m));
+    for (int i = 0; i < m; ++i) {
+        x[i] = std::cos(pi * static_cast<double>(i) / static_cast<double>(N));
+        const double endpoint_scale = (i == 0 || i == N) ? 2.0 : 1.0;
+        c[i] = endpoint_scale * ((i % 2 == 0) ? 1.0 : -1.0);
+    }
+
+    auto out = py::array_t<double>({static_cast<py::ssize_t>(m), static_cast<py::ssize_t>(m)});
+    double* op = out.mutable_data();
+    for (int i = 0; i < m; ++i) {
+        double row_sum = 0.0;
+        for (int j = 0; j < m; ++j) {
+            if (i == j) {
+                op[i * m + j] = 0.0;
+                continue;
+            }
+            const double value = (c[i] / c[j]) / (x[i] - x[j]);
+            op[i * m + j] = value;
+            row_sum += value;
+        }
+        op[i * m + i] = -row_sum;
+    }
+    return out;
+}
+
+static py::array_t<double> lagrange_interp_1d_native(ArrayD x_known, ArrayD y_known, ArrayD x_new) {
+    if (x_known.ndim() != 1 || y_known.ndim() != 1 || x_known.shape(0) != y_known.shape(0)) {
+        throw std::invalid_argument("x_known and y_known must be matching 1D arrays");
+    }
+    std::vector<py::ssize_t> shape;
+    shape.reserve(static_cast<std::size_t>(x_new.ndim()));
+    for (py::ssize_t axis = 0; axis < x_new.ndim(); ++axis) {
+        shape.push_back(x_new.shape(axis));
+    }
+    auto out = py::array_t<double>(shape);
+    const double* xkp = x_known.data();
+    const double* ykp = y_known.data();
+    const double* xnp = x_new.data();
+    double* op = out.mutable_data();
+    const py::ssize_t n_known = x_known.shape(0);
+    const py::ssize_t n_new = x_new.size();
+    for (py::ssize_t p = 0; p < n_new; ++p) {
+        double value = 0.0;
+        const double x = xnp[p];
+        for (py::ssize_t i = 0; i < n_known; ++i) {
+            double basis = 1.0;
+            for (py::ssize_t j = 0; j < n_known; ++j) {
+                if (i == j) {
+                    continue;
+                }
+                basis *= (x - xkp[j]) / (xkp[i] - xkp[j]);
+            }
+            value += ykp[i] * basis;
+        }
+        op[p] = value;
+    }
+    return out;
+}
+
+static py::array_t<bool> cusum_alarms_native(ArrayD residuals, double k, double h) {
+    if (residuals.ndim() != 1) {
+        throw std::invalid_argument("residuals must be a 1D array");
+    }
+    const py::ssize_t n = residuals.shape(0);
+    const double* rp = residuals.data();
+    auto out = py::array_t<bool>({n});
+    bool* op = out.mutable_data();
+    double splus = 0.0;
+    double sminus = 0.0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const double v = rp[i];
+        splus = std::max(0.0, splus + v - k);
+        sminus = std::min(0.0, sminus + v + k);
+        op[i] = splus > h || sminus < -h;
+    }
+    return out;
+}
+
+static py::array_t<bool> ewma_alarms_native(ArrayD residuals, double lam, double k) {
+    if (residuals.ndim() != 1) {
+        throw std::invalid_argument("residuals must be a 1D array");
+    }
+    const py::ssize_t n = residuals.shape(0);
+    if (n == 0) {
+        throw std::invalid_argument("residuals must be non-empty");
+    }
+    const double* rp = residuals.data();
+    double mean = 0.0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        mean += rp[i];
+    }
+    mean /= static_cast<double>(n);
+    double var = 0.0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const double centered = rp[i] - mean;
+        var += centered * centered;
+    }
+    const double sigma = std::sqrt(var / static_cast<double>(n)) + 1e-30;
+    const double mu = rp[0];
+    double z = mu;
+    auto out = py::array_t<bool>({n});
+    bool* op = out.mutable_data();
+    op[0] = std::abs(z - mu) / sigma > k;
+    for (py::ssize_t i = 1; i < n; ++i) {
+        z = (1.0 - lam) * z + lam * rp[i];
+        op[i] = std::abs(z - mu) / sigma > k;
+    }
+    return out;
+}
+
+static py::array_t<bool> pareto_front_native(ArrayD objectives) {
+    if (objectives.ndim() != 2) {
+        throw std::invalid_argument("objectives must be a 2D array");
+    }
+    const py::ssize_t n = objectives.shape(0);
+    const py::ssize_t d = objectives.shape(1);
+    const double* obj = objectives.data();
+    auto out = py::array_t<bool>({n});
+    bool* keep = out.mutable_data();
+    for (py::ssize_t i = 0; i < n; ++i) {
+        keep[i] = true;
+    }
+    for (py::ssize_t i = 0; i < n; ++i) {
+        if (!keep[i]) {
+            continue;
+        }
+        for (py::ssize_t j = 0; j < n; ++j) {
+            if (i == j) {
+                continue;
+            }
+            bool all_le = true;
+            bool any_lt = false;
+            for (py::ssize_t k = 0; k < d; ++k) {
+                const double a = obj[j * d + k];
+                const double b = obj[i * d + k];
+                if (!(a <= b)) {
+                    all_le = false;
+                    break;
+                }
+                if (a < b) {
+                    any_lt = true;
+                }
+            }
+            if (all_le && any_lt) {
+                keep[i] = false;
+                break;
+            }
+        }
+    }
+    return out;
+}
+
+static py::array_t<double> arrow_segments_native(ArrayD points, ArrayD vectors, double scale) {
+    if (points.ndim() != 2 || vectors.ndim() != 2 || points.shape(0) != vectors.shape(0) || points.shape(1) != vectors.shape(1)) {
+        throw std::invalid_argument("points and vectors must be matching 2D arrays");
+    }
+    const py::ssize_t n = points.shape(0);
+    const py::ssize_t d = points.shape(1);
+    auto out = py::array_t<double>({n, static_cast<py::ssize_t>(2), d});
+    const double* pp = points.data();
+    const double* vp = vectors.data();
+    double* op = out.mutable_data();
+    for (py::ssize_t i = 0; i < n; ++i) {
+        for (py::ssize_t j = 0; j < d; ++j) {
+            const py::ssize_t base = (i * 2 * d) + j;
+            const double start = pp[i * d + j];
+            op[base] = start;
+            op[base + d] = start + scale * vp[i * d + j];
+        }
+    }
+    return out;
+}
+
+static py::array_t<double> ray_march_native(ArrayD volume, int n_steps, int axis, double alpha) {
+    if (volume.ndim() != 3) {
+        throw std::invalid_argument("volume must be a 3D array");
+    }
+    int ax = axis;
+    if (ax < 0) {
+        ax += 3;
+    }
+    if (ax < 0 || ax > 2) {
+        throw std::invalid_argument("axis must be 0, 1, or 2");
+    }
+    if (n_steps == 0) {
+        throw std::invalid_argument("n_steps must be non-zero");
+    }
+    const py::ssize_t s0 = volume.shape(0);
+    const py::ssize_t s1 = volume.shape(1);
+    const py::ssize_t s2 = volume.shape(2);
+    const py::ssize_t H = (ax == 0) ? s1 : s0;
+    const py::ssize_t W = (ax == 2) ? s1 : s2;
+    const py::ssize_t D = (ax == 0) ? s0 : ((ax == 1) ? s1 : s2);
+    const py::ssize_t step = std::max<py::ssize_t>(D / static_cast<py::ssize_t>(n_steps), 1);
+    const double* vp = volume.data();
+    auto out = py::array_t<double>({H, W});
+    double* op = out.mutable_data();
+    std::vector<double> trans(static_cast<std::size_t>(H * W), 1.0);
+    std::fill(op, op + H * W, 0.0);
+    for (py::ssize_t k = 0; k < D; k += step) {
+        for (py::ssize_t i = 0; i < H; ++i) {
+            for (py::ssize_t j = 0; j < W; ++j) {
+                py::ssize_t idx = 0;
+                if (ax == 0) {
+                    idx = (k * s1 + i) * s2 + j;
+                } else if (ax == 1) {
+                    idx = (i * s1 + k) * s2 + j;
+                } else {
+                    idx = (i * s1 + j) * s2 + k;
+                }
+                const py::ssize_t out_idx = i * W + j;
+                const double sample = vp[idx];
+                const double a = alpha * sample;
+                op[out_idx] += trans[static_cast<std::size_t>(out_idx)] * a * sample;
+                trans[static_cast<std::size_t>(out_idx)] *= (1.0 - a);
+            }
+        }
+    }
+    return out;
+}
+
+static py::array_t<long long> boundary_faces_tet_native(ArrayI tets) {
+    if (tets.ndim() != 2 || tets.shape(1) != 4) {
+        throw std::invalid_argument("tets must have shape (M, 4)");
+    }
+    const py::ssize_t n = tets.shape(0);
+    const long long* tp = tets.data();
+    constexpr int face_idx[4][3] = {{0, 1, 2}, {0, 1, 3}, {0, 2, 3}, {1, 2, 3}};
+    std::vector<std::array<long long, 3>> faces;
+    std::vector<int> counts;
+    std::unordered_map<std::string, std::size_t> first_seen;
+    faces.reserve(static_cast<std::size_t>(4 * n));
+    counts.reserve(static_cast<std::size_t>(4 * n));
+    for (py::ssize_t row = 0; row < n; ++row) {
+        for (int f = 0; f < 4; ++f) {
+            std::array<long long, 3> tri = {
+                tp[row * 4 + face_idx[f][0]],
+                tp[row * 4 + face_idx[f][1]],
+                tp[row * 4 + face_idx[f][2]],
+            };
+            std::sort(tri.begin(), tri.end());
+            const std::string key = std::to_string(tri[0]) + "," + std::to_string(tri[1]) + "," + std::to_string(tri[2]);
+            auto it = first_seen.find(key);
+            if (it == first_seen.end()) {
+                first_seen.emplace(key, faces.size());
+                faces.push_back(tri);
+                counts.push_back(1);
+            } else {
+                counts[it->second] += 1;
+            }
+        }
+    }
+    py::ssize_t boundary_count = 0;
+    for (int c : counts) {
+        if (c == 1) {
+            ++boundary_count;
+        }
+    }
+    auto out = py::array_t<long long>({boundary_count, static_cast<py::ssize_t>(3)});
+    long long* op = out.mutable_data();
+    py::ssize_t out_row = 0;
+    for (std::size_t i = 0; i < faces.size(); ++i) {
+        if (counts[i] != 1) {
+            continue;
+        }
+        op[out_row * 3] = faces[i][0];
+        op[out_row * 3 + 1] = faces[i][1];
+        op[out_row * 3 + 2] = faces[i][2];
+        ++out_row;
+    }
+    return out;
+}
+
+static py::array_t<double> lumped_mass_2d_native(ArrayD points, ArrayI simplices) {
+    if (points.ndim() != 2 || points.shape(1) != 2 || simplices.ndim() != 2 || simplices.shape(1) != 3) {
+        throw std::invalid_argument("points must be (N, 2) and simplices must be (M, 3)");
+    }
+    const py::ssize_t n_points = points.shape(0);
+    const py::ssize_t n_tri = simplices.shape(0);
+    const double* pp = points.data();
+    const long long* sp = simplices.data();
+    auto out = py::array_t<double>({n_points});
+    double* op = out.mutable_data();
+    std::fill(op, op + n_points, 0.0);
+    for (py::ssize_t e = 0; e < n_tri; ++e) {
+        const long long i0 = sp[e * 3];
+        const long long i1 = sp[e * 3 + 1];
+        const long long i2 = sp[e * 3 + 2];
+        const double x0 = pp[i0 * 2];
+        const double y0 = pp[i0 * 2 + 1];
+        const double x1 = pp[i1 * 2];
+        const double y1 = pp[i1 * 2 + 1];
+        const double x2 = pp[i2 * 2];
+        const double y2 = pp[i2 * 2 + 1];
+        const double area = 0.5 * std::abs((x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0));
+        const double share = area / 3.0;
+        op[i0] += share;
+        op[i1] += share;
+        op[i2] += share;
+    }
+    return out;
+}
+
+static py::array_t<double> p1_stiffness_2d_native(ArrayD points, ArrayI simplices) {
+    if (points.ndim() != 2 || points.shape(1) != 2 || simplices.ndim() != 2 || simplices.shape(1) != 3) {
+        throw std::invalid_argument("points must be (N, 2) and simplices must be (M, 3)");
+    }
+    const py::ssize_t n_points = points.shape(0);
+    const py::ssize_t n_tri = simplices.shape(0);
+    const double* pp = points.data();
+    const long long* sp = simplices.data();
+    auto out = py::array_t<double>({n_points, n_points});
+    double* K = out.mutable_data();
+    std::fill(K, K + n_points * n_points, 0.0);
+    for (py::ssize_t e = 0; e < n_tri; ++e) {
+        const long long tri[3] = {sp[e * 3], sp[e * 3 + 1], sp[e * 3 + 2]};
+        const double xs[3] = {pp[tri[0] * 2], pp[tri[1] * 2], pp[tri[2] * 2]};
+        const double ys[3] = {pp[tri[0] * 2 + 1], pp[tri[1] * 2 + 1], pp[tri[2] * 2 + 1]};
+        const double det = (xs[1] - xs[0]) * (ys[2] - ys[0]) - (xs[2] - xs[0]) * (ys[1] - ys[0]);
+        const double area = 0.5 * std::abs(det);
+        if (area < 1e-20) {
+            continue;
+        }
+        const double b[3] = {ys[1] - ys[2], ys[2] - ys[0], ys[0] - ys[1]};
+        const double c[3] = {xs[2] - xs[1], xs[0] - xs[2], xs[1] - xs[0]};
+        for (int i = 0; i < 3; ++i) {
+            for (int j = 0; j < 3; ++j) {
+                K[tri[i] * n_points + tri[j]] += (b[i] * b[j] + c[i] * c[j]) / (4.0 * area);
+            }
+        }
+    }
+    return out;
+}
+
+static py::list marching_squares_native(Array2D f, double level) {
+    const py::ssize_t nx = f.shape(0);
+    const py::ssize_t ny = f.shape(1);
+    const double* fp = f.data();
+    py::list segments;
+    for (py::ssize_t i = 0; i < nx - 1; ++i) {
+        for (py::ssize_t j = 0; j < ny - 1; ++j) {
+            const double v[4] = {
+                fp[i * ny + j],
+                fp[(i + 1) * ny + j],
+                fp[(i + 1) * ny + (j + 1)],
+                fp[i * ny + (j + 1)],
+            };
+            const bool below[4] = {v[0] < level, v[1] < level, v[2] < level, v[3] < level};
+            const double corners[4][2] = {
+                {static_cast<double>(i), static_cast<double>(j)},
+                {static_cast<double>(i + 1), static_cast<double>(j)},
+                {static_cast<double>(i + 1), static_cast<double>(j + 1)},
+                {static_cast<double>(i), static_cast<double>(j + 1)},
+            };
+            std::vector<std::array<double, 2>> edge_points;
+            edge_points.reserve(4);
+            for (int k = 0; k < 4; ++k) {
+                const int a = k;
+                const int b = (k + 1) % 4;
+                if (below[a] != below[b]) {
+                    const double t = (level - v[a]) / (v[b] - v[a] + 1e-30);
+                    edge_points.push_back({
+                        corners[a][0] + t * (corners[b][0] - corners[a][0]),
+                        corners[a][1] + t * (corners[b][1] - corners[a][1]),
+                    });
+                }
+            }
+            if (edge_points.size() == 2) {
+                segments.append(py::make_tuple(
+                    py::make_tuple(edge_points[0][0], edge_points[0][1]),
+                    py::make_tuple(edge_points[1][0], edge_points[1][1])
+                ));
+            } else if (edge_points.size() == 4) {
+                segments.append(py::make_tuple(
+                    py::make_tuple(edge_points[0][0], edge_points[0][1]),
+                    py::make_tuple(edge_points[1][0], edge_points[1][1])
+                ));
+                segments.append(py::make_tuple(
+                    py::make_tuple(edge_points[2][0], edge_points[2][1]),
+                    py::make_tuple(edge_points[3][0], edge_points[3][1])
+                ));
+            }
+        }
+    }
+    return segments;
+}
+
+static py::list augment_symmetric_native(ArrayD u, py::sequence axes) {
+    if (u.ndim() < 1) {
+        throw std::invalid_argument("U must have at least one dimension");
+    }
+    const py::ssize_t d = u.shape(u.ndim() - 1);
+    std::vector<int> axis_values;
+    axis_values.reserve(static_cast<std::size_t>(py::len(axes)));
+    for (py::handle item : axes) {
+        const int ax = py::cast<int>(item);
+        if (ax < 0 || ax >= d) {
+            throw std::invalid_argument("axis out of bounds");
+        }
+        axis_values.push_back(ax);
+    }
+    std::vector<std::vector<int>> masks(1);
+    for (int ax : axis_values) {
+        const std::size_t old_size = masks.size();
+        masks.reserve(old_size * 2);
+        for (std::size_t i = 0; i < old_size; ++i) {
+            std::vector<int> reflected = masks[i];
+            reflected.push_back(ax);
+            masks.push_back(std::move(reflected));
+        }
+    }
+
+    std::vector<py::ssize_t> shape;
+    shape.reserve(static_cast<std::size_t>(u.ndim()));
+    for (py::ssize_t axis = 0; axis < u.ndim(); ++axis) {
+        shape.push_back(u.shape(axis));
+    }
+    const double* up = u.data();
+    const py::ssize_t total = u.size();
+    py::list out;
+    for (const auto& mask : masks) {
+        auto arr = py::array_t<double>(shape);
+        double* ap = arr.mutable_data();
+        for (py::ssize_t idx = 0; idx < total; ++idx) {
+            const int component = static_cast<int>(idx % d);
+            int flips = 0;
+            for (int ax : mask) {
+                if (ax == component) {
+                    ++flips;
+                }
+            }
+            ap[idx] = (flips % 2 == 0) ? up[idx] : -up[idx];
+        }
+        out.append(arr);
+    }
+    return out;
+}
+
+static py::tuple kmeans_lloyd_native(ArrayD x, ArrayD initial_centers, int max_iter, double tol) {
+    if (x.ndim() != 2 || initial_centers.ndim() != 2 || x.shape(1) != initial_centers.shape(1)) {
+        throw std::invalid_argument("X and initial_centers must be 2D with matching feature dimension");
+    }
+    const py::ssize_t n = x.shape(0);
+    const py::ssize_t d = x.shape(1);
+    const py::ssize_t k = initial_centers.shape(0);
+    const double* xp = x.data();
+    std::vector<double> centers(initial_centers.data(), initial_centers.data() + k * d);
+    std::vector<long long> labels(static_cast<std::size_t>(n), 0);
+    if (max_iter < 1) {
+        throw std::invalid_argument("max_iter must be >= 1");
+    }
+    for (int iter = 0; iter < max_iter; ++iter) {
+        for (py::ssize_t i = 0; i < n; ++i) {
+            py::ssize_t best = 0;
+            double best_dist = std::numeric_limits<double>::infinity();
+            for (py::ssize_t cidx = 0; cidx < k; ++cidx) {
+                double dist = 0.0;
+                for (py::ssize_t j = 0; j < d; ++j) {
+                    const double diff = xp[i * d + j] - centers[cidx * d + j];
+                    dist += diff * diff;
+                }
+                if (dist < best_dist) {
+                    best_dist = dist;
+                    best = cidx;
+                }
+            }
+            labels[static_cast<std::size_t>(i)] = static_cast<long long>(best);
+        }
+
+        std::vector<double> next_centers = centers;
+        std::vector<double> sums(static_cast<std::size_t>(k * d), 0.0);
+        std::vector<py::ssize_t> counts(static_cast<std::size_t>(k), 0);
+        for (py::ssize_t i = 0; i < n; ++i) {
+            const py::ssize_t cidx = static_cast<py::ssize_t>(labels[static_cast<std::size_t>(i)]);
+            counts[static_cast<std::size_t>(cidx)] += 1;
+            for (py::ssize_t j = 0; j < d; ++j) {
+                sums[cidx * d + j] += xp[i * d + j];
+            }
+        }
+        for (py::ssize_t cidx = 0; cidx < k; ++cidx) {
+            const py::ssize_t count = counts[static_cast<std::size_t>(cidx)];
+            if (count > 0) {
+                for (py::ssize_t j = 0; j < d; ++j) {
+                    next_centers[cidx * d + j] = sums[cidx * d + j] / static_cast<double>(count);
+                }
+            }
+        }
+        double shift_sq = 0.0;
+        for (py::ssize_t idx = 0; idx < k * d; ++idx) {
+            const double diff = next_centers[static_cast<std::size_t>(idx)] - centers[static_cast<std::size_t>(idx)];
+            shift_sq += diff * diff;
+        }
+        centers = std::move(next_centers);
+        if (std::sqrt(shift_sq) < tol) {
+            break;
+        }
+    }
+    auto centers_out = py::array_t<double>({k, d});
+    std::copy(centers.begin(), centers.end(), centers_out.mutable_data());
+    auto labels_out = py::array_t<long long>({n});
+    std::copy(labels.begin(), labels.end(), labels_out.mutable_data());
+    return py::make_tuple(centers_out, labels_out);
+}
+
+static double kmeans_inertia_native(ArrayD x, ArrayD centers, ArrayI labels) {
+    if (x.ndim() != 2 || centers.ndim() != 2 || labels.ndim() != 1 || x.shape(1) != centers.shape(1) || x.shape(0) != labels.shape(0)) {
+        throw std::invalid_argument("X, centers, and labels have incompatible shapes");
+    }
+    const py::ssize_t n = x.shape(0);
+    const py::ssize_t d = x.shape(1);
+    const double* xp = x.data();
+    const double* cp = centers.data();
+    const long long* lp = labels.data();
+    double total = 0.0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const long long label = lp[i];
+        for (py::ssize_t j = 0; j < d; ++j) {
+            const double diff = xp[i * d + j] - cp[label * d + j];
+            total += diff * diff;
+        }
+    }
+    return total;
+}
+
+static py::dict haar_forward_native(ArrayD x, int level) {
+    if (x.ndim() != 1) {
+        throw std::invalid_argument("x must be a 1D array");
+    }
+    constexpr double inv_sqrt2 = 0.707106781186547524400844362104849039;
+    std::vector<double> a(x.data(), x.data() + x.shape(0));
+    std::vector<std::vector<double>> details;
+    details.reserve(static_cast<std::size_t>(std::max(level, 0)));
+    for (int lev = 0; lev < level; ++lev) {
+        if (a.size() % 2 != 0) {
+            throw std::invalid_argument("length must be divisible by 2 at each level");
+        }
+        const std::size_t n = a.size() / 2;
+        std::vector<double> next_a(n);
+        std::vector<double> d(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            next_a[i] = (a[2 * i] + a[2 * i + 1]) * inv_sqrt2;
+            d[i] = (a[2 * i] - a[2 * i + 1]) * inv_sqrt2;
+        }
+        details.push_back(std::move(d));
+        a = std::move(next_a);
+    }
+    auto approx = py::array_t<double>({static_cast<py::ssize_t>(a.size())});
+    std::copy(a.begin(), a.end(), approx.mutable_data());
+    py::list detail_list;
+    for (auto it = details.rbegin(); it != details.rend(); ++it) {
+        auto arr = py::array_t<double>({static_cast<py::ssize_t>(it->size())});
+        std::copy(it->begin(), it->end(), arr.mutable_data());
+        detail_list.append(arr);
+    }
+    py::dict out;
+    out["approx"] = approx;
+    out["details"] = detail_list;
+    return out;
+}
+
+static py::array_t<double> haar_inverse_native(py::dict coeffs) {
+    constexpr double inv_sqrt2 = 0.707106781186547524400844362104849039;
+    ArrayD approx = py::cast<ArrayD>(coeffs["approx"]);
+    std::vector<double> a(approx.data(), approx.data() + approx.size());
+    py::sequence details = py::cast<py::sequence>(coeffs["details"]);
+    for (py::handle item : details) {
+        ArrayD d_arr = py::cast<ArrayD>(item);
+        if (d_arr.ndim() != 1 || static_cast<std::size_t>(d_arr.shape(0)) != a.size()) {
+            throw std::invalid_argument("detail arrays must be 1D and match current approximation length");
+        }
+        const double* dp = d_arr.data();
+        std::vector<double> up(a.size() * 2);
+        for (std::size_t i = 0; i < a.size(); ++i) {
+            up[2 * i] = (a[i] + dp[i]) * inv_sqrt2;
+            up[2 * i + 1] = (a[i] - dp[i]) * inv_sqrt2;
+        }
+        a = std::move(up);
+    }
+    auto out = py::array_t<double>({static_cast<py::ssize_t>(a.size())});
+    std::copy(a.begin(), a.end(), out.mutable_data());
+    return out;
+}
+
+static py::dict haar_threshold_native(py::dict coeffs, double tau) {
+    py::dict out;
+    out["approx"] = coeffs["approx"];
+    py::list detail_list;
+    py::sequence details = py::cast<py::sequence>(coeffs["details"]);
+    for (py::handle item : details) {
+        ArrayD d_arr = py::cast<ArrayD>(item);
+        auto arr = py::array_t<double>({d_arr.shape(0)});
+        const double* dp = d_arr.data();
+        double* ap = arr.mutable_data();
+        for (py::ssize_t i = 0; i < d_arr.shape(0); ++i) {
+            const double mag = std::max(std::abs(dp[i]) - tau, 0.0);
+            ap[i] = (dp[i] > 0.0 ? 1.0 : (dp[i] < 0.0 ? -1.0 : 0.0)) * mag;
+        }
+        detail_list.append(arr);
+    }
+    out["details"] = detail_list;
+    return out;
+}
+
+static double mean_1d(const double* x, py::ssize_t n) {
+    double total = 0.0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        total += x[i];
+    }
+    return total / static_cast<double>(n);
+}
+
+static double effective_sample_size_native(ArrayD x, int max_lag) {
+    if (x.ndim() != 1) {
+        throw std::invalid_argument("x must be a 1D array");
+    }
+    const py::ssize_t n = x.shape(0);
+    if (n < 2) {
+        return static_cast<double>(n);
+    }
+    py::ssize_t lag_max = max_lag < 0 ? n / 4 : static_cast<py::ssize_t>(max_lag);
+    const double* xp = x.data();
+    const double mu = mean_1d(xp, n);
+    double var = 0.0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const double centered = xp[i] - mu;
+        var += centered * centered;
+    }
+    var = var / static_cast<double>(n) + 1e-30;
+    double rho_sum = 0.0;
+    for (py::ssize_t lag = 1; lag <= lag_max; ++lag) {
+        double corr = 0.0;
+        for (py::ssize_t i = 0; i < n - lag; ++i) {
+            corr += (xp[i] - mu) * (xp[i + lag] - mu);
+        }
+        const double rho = (corr / static_cast<double>(n - lag)) / var;
+        if (rho < 0.0) {
+            break;
+        }
+        rho_sum += rho;
+    }
+    return static_cast<double>(n) / std::max(1.0 + 2.0 * rho_sum, 1.0);
+}
+
+static py::object plateau_detector_native(ArrayD x, int window, double tol_rel) {
+    if (x.ndim() != 1) {
+        throw std::invalid_argument("x must be a 1D array");
+    }
+    if (window <= 0) {
+        throw std::invalid_argument("window must be > 0");
+    }
+    const py::ssize_t n = x.shape(0);
+    if (n < 2 * static_cast<py::ssize_t>(window)) {
+        return py::none();
+    }
+    const double* xp = x.data();
+    std::vector<double> cum(static_cast<std::size_t>(n));
+    double total = 0.0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        total += xp[i];
+        cum[static_cast<std::size_t>(i)] = total / static_cast<double>(i + 1);
+    }
+    for (py::ssize_t i = 0; i < n - window; ++i) {
+        const double ref = std::abs(cum[static_cast<std::size_t>(i + window)]) + 1e-30;
+        if (std::abs(cum[static_cast<std::size_t>(i + window)] - cum[static_cast<std::size_t>(i)]) / ref < tol_rel) {
+            return py::int_(i);
+        }
+    }
+    return py::none();
+}
+
+static double autocorrelation_time_native(ArrayD x, int max_lag) {
+    if (x.ndim() != 1) {
+        throw std::invalid_argument("x must be a 1D array");
+    }
+    const py::ssize_t n = x.shape(0);
+    if (n < 2) {
+        return 1.0;
+    }
+    py::ssize_t lag_max = max_lag < 0 ? n / 4 : static_cast<py::ssize_t>(max_lag);
+    const double* xp = x.data();
+    const double mu = mean_1d(xp, n);
+    double var = 0.0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const double centered = xp[i] - mu;
+        var += centered * centered;
+    }
+    var = var / static_cast<double>(n) + 1e-30;
+    double tau = 1.0;
+    for (py::ssize_t lag = 1; lag <= lag_max; ++lag) {
+        double corr = 0.0;
+        for (py::ssize_t i = 0; i < n - lag; ++i) {
+            corr += (xp[i] - mu) * (xp[i + lag] - mu);
+        }
+        const double rho = (corr / static_cast<double>(n - lag)) / var;
+        if (rho < 0.0) {
+            break;
+        }
+        tau += 2.0 * rho;
+    }
+    return tau;
+}
+
+static void check_binary_morphology_args(const ArrayB& mask, int iterations, int connectivity) {
+    if (mask.ndim() != 2) {
+        throw std::invalid_argument("mask must be a 2D array");
+    }
+    if (connectivity != 1 && connectivity != 2) {
+        throw std::invalid_argument("connectivity must be 1 or 2");
+    }
+    if (iterations < 0) {
+        throw std::invalid_argument("iterations must be >= 0");
+    }
+}
+
+static py::array_t<bool> binary_dilation_2d_native(ArrayB mask, int iterations, int connectivity) {
+    check_binary_morphology_args(mask, iterations, connectivity);
+    const py::ssize_t nx = mask.shape(0);
+    const py::ssize_t ny = mask.shape(1);
+    std::vector<bool> current(mask.data(), mask.data() + nx * ny);
+    std::vector<bool> next = current;
+    const int offsets4[4][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+    const int offsets8[8][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}, {-1, -1}, {1, 1}, {-1, 1}, {1, -1}};
+    for (int it = 0; it < iterations; ++it) {
+        next = current;
+        const int n_offsets = connectivity == 1 ? 4 : 8;
+        const int (*offsets)[2] = connectivity == 1 ? offsets4 : offsets8;
+        for (py::ssize_t i = 0; i < nx; ++i) {
+            for (py::ssize_t j = 0; j < ny; ++j) {
+                bool value = current[static_cast<std::size_t>(i * ny + j)];
+                for (int oi = 0; oi < n_offsets && !value; ++oi) {
+                    const py::ssize_t ni = i + offsets[oi][0];
+                    const py::ssize_t nj = j + offsets[oi][1];
+                    if (0 <= ni && ni < nx && 0 <= nj && nj < ny) {
+                        value = current[static_cast<std::size_t>(ni * ny + nj)];
+                    }
+                }
+                next[static_cast<std::size_t>(i * ny + j)] = value;
+            }
+        }
+        current.swap(next);
+    }
+    auto out = py::array_t<bool>({nx, ny});
+    bool* op = out.mutable_data();
+    for (py::ssize_t idx = 0; idx < nx * ny; ++idx) {
+        op[idx] = current[static_cast<std::size_t>(idx)];
+    }
+    return out;
+}
+
+static py::array_t<bool> binary_erosion_2d_native(ArrayB mask, int iterations, int connectivity) {
+    check_binary_morphology_args(mask, iterations, connectivity);
+    const py::ssize_t nx = mask.shape(0);
+    const py::ssize_t ny = mask.shape(1);
+    std::vector<bool> current(mask.data(), mask.data() + nx * ny);
+    std::vector<bool> next = current;
+    const int offsets4[5][2] = {{0, 0}, {-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+    const int offsets8[9][2] = {{0, 0}, {-1, 0}, {1, 0}, {0, -1}, {0, 1}, {-1, -1}, {1, 1}, {-1, 1}, {1, -1}};
+    for (int it = 0; it < iterations; ++it) {
+        const int n_offsets = connectivity == 1 ? 5 : 9;
+        const int (*offsets)[2] = connectivity == 1 ? offsets4 : offsets8;
+        for (py::ssize_t i = 0; i < nx; ++i) {
+            for (py::ssize_t j = 0; j < ny; ++j) {
+                bool value = true;
+                for (int oi = 0; oi < n_offsets; ++oi) {
+                    const py::ssize_t ni = i + offsets[oi][0];
+                    const py::ssize_t nj = j + offsets[oi][1];
+                    if (!(0 <= ni && ni < nx && 0 <= nj && nj < ny) || !current[static_cast<std::size_t>(ni * ny + nj)]) {
+                        value = false;
+                        break;
+                    }
+                }
+                next[static_cast<std::size_t>(i * ny + j)] = value;
+            }
+        }
+        current.swap(next);
+    }
+    auto out = py::array_t<bool>({nx, ny});
+    bool* op = out.mutable_data();
+    for (py::ssize_t idx = 0; idx < nx * ny; ++idx) {
+        op[idx] = current[static_cast<std::size_t>(idx)];
+    }
+    return out;
+}
+
+static py::tuple connected_components_2d_native(ArrayB mask, int connectivity) {
+    if (mask.ndim() != 2) {
+        throw std::invalid_argument("mask must be a 2D array");
+    }
+    if (connectivity != 1 && connectivity != 2) {
+        throw std::invalid_argument("connectivity must be 1 or 2");
+    }
+    const py::ssize_t nx = mask.shape(0);
+    const py::ssize_t ny = mask.shape(1);
+    const bool* mp = mask.data();
+    auto labels = py::array_t<int>({nx, ny});
+    int* lp = labels.mutable_data();
+    std::fill(lp, lp + nx * ny, 0);
+    const int offsets4[4][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+    const int offsets8[8][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}, {-1, -1}, {1, 1}, {-1, 1}, {1, -1}};
+    const int n_offsets = connectivity == 1 ? 4 : 8;
+    const int (*offsets)[2] = connectivity == 1 ? offsets4 : offsets8;
+    int n_components = 0;
+    for (py::ssize_t i = 0; i < nx; ++i) {
+        for (py::ssize_t j = 0; j < ny; ++j) {
+            const py::ssize_t idx = i * ny + j;
+            if (!mp[idx] || lp[idx] != 0) {
+                continue;
+            }
+            ++n_components;
+            std::vector<std::pair<py::ssize_t, py::ssize_t>> stack;
+            stack.emplace_back(i, j);
+            lp[idx] = n_components;
+            while (!stack.empty()) {
+                const auto [ci, cj] = stack.back();
+                stack.pop_back();
+                for (int oi = 0; oi < n_offsets; ++oi) {
+                    const py::ssize_t ni = ci + offsets[oi][0];
+                    const py::ssize_t nj = cj + offsets[oi][1];
+                    if (0 <= ni && ni < nx && 0 <= nj && nj < ny) {
+                        const py::ssize_t nidx = ni * ny + nj;
+                        if (mp[nidx] && lp[nidx] == 0) {
+                            lp[nidx] = n_components;
+                            stack.emplace_back(ni, nj);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return py::make_tuple(labels, n_components);
+}
+
+static py::array_t<double> expected_improvement_native(ArrayD mu, ArrayD sigma, double y_best, double xi) {
+    if (mu.ndim() != 1 || sigma.ndim() != 1 || mu.shape(0) != sigma.shape(0)) {
+        throw std::invalid_argument("mu and sigma must be matching 1D arrays");
+    }
+    const py::ssize_t n = mu.shape(0);
+    const double* mp = mu.data();
+    const double* sp = sigma.data();
+    auto out = py::array_t<double>({n});
+    double* op = out.mutable_data();
+    constexpr double inv_sqrt2 = 0.707106781186547524400844362104849039;
+    constexpr double inv_sqrt2pi = 0.398942280401432677939946059934381868;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const double s = sp[i];
+        if (s <= 0.0) {
+            op[i] = 0.0;
+            continue;
+        }
+        const double imp = y_best - mp[i] - xi;
+        const double z = imp / s;
+        const double cdf = 0.5 * (1.0 + std::erf(z * inv_sqrt2));
+        const double pdf = std::exp(-0.5 * z * z) * inv_sqrt2pi;
+        op[i] = imp * cdf + s * pdf;
+    }
+    return out;
+}
+
+static py::array_t<double> r_adapt_1d_native(ArrayD x_in, ArrayD weights, int n_iter) {
+    if (x_in.ndim() != 1 || weights.ndim() != 1 || x_in.shape(0) != weights.shape(0)) {
+        throw std::invalid_argument("x and weights must be matching 1D arrays");
+    }
+    const py::ssize_t n = x_in.shape(0);
+    std::vector<double> x(x_in.data(), x_in.data() + n);
+    const double* w = weights.data();
+    if (n == 0) {
+        return py::array_t<double>({static_cast<py::ssize_t>(0)});
+    }
+    std::vector<double> cw(static_cast<std::size_t>(n));
+    std::vector<double> x_new(static_cast<std::size_t>(n));
+    for (int iter = 0; iter < n_iter; ++iter) {
+        cw[0] = 0.0;
+        for (py::ssize_t i = 1; i < n; ++i) {
+            cw[static_cast<std::size_t>(i)] = cw[static_cast<std::size_t>(i - 1)] +
+                0.5 * (w[i - 1] + w[i]) * (x[static_cast<std::size_t>(i)] - x[static_cast<std::size_t>(i - 1)]);
+        }
+        const double total = cw[static_cast<std::size_t>(n - 1)];
+        py::ssize_t interval = 0;
+        for (py::ssize_t t_idx = 0; t_idx < n; ++t_idx) {
+            const double target = (n == 1) ? 0.0 : total * static_cast<double>(t_idx) / static_cast<double>(n - 1);
+            while (interval < n - 2 && cw[static_cast<std::size_t>(interval + 1)] < target) {
+                ++interval;
+            }
+            if (target <= cw[0]) {
+                x_new[static_cast<std::size_t>(t_idx)] = x[0];
+            } else if (target >= total) {
+                x_new[static_cast<std::size_t>(t_idx)] = x[static_cast<std::size_t>(n - 1)];
+            } else {
+                const double left = cw[static_cast<std::size_t>(interval)];
+                const double right = cw[static_cast<std::size_t>(interval + 1)];
+                const double frac = (target - left) / (right - left);
+                x_new[static_cast<std::size_t>(t_idx)] = x[static_cast<std::size_t>(interval)] +
+                    frac * (x[static_cast<std::size_t>(interval + 1)] - x[static_cast<std::size_t>(interval)]);
+            }
+        }
+        x_new[0] = x[0];
+        x_new[static_cast<std::size_t>(n - 1)] = x[static_cast<std::size_t>(n - 1)];
+        x.swap(x_new);
+    }
+    auto out = py::array_t<double>({n});
+    std::copy(x.begin(), x.end(), out.mutable_data());
+    return out;
+}
+
+static py::list frequency_peak_dicts_native(ArrayD freqs, ArrayD amplitudes, ArrayI indices) {
+    if (freqs.ndim() != 1 || amplitudes.ndim() != 1 || indices.ndim() != 1 || freqs.shape(0) != amplitudes.shape(0)) {
+        throw std::invalid_argument("freqs, amplitudes, and indices must be compatible 1D arrays");
+    }
+    const double* fp = freqs.data();
+    const double* ap = amplitudes.data();
+    const long long* ip = indices.data();
+    py::list out;
+    for (py::ssize_t i = 0; i < indices.shape(0); ++i) {
+        const long long idx = ip[i];
+        py::dict item;
+        item["frequency"] = fp[idx];
+        item["amplitude"] = ap[idx];
+        item["strouhal"] = 0.0;
+        out.append(item);
+    }
+    return out;
+}
+
+static py::array_t<double> delta_criterion_3x3_native(ArrayD grad) {
+    if (grad.ndim() < 2 || grad.shape(grad.ndim() - 1) != 3 || grad.shape(grad.ndim() - 2) != 3) {
+        throw std::invalid_argument("grad must end with shape (3, 3)");
+    }
+    py::ssize_t n = 1;
+    std::vector<py::ssize_t> out_shape;
+    for (py::ssize_t axis = 0; axis < grad.ndim() - 2; ++axis) {
+        out_shape.push_back(grad.shape(axis));
+        n *= grad.shape(axis);
+    }
+    if (out_shape.empty()) {
+        out_shape.push_back(1);
+    }
+    auto out = py::array_t<double>(out_shape);
+    double* op = out.mutable_data();
+    const double* gp = grad.data();
+    for (py::ssize_t idx = 0; idx < n; ++idx) {
+        const double* a = gp + idx * 9;
+        const double a00 = a[0], a01 = a[1], a02 = a[2];
+        const double a10 = a[3], a11 = a[4], a12 = a[5];
+        const double a20 = a[6], a21 = a[7], a22 = a[8];
+        const double tr_a2 =
+            a00 * a00 + a11 * a11 + a22 * a22 +
+            2.0 * (a01 * a10 + a02 * a20 + a12 * a21);
+        const double q = -0.5 * tr_a2;
+        const double det =
+            a00 * (a11 * a22 - a12 * a21) -
+            a01 * (a10 * a22 - a12 * a20) +
+            a02 * (a10 * a21 - a11 * a20);
+        const double r = -det;
+        op[idx] = std::pow(q / 3.0, 3.0) + std::pow(r / 2.0, 2.0);
+    }
+    return out;
+}
+
+static bool invert_with_logdet(const double* a, py::ssize_t d, double jitter, std::vector<double>& inv, double& det) {
+    const py::ssize_t width = 2 * d;
+    std::vector<double> aug(static_cast<size_t>(d * width), 0.0);
+    for (py::ssize_t i = 0; i < d; ++i) {
+        for (py::ssize_t j = 0; j < d; ++j) {
+            aug[static_cast<size_t>(i * width + j)] = a[i * d + j] + (i == j ? jitter : 0.0);
+        }
+        aug[static_cast<size_t>(i * width + d + i)] = 1.0;
+    }
+
+    det = 1.0;
+    for (py::ssize_t col = 0; col < d; ++col) {
+        py::ssize_t pivot = col;
+        double best = std::abs(aug[static_cast<size_t>(col * width + col)]);
+        for (py::ssize_t row = col + 1; row < d; ++row) {
+            const double value = std::abs(aug[static_cast<size_t>(row * width + col)]);
+            if (value > best) {
+                best = value;
+                pivot = row;
+            }
+        }
+        if (best < 1e-15) {
+            return false;
+        }
+        if (pivot != col) {
+            for (py::ssize_t j = 0; j < width; ++j) {
+                std::swap(aug[static_cast<size_t>(col * width + j)], aug[static_cast<size_t>(pivot * width + j)]);
+            }
+            det = -det;
+        }
+        const double pivot_value = aug[static_cast<size_t>(col * width + col)];
+        det *= pivot_value;
+        for (py::ssize_t j = 0; j < width; ++j) {
+            aug[static_cast<size_t>(col * width + j)] /= pivot_value;
+        }
+        for (py::ssize_t row = 0; row < d; ++row) {
+            if (row == col) {
+                continue;
+            }
+            const double factor = aug[static_cast<size_t>(row * width + col)];
+            if (factor == 0.0) {
+                continue;
+            }
+            for (py::ssize_t j = 0; j < width; ++j) {
+                aug[static_cast<size_t>(row * width + j)] -= factor * aug[static_cast<size_t>(col * width + j)];
+            }
+        }
+    }
+
+    inv.assign(static_cast<size_t>(d * d), 0.0);
+    for (py::ssize_t i = 0; i < d; ++i) {
+        for (py::ssize_t j = 0; j < d; ++j) {
+            inv[static_cast<size_t>(i * d + j)] = aug[static_cast<size_t>(i * width + d + j)];
+        }
+    }
+    return true;
+}
+
+static py::array_t<double> gmm_log_prob_matrix_native(Array2D X, ArrayD weights, Array2D means, ArrayD covs) {
+    if (weights.ndim() != 1 || covs.ndim() != 3) {
+        throw std::invalid_argument("weights must be 1D and covs must be 3D");
+    }
+    const py::ssize_t n = X.shape(0);
+    const py::ssize_t d = X.shape(1);
+    const py::ssize_t k = weights.shape(0);
+    if (means.shape(0) != k || means.shape(1) != d || covs.shape(0) != k || covs.shape(1) != d || covs.shape(2) != d) {
+        throw std::invalid_argument("GMM array shapes are inconsistent");
+    }
+
+    auto out = py::array_t<double>({n, k});
+    const double* xp = X.data();
+    const double* wp = weights.data();
+    const double* mp = means.data();
+    const double* cp = covs.data();
+    double* op = out.mutable_data();
+    const double norm_const = static_cast<double>(d) * std::log(2.0 * M_PI);
+
+    std::vector<double> inv;
+    for (py::ssize_t comp = 0; comp < k; ++comp) {
+        double det = 0.0;
+        const double* cov = cp + comp * d * d;
+        if (!invert_with_logdet(cov, d, 0.0, inv, det)) {
+            if (!invert_with_logdet(cov, d, 1e-6, inv, det)) {
+                throw std::runtime_error("covariance matrix is singular");
+            }
+        }
+        if (det <= 0.0) {
+            det = 1e-30;
+        }
+        const double base = std::log(wp[comp]) - 0.5 * (norm_const + std::log(det));
+        const double* mean = mp + comp * d;
+        for (py::ssize_t row = 0; row < n; ++row) {
+            const double* x = xp + row * d;
+            double maha = 0.0;
+            for (py::ssize_t i = 0; i < d; ++i) {
+                const double di = x[i] - mean[i];
+                double acc = 0.0;
+                for (py::ssize_t j = 0; j < d; ++j) {
+                    acc += inv[static_cast<size_t>(i * d + j)] * (x[j] - mean[j]);
+                }
+                maha += di * acc;
+            }
+            op[row * k + comp] = base - 0.5 * maha;
+        }
+    }
+    return out;
+}
+
+static py::array_t<double> gaussian_log_weights_native(Array2D diff, Array2D cov) {
+    const py::ssize_t n = diff.shape(0);
+    const py::ssize_t d = diff.shape(1);
+    if (cov.shape(0) != d || cov.shape(1) != d) {
+        throw std::invalid_argument("cov shape must match diff columns");
+    }
+    std::vector<double> inv;
+    double det = 0.0;
+    if (!invert_with_logdet(cov.data(), d, 0.0, inv, det)) {
+        throw std::runtime_error("covariance matrix is singular");
+    }
+    if (det <= 0.0) {
+        det = 1e-300;
+    }
+    auto out = py::array_t<double>({n});
+    const double* dp = diff.data();
+    double* op = out.mutable_data();
+    const double log_det = std::log(std::max(det, 1e-300));
+    for (py::ssize_t row = 0; row < n; ++row) {
+        const double* x = dp + row * d;
+        double maha = 0.0;
+        for (py::ssize_t i = 0; i < d; ++i) {
+            double acc = 0.0;
+            for (py::ssize_t j = 0; j < d; ++j) {
+                acc += inv[static_cast<size_t>(i * d + j)] * x[j];
+            }
+            maha += x[i] * acc;
+        }
+        op[row] = -0.5 * maha - 0.5 * log_det;
+    }
+    return out;
+}
+
+static py::array_t<double> ftle_from_advected_stencils_native(ArrayD adv, double T, double eps) {
+    if (adv.ndim() != 4 || adv.shape(2) != 4 || adv.shape(3) != 2) {
+        throw std::invalid_argument("adv must have shape (ny, nx, 4, 2)");
+    }
+    if (T == 0.0 || eps == 0.0) {
+        throw std::invalid_argument("T and eps must be non-zero");
+    }
+    const py::ssize_t ny = adv.shape(0);
+    const py::ssize_t nx = adv.shape(1);
+    auto out = py::array_t<double>({ny, nx});
+    const double* ap = adv.data();
+    double* op = out.mutable_data();
+    const double inv_2eps = 0.5 / eps;
+    const double scale = 0.5 / std::abs(T);
+
+    for (py::ssize_t i = 0; i < ny; ++i) {
+        for (py::ssize_t j = 0; j < nx; ++j) {
+            const py::ssize_t base = ((i * nx + j) * 4) * 2;
+            const double f00 = (ap[base + 0] - ap[base + 2]) * inv_2eps;
+            const double f10 = (ap[base + 1] - ap[base + 3]) * inv_2eps;
+            const double f01 = (ap[base + 4] - ap[base + 6]) * inv_2eps;
+            const double f11 = (ap[base + 5] - ap[base + 7]) * inv_2eps;
+            const double c00 = f00 * f00 + f10 * f10;
+            const double c01 = f00 * f01 + f10 * f11;
+            const double c11 = f01 * f01 + f11 * f11;
+            const double tr = c00 + c11;
+            const double disc = std::sqrt(std::max(0.0, (c00 - c11) * (c00 - c11) + 4.0 * c01 * c01));
+            const double lambda_max = std::max(1e-30, 0.5 * (tr + disc));
+            op[i * nx + j] = scale * std::log(lambda_max);
+        }
+    }
+    return out;
+}
+
+static py::array_t<double> lcs_ftle_from_flow_map_native(Array2D X, Array2D Y, double dx, double dy, double T) {
+    check_same_2d(X, Y);
+    if (dx == 0.0 || dy == 0.0) {
+        throw std::invalid_argument("dx and dy must be non-zero");
+    }
+    const py::ssize_t ny = X.shape(0);
+    const py::ssize_t nx = X.shape(1);
+    auto out = py::array_t<double>({ny, nx});
+    const double* xp = X.data();
+    const double* yp = Y.data();
+    double* op = out.mutable_data();
+    const double scale = 0.5 / std::max(std::abs(T), 1e-30);
+
+    for (py::ssize_t i = 0; i < ny; ++i) {
+        for (py::ssize_t j = 0; j < nx; ++j) {
+            const double dXdx = grad_x(xp, ny, nx, i, j, dx);
+            const double dXdy = grad_y(xp, ny, nx, i, j, dy);
+            const double dYdx = grad_x(yp, ny, nx, i, j, dx);
+            const double dYdy = grad_y(yp, ny, nx, i, j, dy);
+            const double c11 = dXdx * dXdx + dYdx * dYdx;
+            const double c22 = dXdy * dXdy + dYdy * dYdy;
+            const double c12 = dXdx * dXdy + dYdx * dYdy;
+            const double trace = c11 + c22;
+            const double det = c11 * c22 - c12 * c12;
+            const double disc = std::sqrt(std::max(trace * trace * 0.25 - det, 0.0));
+            const double lam_max = std::max(trace * 0.5 + disc, 1e-30);
+            op[i * nx + j] = scale * std::log(lam_max);
+        }
+    }
+    return out;
+}
+
+static py::array_t<double> derivative_2d_native(Array2D U, double spacing, int axis, int order) {
+    if (spacing == 0.0) {
+        throw std::invalid_argument("spacing must be non-zero");
+    }
+    if (axis != 0 && axis != 1) {
+        throw std::invalid_argument("axis must be 0 or 1");
+    }
+    if (order < 0) {
+        throw std::invalid_argument("order must be non-negative");
+    }
+    const py::ssize_t ny = U.shape(0);
+    const py::ssize_t nx = U.shape(1);
+    std::vector<double> current(U.data(), U.data() + ny * nx);
+    std::vector<double> next(static_cast<size_t>(ny * nx), 0.0);
+
+    for (int step = 0; step < order; ++step) {
+        for (py::ssize_t i = 0; i < ny; ++i) {
+            for (py::ssize_t j = 0; j < nx; ++j) {
+                if (axis == 1) {
+                    next[static_cast<size_t>(i * nx + j)] = grad_x(current.data(), ny, nx, i, j, spacing);
+                } else {
+                    next[static_cast<size_t>(i * nx + j)] = grad_y(current.data(), ny, nx, i, j, spacing);
+                }
+            }
+        }
+        current.swap(next);
+        std::fill(next.begin(), next.end(), 0.0);
+    }
+
+    auto out = py::array_t<double>({ny, nx});
+    std::copy(current.begin(), current.end(), out.mutable_data());
+    return out;
+}
+
+static py::array_t<double> solve_dense_native(Array2D A, ArrayD b) {
+    if (b.ndim() != 1) {
+        throw std::invalid_argument("b must be 1D");
+    }
+    const py::ssize_t n = A.shape(0);
+    if (A.shape(1) != n || b.shape(0) != n) {
+        throw std::invalid_argument("A must be square and match b");
+    }
+    const py::ssize_t width = n + 1;
+    std::vector<double> aug(static_cast<size_t>(n * width), 0.0);
+    const double* ap = A.data();
+    const double* bp = b.data();
+    for (py::ssize_t i = 0; i < n; ++i) {
+        for (py::ssize_t j = 0; j < n; ++j) {
+            aug[static_cast<size_t>(i * width + j)] = ap[i * n + j];
+        }
+        aug[static_cast<size_t>(i * width + n)] = bp[i];
+    }
+
+    for (py::ssize_t col = 0; col < n; ++col) {
+        py::ssize_t pivot = col;
+        double best = std::abs(aug[static_cast<size_t>(col * width + col)]);
+        for (py::ssize_t row = col + 1; row < n; ++row) {
+            const double value = std::abs(aug[static_cast<size_t>(row * width + col)]);
+            if (value > best) {
+                best = value;
+                pivot = row;
+            }
+        }
+        if (best < 1e-15) {
+            throw std::runtime_error("singular matrix");
+        }
+        if (pivot != col) {
+            for (py::ssize_t j = col; j < width; ++j) {
+                std::swap(aug[static_cast<size_t>(col * width + j)], aug[static_cast<size_t>(pivot * width + j)]);
+            }
+        }
+        const double pivot_value = aug[static_cast<size_t>(col * width + col)];
+        for (py::ssize_t row = col + 1; row < n; ++row) {
+            const double factor = aug[static_cast<size_t>(row * width + col)] / pivot_value;
+            if (factor == 0.0) {
+                continue;
+            }
+            for (py::ssize_t j = col; j < width; ++j) {
+                aug[static_cast<size_t>(row * width + j)] -= factor * aug[static_cast<size_t>(col * width + j)];
+            }
+        }
+    }
+
+    auto out = py::array_t<double>({n});
+    double* op = out.mutable_data();
+    for (py::ssize_t i = n - 1; i >= 0; --i) {
+        double rhs = aug[static_cast<size_t>(i * width + n)];
+        for (py::ssize_t j = i + 1; j < n; ++j) {
+            rhs -= aug[static_cast<size_t>(i * width + j)] * op[j];
+        }
+        op[i] = rhs / aug[static_cast<size_t>(i * width + i)];
+        if (i == 0) {
+            break;
+        }
+    }
+    return out;
+}
+
+static py::array_t<double> eigvalsh_symmetric_native(Array2D A) {
+    const py::ssize_t n = A.shape(0);
+    if (A.shape(1) != n) {
+        throw std::invalid_argument("A must be square");
+    }
+    std::vector<double> a(A.data(), A.data() + n * n);
+    const int max_iter = static_cast<int>(std::max<py::ssize_t>(32, 100 * n * n));
+    for (int iter = 0; iter < max_iter; ++iter) {
+        py::ssize_t p = 0;
+        py::ssize_t q = 1;
+        double max_off = 0.0;
+        for (py::ssize_t i = 0; i < n; ++i) {
+            for (py::ssize_t j = i + 1; j < n; ++j) {
+                const double value = std::abs(a[static_cast<size_t>(i * n + j)]);
+                if (value > max_off) {
+                    max_off = value;
+                    p = i;
+                    q = j;
+                }
+            }
+        }
+        if (max_off < 1e-14) {
+            break;
+        }
+        const double app = a[static_cast<size_t>(p * n + p)];
+        const double aqq = a[static_cast<size_t>(q * n + q)];
+        const double apq = a[static_cast<size_t>(p * n + q)];
+        const double tau = (aqq - app) / (2.0 * apq);
+        const double t = (tau >= 0.0 ? 1.0 : -1.0) / (std::abs(tau) + std::sqrt(1.0 + tau * tau));
+        const double c = 1.0 / std::sqrt(1.0 + t * t);
+        const double s = t * c;
+        for (py::ssize_t k = 0; k < n; ++k) {
+            if (k == p || k == q) {
+                continue;
+            }
+            const double akp = a[static_cast<size_t>(k * n + p)];
+            const double akq = a[static_cast<size_t>(k * n + q)];
+            const double new_kp = c * akp - s * akq;
+            const double new_kq = s * akp + c * akq;
+            a[static_cast<size_t>(k * n + p)] = new_kp;
+            a[static_cast<size_t>(p * n + k)] = new_kp;
+            a[static_cast<size_t>(k * n + q)] = new_kq;
+            a[static_cast<size_t>(q * n + k)] = new_kq;
+        }
+        a[static_cast<size_t>(p * n + p)] = app - t * apq;
+        a[static_cast<size_t>(q * n + q)] = aqq + t * apq;
+        a[static_cast<size_t>(p * n + q)] = 0.0;
+        a[static_cast<size_t>(q * n + p)] = 0.0;
+    }
+    std::vector<double> eig(static_cast<size_t>(n), 0.0);
+    for (py::ssize_t i = 0; i < n; ++i) {
+        eig[static_cast<size_t>(i)] = a[static_cast<size_t>(i * n + i)];
+    }
+    std::sort(eig.begin(), eig.end());
+    auto out = py::array_t<double>({n});
+    std::copy(eig.begin(), eig.end(), out.mutable_data());
+    return out;
+}
+
+static py::array_t<double> halton_sequence_native(int n, int d) {
+    static const int primes[] = {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53};
+    const int max_primes = static_cast<int>(sizeof(primes) / sizeof(primes[0]));
+    if (n < 0 || d < 0 || d > max_primes) {
+        throw std::invalid_argument("invalid Halton dimensions");
+    }
+    auto out = py::array_t<double>({static_cast<py::ssize_t>(n), static_cast<py::ssize_t>(d)});
+    double* op = out.mutable_data();
+    for (int col = 0; col < d; ++col) {
+        const int base = primes[col];
+        for (int row = 0; row < n; ++row) {
+            double f = 1.0;
+            double r = 0.0;
+            int k = row + 1;
+            while (k > 0) {
+                f /= static_cast<double>(base);
+                r += f * static_cast<double>(k % base);
+                k /= base;
+            }
+            op[row * d + col] = r;
+        }
+    }
+    return out;
+}
+
+static py::array_t<double> delay_embed_1d_native(ArrayD x, int dim, int delay) {
+    if (x.ndim() != 1) {
+        throw std::invalid_argument("x must be 1D");
+    }
+    if (dim <= 0 || delay <= 0) {
+        throw std::invalid_argument("dim and delay must be positive");
+    }
+    const py::ssize_t n = x.shape(0);
+    const py::ssize_t m = n - static_cast<py::ssize_t>(dim - 1) * delay;
+    if (m <= 0) {
+        throw std::invalid_argument("time series is too short");
+    }
+    auto out = py::array_t<double>({m, static_cast<py::ssize_t>(dim)});
+    const double* xp = x.data();
+    double* op = out.mutable_data();
+    for (py::ssize_t row = 0; row < m; ++row) {
+        for (int col = 0; col < dim; ++col) {
+            op[row * dim + col] = xp[row + static_cast<py::ssize_t>(col) * delay];
+        }
+    }
+    return out;
+}
+
+static py::array_t<double> autocorrelation_1d_native(ArrayD x, int max_lag) {
+    if (x.ndim() != 1) {
+        throw std::invalid_argument("x must be 1D");
+    }
+    if (max_lag < 0) {
+        throw std::invalid_argument("max_lag must be non-negative");
+    }
+    const py::ssize_t n = x.shape(0);
+    const double* xp = x.data();
+    double mean = 0.0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        mean += xp[i];
+    }
+    mean /= static_cast<double>(std::max<py::ssize_t>(n, 1));
+    double denom = 1e-30;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const double centered = xp[i] - mean;
+        denom += centered * centered;
+    }
+    auto out = py::array_t<double>({static_cast<py::ssize_t>(max_lag + 1)});
+    double* op = out.mutable_data();
+    for (int lag = 0; lag <= max_lag; ++lag) {
+        double acc = 0.0;
+        for (py::ssize_t i = 0; i < n - lag; ++i) {
+            acc += (xp[i] - mean) * (xp[i + lag] - mean);
+        }
+        op[lag] = acc / denom;
+    }
+    return out;
+}
+
+static void schedule_berger_oliger_fill(int level, int max_level, int refine_ratio, std::vector<int>& out) {
+    if (level >= max_level) {
+        out.push_back(level);
+        return;
+    }
+    for (int i = 0; i < refine_ratio; ++i) {
+        schedule_berger_oliger_fill(level + 1, max_level, refine_ratio, out);
+    }
+    out.push_back(level);
+}
+
+static py::list schedule_berger_oliger_native(int level, int max_level, int refine_ratio) {
+    std::vector<int> values;
+    schedule_berger_oliger_fill(level, max_level, refine_ratio, values);
+    py::list out;
+    for (int value : values) {
+        out.append(value);
+    }
+    return out;
+}
+
+static void exchange_ghost_1d_native(py::sequence blocks, int n_ghost) {
+    const py::ssize_t n_blocks = py::len(blocks);
+    if (n_ghost < 0) {
+        throw std::invalid_argument("n_ghost must be non-negative");
+    }
+    for (py::ssize_t i = 0; i < n_blocks - 1; ++i) {
+        py::array a_obj = py::cast<py::array>(blocks[i]);
+        py::array b_obj = py::cast<py::array>(blocks[i + 1]);
+        if (a_obj.ndim() != 1 || b_obj.ndim() != 1) {
+            throw std::invalid_argument("blocks must be 1D arrays");
+        }
+        if (a_obj.shape(0) < 2 * n_ghost || b_obj.shape(0) < 2 * n_ghost) {
+            throw std::invalid_argument("blocks are too short for n_ghost");
+        }
+        auto a = py::array_t<double, py::array::c_style | py::array::forcecast>::ensure(a_obj);
+        auto b = py::array_t<double, py::array::c_style | py::array::forcecast>::ensure(b_obj);
+        if (!a || !b) {
+            throw std::invalid_argument("blocks must be numeric arrays");
+        }
+        double* ap = a.mutable_data();
+        double* bp = b.mutable_data();
+        const py::ssize_t na = a.shape(0);
+        for (int g = 0; g < n_ghost; ++g) {
+            ap[na - n_ghost + g] = bp[n_ghost + g];
+        }
+        for (int g = 0; g < n_ghost; ++g) {
+            bp[g] = ap[na - 2 * n_ghost + g];
+        }
+    }
+}
+
+static double rayleigh_quotient_native(ArrayD a, ArrayD x0) {
+    check_square_matrix(a);
+    const py::ssize_t n = a.shape(0);
+    std::vector<double> x = contiguous_vector(x0, n, "x");
+    return dot(x, matvec(a.data(), n, x)) / (dot(x, x) + 1e-30);
+}
+
+PYBIND11_MODULE(_kernels, m) {
+    m.doc() = "C++ kernels for NavierTwin numeric hot paths";
+    m.def("field_j_2d", &field_j_2d, py::arg("u"), py::arg("v"), py::arg("dx") = 1.0, py::arg("dy") = 1.0);
+    m.def("lambda2_2d", &lambda2_2d, py::arg("u"), py::arg("v"), py::arg("dx") = 1.0, py::arg("dy") = 1.0);
+    m.def("vorticity_2d", &vorticity_2d_native, py::arg("u"), py::arg("v"), py::arg("dx") = 1.0, py::arg("dy") = 1.0);
+    m.def("q_criterion_2d", &q_criterion_2d_native, py::arg("u"), py::arg("v"), py::arg("dx") = 1.0, py::arg("dy") = 1.0);
+    m.def("production_rate_2d", &production_rate_2d, py::arg("u"), py::arg("v"), py::arg("dx"), py::arg("dy"), py::arg("nu_t"));
+    m.def(
+        "entropy_generation_2d", &entropy_generation_2d_native, py::arg("u"), py::arg("v"), py::arg("T"),
+        py::arg("dx") = 1.0, py::arg("dy") = 1.0, py::arg("mu") = 1.8e-5, py::arg("k") = 0.026
+    );
+    m.def(
+        "vorticity_3d", &vorticity_3d_native, py::arg("u"), py::arg("v"), py::arg("w"),
+        py::arg("dx") = 1.0, py::arg("dy") = 1.0, py::arg("dz") = 1.0
+    );
+    m.def("q_criterion_from_grad_3d", &q_criterion_from_grad_3d, py::arg("gradient"));
+    m.def("lambda2_from_grad_3d", &lambda2_from_grad_3d, py::arg("gradient"));
+    m.def("decompose_j_3x3", &decompose_j_3x3, py::arg("J"));
+    m.def("symmetric_eigenvalues_3x3", &symmetric_eigenvalues_3x3, py::arg("J"));
+    m.def("invariants_3x3", &invariants_3x3, py::arg("J"));
+    m.def("solve_square", &solve_square_native, py::arg("A"), py::arg("b"));
+    m.def("determinant_batch", &determinant_batch, py::arg("A"));
+    m.def("power_iteration", &power_iteration_native, py::arg("A"), py::arg("n_iter"), py::arg("x0"), py::arg("tol"));
+    m.def("inverse_power", &inverse_power_native, py::arg("A"), py::arg("shift"), py::arg("n_iter"), py::arg("x0"));
+    m.def("pcg_jacobi", &pcg_jacobi_native, py::arg("A"), py::arg("b"), py::arg("x0"), py::arg("max_iter"), py::arg("tol"));
+    m.def("bicgstab_dense", &bicgstab_dense_native, py::arg("A"), py::arg("b"), py::arg("x0"), py::arg("max_iter"), py::arg("tol"));
+    m.def("thomas_solve", &thomas_solve_native, py::arg("a"), py::arg("b"), py::arg("c"), py::arg("d"));
+    m.def("jacobi_dense", &jacobi_dense_native, py::arg("A"), py::arg("b"), py::arg("x0"), py::arg("max_iter"), py::arg("tol"));
+    m.def("gauss_seidel_dense", &gauss_seidel_dense_native, py::arg("A"), py::arg("b"), py::arg("x0"), py::arg("max_iter"), py::arg("tol"));
+    m.def("conjugate_gradient_dense", &conjugate_gradient_dense_native, py::arg("A"), py::arg("b"), py::arg("x0"), py::arg("max_iter"), py::arg("tol"));
+    m.def("arnoldi", &arnoldi_native, py::arg("A"), py::arg("b"), py::arg("k"));
+    m.def("dtw_distance", &dtw_distance_native, py::arg("a"), py::arg("b"), py::arg("window") = py::none());
+    m.def("dtw_matrix", &dtw_matrix_native, py::arg("a"), py::arg("b"));
+    m.def("dbscan", &dbscan_native, py::arg("points"), py::arg("eps") = 0.5, py::arg("min_samples") = 5);
+    m.def("cusum_detect", &cusum_detect_native, py::arg("x"), py::arg("threshold"), py::arg("mean"), py::arg("sigma"), py::arg("k"));
+    m.def("rom_energy_spectrum", &rom_energy_spectrum_native, py::arg("singular_values"));
+    m.def("radial_energy_sum", &radial_energy_sum, py::arg("K"), py::arg("energy"), py::arg("edges"));
+    m.def("dominant_frequencies_from_power", &dominant_frequencies_from_power, py::arg("freqs"), py::arg("power"), py::arg("top_k"));
+    m.def("deposit_cic_1d", &deposit_cic_1d, py::arg("x"), py::arg("weights"), py::arg("n_grid"), py::arg("dx") = 1.0, py::arg("x0") = 0.0);
+    m.def("sph_density_1d", &sph_density_1d, py::arg("positions"), py::arg("masses"), py::arg("h") = 1.0);
+    m.def("reaction_rate", &reaction_rate_native, py::arg("k"), py::arg("concentrations"), py::arg("orders"));
+    m.def("vof_step_1d", &vof_step_1d, py::arg("alpha"), py::arg("u"), py::arg("dt"), py::arg("dx"));
+    m.def("levelset_advect_step_1d", &levelset_advect_step_1d, py::arg("phi"), py::arg("u"), py::arg("dt"), py::arg("dx"));
+    m.def("jensen_farm_velocity", &jensen_farm_velocity, py::arg("V0"), py::arg("distances"), py::arg("R"), py::arg("a") = 0.3, py::arg("k") = 0.04);
+    m.def("conservative_remap_1d", &conservative_remap_1d, py::arg("x_old_edges"), py::arg("u_old"), py::arg("x_new_edges"));
+    m.def("fd_heat_1d_evolve", &fd_heat_1d_evolve, py::arg("u0"), py::arg("n_steps"), py::arg("coef"), py::arg("dt"));
+    m.def(
+        "conservation_1d_linear", &conservation_1d_linear_native, py::arg("n_cells"),
+        py::arg("L"), py::arg("T"), py::arg("scheme"), py::arg("dt_factor"), py::arg("c_max")
+    );
+    m.def("fvm_upwind_1d", &fvm_upwind_1d_native, py::arg("u0"), py::arg("c"), py::arg("L"), py::arg("T"), py::arg("cfl"));
+    m.def(
+        "fvm_musclhancock_1d", &fvm_musclhancock_1d_native, py::arg("u0"),
+        py::arg("c"), py::arg("L"), py::arg("T"), py::arg("cfl")
+    );
+    m.def("fd_burgers_1d_evolve", &fd_burgers_1d_evolve, py::arg("u0"), py::arg("n_steps"), py::arg("dt"), py::arg("dx"), py::arg("nu"));
+    m.def("poisson_2d_jacobi", &poisson_2d_jacobi_native, py::arg("f"), py::arg("dx") = 1.0, py::arg("dy") = 1.0, py::arg("max_iter") = 5000, py::arg("tol") = 1e-6);
+    m.def("levelset_reinit_1d", &levelset_reinit_1d, py::arg("phi"), py::arg("dx") = 1.0, py::arg("n_iter") = 30);
+    m.def("fast_march_1d", &fast_march_1d, py::arg("phi"), py::arg("dx") = 1.0);
+    m.def("mesh_refine_by_gradient", &mesh_refine_by_gradient, py::arg("x"), py::arg("f"), py::arg("threshold") = 0.1, py::arg("max_passes") = 5);
+    m.def("mesh_coarsen_by_tolerance", &mesh_coarsen_by_tolerance, py::arg("x"), py::arg("f"), py::arg("tol") = 1e-3);
+    m.def("laplacian_smooth", &laplacian_smooth_native, py::arg("verts"), py::arg("edges"), py::arg("n_iter"), py::arg("alpha"), py::arg("fixed"));
+    m.def("mesh_quality_report", &mesh_quality_report_native, py::arg("points"), py::arg("simplices"));
+    m.def("order_table", &order_table_native, py::arg("h"), py::arg("err"));
+    m.def("sph_acceleration_1d", &sph_acceleration_1d, py::arg("x"), py::arg("m"), py::arg("rho"), py::arg("p"), py::arg("h") = 1.0);
+    m.def("lbm_equilibrium", &lbm_equilibrium, py::arg("rho"), py::arg("u"));
+    m.def("lbm_step", &lbm_step, py::arg("f"), py::arg("omega") = 1.0);
+    m.def("is_monotone_decreasing", &is_monotone_decreasing_native, py::arg("errs"), py::arg("atol") = 0.0);
+    m.def("convergence_ratio", &convergence_ratio_native, py::arg("errs"));
+    m.def("combined_disc_uncertainty", &combined_disc_uncertainty_native, py::arg("uncs"));
+    m.def("friction_colebrook", &friction_colebrook_native, py::arg("Re"), py::arg("eps_over_D"), py::arg("n_iter") = 50);
+    m.def("delta99_scan", &delta99_scan, py::arg("y"), py::arg("u"), py::arg("target"));
+    m.def("scale_to_bounds", &scale_to_bounds_native, py::arg("unit"), py::arg("bounds"));
+    m.def("regular_grid_points", &regular_grid_points, py::arg("bounds"), py::arg("per"));
+    m.def("norm_cdf", &norm_cdf, py::arg("x"));
+    m.def(
+        "greedy_batch_acquisition", &greedy_batch_acquisition_native, py::arg("acq"), py::arg("candidates"),
+        py::arg("batch_size"), py::arg("min_distance"), py::arg("use_distance")
+    );
+    m.def("hex_volume", &hex_volume_native, py::arg("vertices"));
+    m.def(
+        "trigger_average_accum", &trigger_average_accum, py::arg("signal"), py::arg("valid_indices"),
+        py::arg("half_window"), py::arg("return_std")
+    );
+    m.def("quadrant_split", &quadrant_split_native, py::arg("up"), py::arg("vp"), py::arg("hole") = 0.0);
+    m.def("kolmogorov_pvalue", &kolmogorov_pvalue, py::arg("D"), py::arg("n"));
+    m.def("number_peaks", &number_peaks_native, py::arg("x"), py::arg("support") = 3);
+    m.def("jackknife_mean_var", &jackknife_mean_var_native, py::arg("data"));
+    m.def(
+        "probe_time_series", &probe_time_series_native, py::arg("snapshots"), py::arg("coords"),
+        py::arg("probes"), py::arg("method") = "nearest", py::arg("k") = 4
+    );
+    m.def("bingham_stress", &bingham_stress_native, py::arg("gamma_dot"), py::arg("tau_y"), py::arg("mu_p"));
+    m.def(
+        "bingham_apparent_viscosity", &bingham_apparent_viscosity_native, py::arg("gamma_dot"),
+        py::arg("tau_y"), py::arg("mu_p"), py::arg("eps") = 1e-6
+    );
+    m.def("barycentric_2d", &barycentric_2d_native, py::arg("triangle"), py::arg("p"));
+    m.def("locate_triangle", &locate_triangle_native, py::arg("points"), py::arg("simplices"), py::arg("p"));
+    m.def("friction_velocity", &friction_velocity_native, py::arg("wall_shear_stress"), py::arg("rho"));
+    m.def(
+        "estimate_first_cell_height", &estimate_first_cell_height_native, py::arg("y_plus_target"),
+        py::arg("Re"), py::arg("rho"), py::arg("U_inf"), py::arg("nu")
+    );
+    m.def("cht_iterate", &cht_iterate_native, py::arg("T_solid"), py::arg("T_fluid"), py::arg("k_s"), py::arg("k_f"), py::arg("n_iter"));
+    m.def(
+        "battery_temperature_step", &battery_temperature_step_native, py::arg("T"), py::arg("T_amb"),
+        py::arg("Q_gen"), py::arg("h"), py::arg("A"), py::arg("m"), py::arg("cp"), py::arg("dt")
+    );
+    m.def(
+        "battery_steady_temperature", &battery_steady_temperature_native, py::arg("T_amb"),
+        py::arg("Q_gen"), py::arg("h"), py::arg("A")
+    );
+    m.def(
+        "greenhouse_temperature_step", &greenhouse_temperature_step_native, py::arg("T_in"),
+        py::arg("T_out"), py::arg("Q_solar"), py::arg("U"), py::arg("A"), py::arg("m"),
+        py::arg("cp"), py::arg("dt")
+    );
+    m.def("vector_l2_norm", &vector_l2_norm_native, py::arg("x"));
+    m.def("vector_dot", &vector_dot_native, py::arg("a"), py::arg("b"));
+    m.def("aitken_relax", &aitken_relax_native, py::arg("omega_prev"), py::arg("r_prev"), py::arg("r_curr"));
+    m.def("mean_std_axis0", &mean_std_axis0_native, py::arg("values"));
+    m.def("winslow_smooth", &winslow_smooth_native, py::arg("X"), py::arg("Y"), py::arg("n_iter") = 30);
+    m.def("fd_heat_2d_evolve", &fd_heat_2d_evolve, py::arg("u0"), py::arg("n_steps"), py::arg("cx"), py::arg("cy"), py::arg("dt"));
+    m.def("adi_heat_2d_step", &adi_heat_2d_step_native, py::arg("u"), py::arg("dt"), py::arg("dx"), py::arg("dy"), py::arg("alpha") = 1.0);
+    m.def(
+        "conv_diff_2d_evolve", &conv_diff_2d_evolve_native, py::arg("c0"), py::arg("n_steps"),
+        py::arg("u0"), py::arg("v0"), py::arg("diffusivity"), py::arg("dx"), py::arg("dy"), py::arg("dt")
+    );
+    m.def("kep_flux", &kep_flux_native, py::arg("UL"), py::arg("UR"), py::arg("gamma") = 1.4);
+    m.def("ppm_face_values", &ppm_face_values_native, py::arg("u"));
+    m.def(
+        "ppm_monotonize", &ppm_monotonize_native, py::arg("u_im"), py::arg("u_i"), py::arg("u_ip"),
+        py::arg("uL"), py::arg("uR")
+    );
+    m.def(
+        "bl_grid", &bl_grid_native, py::arg("wall_pts"), py::arg("wall_normals"), py::arg("n_layers"),
+        py::arg("first"), py::arg("growth")
+    );
+    m.def("metric_from_hessian_2d", &metric_from_hessian_2d_native, py::arg("H"), py::arg("h_min") = 1e-3, py::arg("h_max") = 1.0);
+    m.def("edge_length_metric", &edge_length_metric_native, py::arg("M_a"), py::arg("M_b"), py::arg("a"), py::arg("b"));
+    m.def("box_filter_2d", &box_filter_2d_native, py::arg("field"), py::arg("width") = 3);
+    m.def(
+        "track_particles_2d", &track_particles_2d_native, py::arg("u"), py::arg("v"), py::arg("seeds"),
+        py::arg("Lx") = 1.0, py::arg("Ly") = 1.0, py::arg("dt") = 0.01, py::arg("n_steps") = 100
+    );
+    m.def("multi_output_r2_raw", &multi_output_r2_raw_native, py::arg("y_true"), py::arg("y_pred"));
+    m.def("cross_channel_correlation", &cross_channel_correlation_native, py::arg("y_true"), py::arg("y_pred"));
+    m.def("svgd_step_update", &svgd_step_update_native, py::arg("x"), py::arg("grad_logp"), py::arg("lr") = 0.01, py::arg("h") = -1.0);
+    m.def("duct_modes_dirichlet", &duct_modes_dirichlet_native, py::arg("L"), py::arg("c"), py::arg("n_modes") = 5, py::arg("n_points") = 128);
+    m.def("duct_modes_neumann", &duct_modes_neumann_native, py::arg("L"), py::arg("c"), py::arg("n_modes") = 5, py::arg("n_points") = 128);
+    m.def("clenshaw_curtis_weights", &clenshaw_curtis_weights_native, py::arg("N"));
+    m.def("chebyshev_points", &chebyshev_points_native, py::arg("N"));
+    m.def("chebyshev_diff_matrix", &chebyshev_diff_matrix_native, py::arg("N"));
+    m.def("lagrange_interp_1d", &lagrange_interp_1d_native, py::arg("x_known"), py::arg("y_known"), py::arg("x_new"));
+    m.def("cusum_alarms", &cusum_alarms_native, py::arg("residuals"), py::arg("k") = 0.5, py::arg("h") = 5.0);
+    m.def("ewma_alarms", &ewma_alarms_native, py::arg("residuals"), py::arg("lam") = 0.2, py::arg("k") = 3.0);
+    m.def("pareto_front", &pareto_front_native, py::arg("objectives"));
+    m.def("arrow_segments", &arrow_segments_native, py::arg("points"), py::arg("vectors"), py::arg("scale") = 1.0);
+    m.def("ray_march", &ray_march_native, py::arg("volume"), py::arg("n_steps") = 32, py::arg("axis") = 2, py::arg("alpha") = 0.1);
+    m.def("boundary_faces_tet", &boundary_faces_tet_native, py::arg("tets"));
+    m.def("lumped_mass_2d", &lumped_mass_2d_native, py::arg("points"), py::arg("simplices"));
+    m.def("p1_stiffness_2d", &p1_stiffness_2d_native, py::arg("points"), py::arg("simplices"));
+    m.def("marching_squares", &marching_squares_native, py::arg("f"), py::arg("level") = 0.0);
+    m.def("augment_symmetric", &augment_symmetric_native, py::arg("U"), py::arg("axes"));
+    m.def("kmeans_lloyd", &kmeans_lloyd_native, py::arg("X"), py::arg("initial_centers"), py::arg("max_iter") = 100, py::arg("tol") = 1e-6);
+    m.def("kmeans_inertia", &kmeans_inertia_native, py::arg("X"), py::arg("centers"), py::arg("labels"));
+    m.def("haar_forward", &haar_forward_native, py::arg("x"), py::arg("level") = 1);
+    m.def("haar_inverse", &haar_inverse_native, py::arg("coeffs"));
+    m.def("haar_threshold", &haar_threshold_native, py::arg("coeffs"), py::arg("tau"));
+    m.def("effective_sample_size", &effective_sample_size_native, py::arg("x"), py::arg("max_lag") = -1);
+    m.def("plateau_detector", &plateau_detector_native, py::arg("x"), py::arg("window") = 100, py::arg("tol_rel") = 0.01);
+    m.def("autocorrelation_time", &autocorrelation_time_native, py::arg("x"), py::arg("max_lag") = -1);
+    m.def("binary_dilation_2d", &binary_dilation_2d_native, py::arg("mask"), py::arg("iterations") = 1, py::arg("connectivity") = 1);
+    m.def("binary_erosion_2d", &binary_erosion_2d_native, py::arg("mask"), py::arg("iterations") = 1, py::arg("connectivity") = 1);
+    m.def("connected_components_2d", &connected_components_2d_native, py::arg("mask"), py::arg("connectivity") = 1);
+    m.def("expected_improvement", &expected_improvement_native, py::arg("mu"), py::arg("sigma"), py::arg("y_best"), py::arg("xi") = 0.0);
+    m.def("r_adapt_1d", &r_adapt_1d_native, py::arg("x"), py::arg("weights"), py::arg("n_iter") = 20);
+    m.def("frequency_peak_dicts", &frequency_peak_dicts_native, py::arg("freqs"), py::arg("amplitudes"), py::arg("indices"));
+    m.def("delta_criterion_3x3", &delta_criterion_3x3_native, py::arg("grad"));
+    m.def("gmm_log_prob_matrix", &gmm_log_prob_matrix_native, py::arg("X"), py::arg("weights"), py::arg("means"), py::arg("covs"));
+    m.def("gaussian_log_weights", &gaussian_log_weights_native, py::arg("diff"), py::arg("cov"));
+    m.def("ftle_from_advected_stencils", &ftle_from_advected_stencils_native, py::arg("adv"), py::arg("T"), py::arg("eps"));
+    m.def("lcs_ftle_from_flow_map", &lcs_ftle_from_flow_map_native, py::arg("X"), py::arg("Y"), py::arg("dx"), py::arg("dy"), py::arg("T"));
+    m.def("derivative_2d", &derivative_2d_native, py::arg("U"), py::arg("spacing"), py::arg("axis"), py::arg("order") = 1);
+    m.def("solve_dense", &solve_dense_native, py::arg("A"), py::arg("b"));
+    m.def("eigvalsh_symmetric", &eigvalsh_symmetric_native, py::arg("A"));
+    m.def("halton_sequence", &halton_sequence_native, py::arg("n"), py::arg("d"));
+    m.def("delay_embed_1d", &delay_embed_1d_native, py::arg("x"), py::arg("dim"), py::arg("delay"));
+    m.def("autocorrelation_1d", &autocorrelation_1d_native, py::arg("x"), py::arg("max_lag"));
+    m.def(
+        "schedule_berger_oliger", &schedule_berger_oliger_native, py::arg("level") = 0,
+        py::arg("max_level") = 2, py::arg("refine_ratio") = 2
+    );
+    m.def("exchange_ghost_1d", &exchange_ghost_1d_native, py::arg("blocks"), py::arg("n_ghost") = 2);
+    m.def("rayleigh_quotient", &rayleigh_quotient_native, py::arg("A"), py::arg("x"));
+}
