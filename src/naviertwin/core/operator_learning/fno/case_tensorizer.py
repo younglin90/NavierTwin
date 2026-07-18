@@ -120,6 +120,14 @@ def cases_to_grid_tensors(
     채워진다(``mask`` 채널이 그 영역을 식별한다). 벡터 필드는 성분별 채널로
     확장된다 (예: ``U`` → ``U_x, U_y, U_z``).
 
+    **중요(0 은 물리값이 아니다):** 타깃의 고체/도메인 밖 격자점은 실제 물리량이
+    아니라 자리채움용 0 이다. 따라서 손실을 계산할 때 이 영역은 점수화하면 안
+    된다. 이를 위해 반환 dict 에 ``"valid_mask"`` (N, H, W) 키를 함께 준다 —
+    이는 ``mask`` 입력 채널(index 1)과 **같은** ``vtkValidPointMask`` 에서 나온
+    유효셀 지시자(유체/실데이터=1, 0-채움=0)로, :meth:`~naviertwin.core.
+    operator_learning.fno.geometry_fno.GeometryFNO2D.fit` 의 ``sample_masks`` 로
+    그대로 넘겨 마스킹 손실을 켜는 용도다.
+
     현재 2D 전용이다 — 격자에 두께 0 축이 정확히 하나 있어야 한다.
 
     Args:
@@ -135,7 +143,11 @@ def cases_to_grid_tensors(
         다음 키를 담은 dict:
 
         - ``"inputs"``: (N, H, W, 2 + k) float32 — [sdf, mask, μ...].
-        - ``"targets"``: (N, H, W, C_out) float32 — 샘플된 필드 채널.
+        - ``"targets"``: (N, H, W, C_out) float32 — 샘플된 필드 채널
+          (고체/도메인 밖 = 0 자리채움, 물리값 아님 — 손실에서 제외할 것).
+        - ``"valid_mask"``: (N, H, W) float32 — 유효셀 지시자(유체/실데이터=1,
+          0-채움=0). ``mask`` 입력 채널과 같은 ``vtkValidPointMask`` 에서 파생.
+          ``GeometryFNO2D.fit(sample_masks=...)`` 에 그대로 넘겨 마스킹 손실을 켠다.
         - ``"grid"``: 공통 pyvista ImageData 격자.
         - ``"channel_names"``: 입력 채널 이름 목록.
         - ``"meta"``: ``target_names``, ``dims``, ``spacing``, ``origin``,
@@ -209,6 +221,9 @@ def cases_to_grid_tensors(
     )
     target_names: list[str] | None = None
     targets_list: list[NDArray[np.float32]] = []
+    # 유효셀 마스크 (N, H, W) — mask 입력 채널과 같은 vtkValidPointMask 파생.
+    # 손실에서 0-채움 영역을 제외하는 sample_masks 용도로 함께 반환한다.
+    valid_masks = np.zeros((n_cases, height, width), dtype=np.float32)
 
     for i, mesh in enumerate(meshes):
         sampled = grid.sample(mesh)
@@ -223,7 +238,10 @@ def cases_to_grid_tensors(
         sdf = (np.asarray(d_fluid) - np.asarray(d_solid)).reshape(-1)
 
         inputs[i, :, :, 0] = to_hw(sdf).astype(np.float32)
-        inputs[i, :, :, 1] = to_hw(mask).astype(np.float32)
+        mask_hw = to_hw(mask).astype(np.float32)
+        inputs[i, :, :, 1] = mask_hw
+        # valid_mask 는 mask 입력 채널과 정확히 같은 배열 — 손실 마스킹 재사용.
+        valid_masks[i] = mask_hw
         for j in range(n_params):
             inputs[i, :, :, 2 + j] = np.float32(mu[i, j])
 
@@ -254,6 +272,7 @@ def cases_to_grid_tensors(
     return {
         "inputs": inputs,
         "targets": targets,
+        "valid_mask": valid_masks,
         "grid": grid,
         "channel_names": channel_names,
         "meta": {
