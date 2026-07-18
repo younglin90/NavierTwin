@@ -445,6 +445,20 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_feature_download.add_argument("--json", dest="as_json", action="store_true", help="JSON으로 출력")
 
+    # batch-train
+    p_batch = sub.add_parser(
+        "batch-train",
+        help="헤드리스 배치 트윈 학습 (mpirun 분산 지원, GUI 비의존)",
+    )
+    p_batch.add_argument(
+        "--config",
+        dest="batch_config",
+        required=True,
+        metavar="PATH",
+        help="배치 잡 정의 JSON 경로 (jobs 목록)",
+    )
+    p_batch.add_argument("--json", dest="as_json", action="store_true", help="JSON으로 출력")
+
     # doctor
     p_doctor = sub.add_parser("doctor", help="설치/런타임 환경 진단 리포트 출력")
     p_doctor.add_argument("--json", dest="as_json", action="store_true", help="JSON으로 출력")
@@ -728,6 +742,8 @@ def main() -> None:
         )
     elif args.command == "feature-pack":
         sys.exit(_run_feature_pack(args))
+    elif args.command == "batch-train":
+        sys.exit(_run_batch_train(config=args.batch_config, as_json=args.as_json))
     elif args.command == "doctor":
         sys.exit(
             _run_doctor(
@@ -788,6 +804,36 @@ def _run_web_gui(host: str, port: int, open_browser: bool) -> int:
         )
         return 1
     return run_web(host=host, port=port, open_browser=open_browser)
+
+
+def _run_batch_train(*, config: str, as_json: bool) -> int:
+    """헤드리스 배치 트윈 학습 실행 (MPI 는 이 경로에서만 초기화된다).
+
+    GUI 이벤트 루프와 mpi4py 초기화가 충돌하지 않도록, MPI 감지/사용은
+    :mod:`naviertwin.cli.batch_train` 헤드리스 경로 전용이다. mpi4py 가 없거나
+    ``mpirun`` 없이 실행돼도 rank 0 / size 1 순차 실행으로 폴백한다.
+
+    Returns:
+        0: 모든 잡 성공. 1: 하나 이상 잡 실패. 2: config/런타임 오류.
+    """
+    from naviertwin.cli.batch_train import run_batch  # noqa: PLC0415
+
+    try:
+        payload = run_batch(Path(config))
+    except (ImportError, OSError, RuntimeError, ValueError, KeyError) as exc:
+        print(f"batch-train error: {exc}", file=sys.stderr)
+        return 2
+
+    failed = [r for r in payload["results"] if r.get("status") != "ok"]
+    if as_json:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    else:
+        print(
+            f"batch-train 완료: rank {payload['rank']}/{payload['size']}, "
+            f"{len(payload['results'])}개 잡 실행, {len(failed)}개 실패"
+        )
+        print(f"results: {payload['results_path']}")
+    return 1 if failed else 0
 
 
 def _run_pipeline(reducer: str, n_modes: int, surrogate: str) -> int:
