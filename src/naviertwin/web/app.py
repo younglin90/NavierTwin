@@ -305,6 +305,19 @@ class NavierTwinWebApp:
         st.nt_bc_patch_name = "wall"
         st.nt_bc_status = ""
 
+        # v5.1 후속 — BC 값 입력
+        st.nt_bc_value_type = "velocity"  # velocity | pressure | temperature | custom
+        st.nt_bc_value_type_choices = [
+            {"title": "속도(u,v,w)", "value": "velocity"},
+            {"title": "압력(p)", "value": "pressure"},
+            {"title": "온도(T)", "value": "temperature"},
+            {"title": "사용자 정의", "value": "custom"},
+        ]
+        st.nt_bc_value_x = 0.0
+        st.nt_bc_value_y = 0.0
+        st.nt_bc_value_z = 0.0
+        st.nt_bc_patches = []  # list_boundary_patches() 결과 — 데이터셋 로드/BC 저장 시 갱신
+
         # Compare (reducer×surrogate 벤치마크)
         st.nt_compare_dialog = False
         st.nt_compare_rows = []
@@ -391,6 +404,8 @@ class NavierTwinWebApp:
         ctrl.nt_compute_wall_distance = A(
             self.compute_wall_distance_from_picks, "벽 거리 계산 중…", render_after=True
         )
+        # v5.1 후속 — BC 값 저장은 메타데이터 갱신뿐이라 GL 을 건드리지 않는다.
+        ctrl.nt_attach_bc = self.attach_boundary_condition
         ctrl.nt_bench_generate = A(self.bench_generate, "벤치마크 데이터셋 생성 중…")
         ctrl.nt_bench_load = A(self.bench_load_h5, "PDEBench HDF5 로드 중…")
         ctrl.nt_bench_train = self._bench_train_async
@@ -2077,6 +2092,60 @@ class NavierTwinWebApp:
         self._render()
         self._set_status(f"벽 거리 계산 완료: {', '.join(names)}")
 
+    # ------------------------------------------------------------------
+    # v5.1 후속 — 경계조건(BC) 값 입력
+    # ------------------------------------------------------------------
+
+    def _refresh_bc_patches(self) -> None:
+        """``nt_bc_patches`` 를 파일 기반(OpenFOAM) + 피킹 patch 통합 목록으로 갱신한다.
+
+        데이터셋이 없으면 아무것도 하지 않는다 — 데이터셋 로드 직후
+        (:meth:`_set_dataset`) 와 :meth:`attach_boundary_condition` 성공 후에
+        호출된다.
+        """
+        if self.dataset is None:
+            return
+        with self.state:
+            self.state.nt_bc_patches = service.list_boundary_patches(self.dataset)
+
+    def attach_boundary_condition(self) -> None:
+        """입력 폼(속도/압력/온도/사용자 정의)의 값을 patch 에 경계조건으로 저장한다."""
+        if self.dataset is None:
+            self._fail("경계조건 저장 실패", ValueError("데이터셋이 로드되지 않았습니다."))
+            return
+        patch_name = self.state.nt_bc_patch_name
+        if not patch_name:
+            self._fail("경계조건 저장 실패", ValueError("patch 이름이 비어 있습니다."))
+            return
+        value_type = self.state.nt_bc_value_type
+        x = float(self.state.nt_bc_value_x)
+        if value_type == "velocity":
+            values = {
+                "u": x,
+                "v": float(self.state.nt_bc_value_y),
+                "w": float(self.state.nt_bc_value_z),
+            }
+        elif value_type == "pressure":
+            values = {"p": x}
+        elif value_type == "temperature":
+            values = {"T": x}
+        else:
+            values = {"value": x}
+        try:
+            service.attach_boundary_condition_values(
+                self.dataset,
+                patch_name,
+                values,
+                cell_ids=list(self.state.nt_bc_picked_cells)
+                if self.state.nt_bc_picked_cells
+                else None,
+            )
+        except Exception as exc:  # noqa: BLE001 — 사용자 입력 문제를 안내
+            self._fail("경계조건 저장 실패", exc)
+            return
+        self._refresh_bc_patches()
+        self._set_status(f"경계조건 저장: {patch_name}")
+
     def _update_truth_comparison(
         self, values: list[float], prediction: Any, parts: Any
     ) -> None:
@@ -2358,6 +2427,7 @@ class NavierTwinWebApp:
         self._update_coarsen_preview()
         self._render(reset_camera=True)
         self._set_status(status)
+        self._refresh_bc_patches()
 
     def _update_device_badge(self, **_kwargs: Any) -> None:
         """학습 완료 시 실제 학습 디바이스(GPU/CPU)를 배지 상태에 채운다 (v5.6).
@@ -3374,6 +3444,74 @@ class NavierTwinWebApp:
                                     ),
                                     prepend_icon="mdi-ruler",
                                 )
+                            # v5.1 후속 — 경계조건(BC) 값 입력. 값 자체는 필드가
+                            # 아니라 patch 를 설명하는 메타데이터라 mesh 대신
+                            # dataset.metadata["boundary_conditions"] 에 저장된다.
+                            html.Div(
+                                "경계조건 값", classes="text-caption text-disabled mt-3 mb-1"
+                            )
+                            v3.VSelect(
+                                v_model=("nt_bc_value_type",),
+                                items=("nt_bc_value_type_choices",),
+                                label="종류",
+                                density="compact",
+                                hide_details=True,
+                                classes="mb-2",
+                            )
+                            with html.Div(classes="d-flex", style="gap: 8px;"):
+                                v3.VTextField(
+                                    v_model=("nt_bc_value_x",),
+                                    label=(
+                                        "nt_bc_value_type === 'velocity' ? 'u' : "
+                                        "(nt_bc_value_type === 'pressure' ? 'p' : "
+                                        "(nt_bc_value_type === 'temperature' ? 'T' : "
+                                        "'value'))",
+                                    ),
+                                    type="number",
+                                    density="compact",
+                                    hide_details=True,
+                                )
+                                v3.VTextField(
+                                    v_model=("nt_bc_value_y",),
+                                    label="v",
+                                    type="number",
+                                    density="compact",
+                                    hide_details=True,
+                                    v_show=("nt_bc_value_type === 'velocity'",),
+                                )
+                                v3.VTextField(
+                                    v_model=("nt_bc_value_z",),
+                                    label="w",
+                                    type="number",
+                                    density="compact",
+                                    hide_details=True,
+                                    v_show=("nt_bc_value_type === 'velocity'",),
+                                )
+                            v3.VBtn(
+                                "경계조건 저장",
+                                click=self.ctrl.nt_attach_bc,
+                                color="secondary",
+                                block=True,
+                                classes="mt-2",
+                                disabled=("nt_busy || !nt_bc_patch_name",),
+                                prepend_icon="mdi-content-save-outline",
+                            )
+                            # patch 요약 — OpenFOAM 파일 기반(file) + 뷰어 피킹
+                            # (picked) patch 를 하나의 목록으로 병합해 보여준다
+                            # (service.list_boundary_patches).
+                            with html.Div(
+                                v_show=("nt_bc_patches.length > 0",), classes="mt-2"
+                            ):
+                                with html.Template(
+                                    v_for="p in nt_bc_patches", key="p.name"
+                                ):
+                                    html.Div(
+                                        "{{ p.name }} ({{ p.source }}) — "
+                                        "{{ p.n_cells != null ? p.n_cells + '셀' : '—' }}"
+                                        " — {{ p.bc_values ? "
+                                        "JSON.stringify(p.bc_values) : '값 없음' }}",
+                                        classes="text-caption text-medium-emphasis",
+                                    )
 
             # 2) Model — 방식 우선(method-first) 2단 선택.
             # 계열 분류/근거: .omc/plans/model-taxonomy-plan.md
