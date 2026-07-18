@@ -426,13 +426,14 @@ patch 메타 보존, 외삽 시 에러 미계산, 재샘플/네이티브 이중 
   model(DatasetSignature)을 strategies._same_mesh_points 에도 통합 완료.
   MeshGraphNets predict() 의 stale edge_features 버그도 수정(Route 2 연구가
   발견) — 아직 시계열 롤아웃 전용이라 case-set 파라메트릭 배선은 미완.
-- 남은 것: MeshGraphNet 을 mesh_gnn/gino 처럼 케이스 세트 파라메트릭
-  트윈으로 배선(Route 2 세 번째, 버그 수정 완료로 이제 가능), 분할 뷰어
-  슬라이스/시간 동기(#9 카메라 동기는 이미 완료·문서화, 슬라이스·시간은
-  미완), canonical VTKHDF 저장 계층(4계층 중 원본 불변·Zarr·MLflow 는
-  완료, canonical 중간 포맷만 남음), 대형 3D/HPC(#8) 와 운영형 트윈
-  계층(#10 = 단계 6)은 별도 제품 설계 결정이 선행돼야 하는 큰 범위 —
-  이번 자율 실행 배치에서는 스코프 확정 가능한 항목까지만 진행.
+- ✅ 전부 완료(2026-07-18): MeshGraphNet Route 2 세 번째 배선(`mesh_gnn_mp`,
+  message-passing edge_features 실사용), 분할 뷰어 시간 동기(슬라이스는
+  웹 GUI에 슬라이스 기능 자체가 없어 보류 — 문서화됨), canonical VTKHDF
+  캐시(기존 .ntwin 재사용, tier 2), 기존(세션 무관) 테스트 실패 10건 정리.
+- **v5.0~v5.6 플랫폼 전환 로드맵은 여기서 완료로 본다.** 남은 대형 3D/HPC(#8),
+  운영형 트윈 계층(#10 = 단계 6), Domain-Specific/Experimental 모델 카탈로그
+  확장은 코드 스코핑이 아니라 제품 방향 결정이 선행돼야 하는 별도 이니셔티브 —
+  ROADMAP.md "다음 단계" 섹션에 이관.
 
 ## §7. 리스크 · 결정 필요
 
