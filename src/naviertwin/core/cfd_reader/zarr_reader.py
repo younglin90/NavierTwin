@@ -40,7 +40,11 @@ def write_zarr(path: str | Path, data: dict[str, Any]) -> None:
     idx = 0
     while idx < len(items):
         k, v = items[idx]
-        g.create_dataset(k, data=np.asarray(v))
+        arr = np.asarray(v)
+        try:
+            g.create_array(k, data=arr)  # zarr 3.x
+        except (AttributeError, TypeError):
+            g.create_dataset(k, data=arr)  # zarr 2.x
         idx += 1
 
 
