@@ -68,6 +68,12 @@
       트윈, `varying_mesh` 덕타이핑으로 원본 케이스 메쉬(진짜 구멍) 위에
       그대로 표시(앱 예측 경로 수정 0). tier="experimental". karman_shapes
       헤드리스 플로우로 검증
+- [x] **Route 2 두 번째 배선: `gino`** — neuraloperator GINO, 점군 기반이라
+      고정 그래프 없이 예측 좌표가 학습 케이스와 달라도 그대로 동작
+      (mesh_gnn 의 kNN 폴백 불필요). tier="experimental"
+- [x] 검토 §6½ #6: MLflow 실험 추적(`core/experiment/tracking.py`) — 학습
+      실행마다 strategy/params/metrics 기록, mlflow 미설치/실패는 조용한
+      no-op(학습 흐름을 절대 막지 않음)
 
 ## 직전 단계: v4.2.0 + 17 rounds — 연구 플랫폼 + 전영역 성숙화 ✅
 
