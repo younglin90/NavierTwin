@@ -197,7 +197,50 @@ STRATEGIES: tuple[StrategySpec, ...] = (
 
 
 def _same_mesh_points(cases: Sequence[Any]) -> bool:
-    """점 좌표가 전부 일치하는가 — core 자급자족 판정 (web 의존 금지)."""
+    """점 좌표가 전부 일치하는가 — core 자급자족 판정 (web 의존 금지).
+
+    :mod:`naviertwin.core.data_model.signature` 의 :class:`DatasetSignature`
+    를 1차(fast path)로 쓴다 — 케이스마다 topology/coordinate 해시를 계산해
+    대표 케이스와 비교하고, 전부 일치하면 즉시 ``True`` 를 돌려준다(로드맵
+    §6½ 통합 지점 — signature.py docstring 의 "향후 통합 지점" 참고).
+
+    다만 ``compute_signature`` 는 좌표 바이트를 반올림 없이 그대로 해시하므로
+    (모듈 설계 원칙) 1 ULP 차이도 다른 해시를 만든다 — deep copy 후 재계산
+    오차 등으로 "사실상 같은 격자인데 해시만 다른" 경우가 있을 수 있다.
+    기존 구현은 ``np.allclose`` 로 허용오차 비교를 했으므로, 그 회귀를 막기
+    위해 해시가 하나라도 불일치하면 **기존 허용오차 비교로 폴백**한다 — 즉
+    최종 판정은 항상 기존 ``np.allclose`` 의미론과 동일하고(회귀 없음),
+    해시가 전부 일치하는 흔한 경우(케이스 세트가 진짜 동일 격자)에만 배열
+    전수 비교를 생략해 더 빠르다.
+    """
+    try:
+        from naviertwin.core.data_model.signature import compute_signature
+
+        ref_sig = compute_signature(cases[0])
+        all_hashes_match = True
+        for case in cases[1:]:
+            sig = compute_signature(case)
+            if (
+                sig.topology_hash != ref_sig.topology_hash
+                or sig.coordinate_hash != ref_sig.coordinate_hash
+            ):
+                all_hashes_match = False
+                break
+        if all_hashes_match:
+            return True
+    except Exception:  # noqa: BLE001 — 시그니처 계산 실패는 폴백 경로로 넘긴다
+        pass
+
+    return _same_mesh_points_tolerant(cases)
+
+
+def _same_mesh_points_tolerant(cases: Sequence[Any]) -> bool:
+    """점 좌표 허용오차(np.allclose) 비교 — 시그니처 해시 불일치 시 폴백.
+
+    반올림 없는 완전일치 해시(:func:`_same_mesh_points`)와 달리 여기는 기존
+    동작 그대로 허용오차 비교를 유지한다 — "거의 같은 격자"를 다른 격자로
+    오판해 회귀를 만들지 않기 위함이다.
+    """
     try:
         import numpy as np
 
