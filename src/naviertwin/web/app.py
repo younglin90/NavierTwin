@@ -298,6 +298,13 @@ class NavierTwinWebApp:
         # 분할 뷰(좌 실제/우 트윈) — 두 Plotter 를 나란히, 컬러 범위 공유 (v5.4).
         st.nt_split_view = False
 
+        # v5.1 wall face 픽킹 — 경계 패치 메타(OpenFOAM) 없는 raw 메쉬에서
+        # 뷰어 클릭만으로 벽면을 지정해 wall-distance/SDF 를 붙이는 폴백.
+        st.nt_bc_pick_mode = False
+        st.nt_bc_picked_cells = []  # 선택된 표면 셀 id (중복 제거, 정렬)
+        st.nt_bc_patch_name = "wall"
+        st.nt_bc_status = ""
+
         # Compare (reducer×surrogate 벤치마크)
         st.nt_compare_dialog = False
         st.nt_compare_rows = []
@@ -376,6 +383,14 @@ class NavierTwinWebApp:
         # 비교/학습은 라이브 진행 전용 async(모니터 큐 push)로 — 진행바/스파크라인 스트리밍.
         ctrl.nt_run_compare = self._run_compare_async
         ctrl.nt_predict = A(self.predict, "예측 계산 중…", render_after=True)
+        # v5.1 wall face 픽킹 — 토글/초기화는 plotter(GL) 를 직접 건드리므로
+        # 다른 GL 콜백(nt_reset_view 등)처럼 동기 유지. 거리 계산은 메쉬
+        # 전체를 훑는 무거운 연산이라 비동기 래퍼(A) 로 감싼다.
+        ctrl.nt_toggle_wall_pick = self.toggle_wall_pick_mode
+        ctrl.nt_clear_wall_pick = self.clear_wall_pick
+        ctrl.nt_compute_wall_distance = A(
+            self.compute_wall_distance_from_picks, "벽 거리 계산 중…", render_after=True
+        )
         ctrl.nt_bench_generate = A(self.bench_generate, "벤치마크 데이터셋 생성 중…")
         ctrl.nt_bench_load = A(self.bench_load_h5, "PDEBench HDF5 로드 중…")
         ctrl.nt_bench_train = self._bench_train_async
@@ -1950,6 +1965,118 @@ class NavierTwinWebApp:
                 self.state.nt_support_status = ""
                 self.state.nt_support_label = ""
 
+    # ------------------------------------------------------------------
+    # v5.1 — wall face 픽킹 (경계 패치 메타 없는 raw 메쉬용 폴백)
+    # ------------------------------------------------------------------
+
+    def toggle_wall_pick_mode(self) -> None:
+        """벽면 피킹 모드를 켜고 끈다.
+
+        켤 때는 :meth:`_enable_wall_picking` 으로 plotter 에 셀 피킹
+        콜백을 등록하고, 끌 때는 피킹을 해제하고 하이라이트를 지운다.
+        PyVista 버전마다 피킹 API 가 달라 실패해도 앱이 죽지 않도록
+        각 단계를 방어적으로 처리한다.
+        """
+        with self.state:
+            self.state.nt_bc_pick_mode = not self.state.nt_bc_pick_mode
+        if self.state.nt_bc_pick_mode:
+            self._enable_wall_picking()
+            return
+        if self.plotter is not None:
+            try:
+                self.plotter.disable_picking()
+            except Exception:  # noqa: BLE001 — PyVista 버전별 API 차이 방어
+                pass
+        self._render()
+
+    def _enable_wall_picking(self) -> None:
+        """벽면 피킹 모드용 셀 피킹 콜백을 plotter 에 등록한다.
+
+        서버 렌더링(:meth:`build_ui` 의 ``default_server_rendering=True``)
+        구성이라 브라우저 클릭이 여기까지 도달하려면 라이브 GL 루프가
+        필요하다 — 오프스크린/헤드리스 환경이나 일부 PyVista 버전에서는
+        등록 자체가 실패할 수 있으므로 실패는 조용히 :meth:`_fail` 로
+        안내하고 모드를 되돌린다.
+        """
+        if self.dataset is None:
+            self._fail("벽면 선택 실패", ValueError("데이터셋이 로드되지 않았습니다."))
+            with self.state:
+                self.state.nt_bc_pick_mode = False
+            return
+        plotter = self._ensure_plotter()
+        self._render()
+        try:
+            plotter.enable_cell_picking(
+                callback=self._on_wall_cell_picked,
+                through=False,
+                show=True,
+                show_message=False,
+            )
+        except Exception as exc:  # noqa: BLE001 — PyVista 버전/환경별 피킹 API 차이
+            self._fail("벽면 피킹 모드를 시작할 수 없습니다", exc)
+            with self.state:
+                self.state.nt_bc_pick_mode = False
+
+    def _on_wall_cell_picked(self, picked_mesh: Any) -> None:
+        """셀 피킹 콜백 — 선택된 셀 id 를 상태에 누적한다.
+
+        ``picked_mesh`` 는 PyVista ``enable_cell_picking`` 이 넘기는, 선택된
+        셀들로 이루어진 서브메쉬다 (선택 없으면 ``None``). 렌더 메쉬가
+        ``extract_surface`` 로 만들어진 표면이라 ``vtkOriginalCellIds`` 가
+        붙어 있으면 그걸로 원본(표면) 기준 id 로 되돌리고, 없으면 서브메쉬
+        자체의 셀 인덱스를 그대로 쓴다.
+        """
+        if picked_mesh is None:
+            return
+        n_cells = int(getattr(picked_mesh, "n_cells", 0))
+        if n_cells == 0:
+            return
+        cell_data = getattr(picked_mesh, "cell_data", {}) or {}
+        if "vtkOriginalCellIds" in cell_data:
+            ids = [int(c) for c in cell_data["vtkOriginalCellIds"]]
+        else:
+            ids = list(range(n_cells))
+        merged = sorted({int(c) for c in list(self.state.nt_bc_picked_cells) + ids})
+        with self.state:
+            self.state.nt_bc_picked_cells = merged
+            self.state.nt_bc_status = f"선택된 셀 {len(merged)}개"
+
+    def clear_wall_pick(self) -> None:
+        """벽면 피킹 선택을 초기화한다."""
+        with self.state:
+            self.state.nt_bc_picked_cells = []
+            self.state.nt_bc_status = ""
+
+    def compute_wall_distance_from_picks(self) -> None:
+        """피킹한 셀들로 벽면을 구성하고 wall-distance/SDF 를 부착한다.
+
+        경계 패치 메타데이터(OpenFOAM)가 있으면 :func:`service.attach_wall_features`
+        를 직접 쓰는 편이 더 정확하다 — 이 경로는 그런 메타가 없는 원시
+        VTU/STL 등에서 뷰어 클릭만으로 벽면을 지정하는 폴백이다.
+        """
+        if self.dataset is None:
+            self._fail("벽 거리 계산 실패", ValueError("데이터셋이 로드되지 않았습니다."))
+            return
+        cell_ids = list(self.state.nt_bc_picked_cells)
+        if not cell_ids:
+            self._fail(
+                "벽 거리 계산 실패",
+                ValueError(
+                    "선택된 셀이 없습니다. 벽면 선택 모드에서 셀을 먼저 클릭하세요."
+                ),
+            )
+            return
+        try:
+            names = service.attach_wall_distance_from_picks(
+                self.dataset, cell_ids, prefix=self.state.nt_bc_patch_name or "wall"
+            )
+        except Exception as exc:  # noqa: BLE001 — 사용자 입력/메쉬 문제를 안내
+            self._fail("벽 거리 계산 실패", exc)
+            return
+        self._refresh_fields(prefer=names[0])
+        self._render()
+        self._set_status(f"벽 거리 계산 완료: {', '.join(names)}")
+
     def _update_truth_comparison(
         self, values: list[float], prediction: Any, parts: Any
     ) -> None:
@@ -3192,6 +3319,61 @@ class NavierTwinWebApp:
                                 hide_details=True,
                                 density="compact",
                             )
+                    # v5.1 wall face 픽킹 — 경계 패치 메타(OpenFOAM) 없는
+                    # 원시 파일(raw VTU/STL 등)에서 뷰어 클릭만으로 벽면을
+                    # 지정해 wall-distance/SDF 를 붙이는 폴백 카드.
+                    with v3.VCard(
+                        variant="flat", classes="mt-2", v_show=("nt_has_dataset",)
+                    ):
+                        with v3.VCardText():
+                            with html.Div(classes="d-flex align-center mb-1"):
+                                html.Span("경계(Wall) 지정", classes="text-caption")
+                                self._tip(
+                                    "데이터에 이미 OpenFOAM 경계 패치 메타(boundary_patches)가 "
+                                    "있으면 그걸 그대로 벽면으로 쓰는 편이 더 정확합니다. 이 "
+                                    "피킹 기능은 그런 메타가 없는 원시 VTU/STL 등에서, 3D "
+                                    "뷰어를 클릭해 벽면 셀을 직접 골라내는 폴백입니다."
+                                )
+                            v3.VTextField(
+                                v_model=("nt_bc_patch_name",),
+                                label="patch 이름 (필드 접두사)",
+                                density="compact",
+                                hide_details=True,
+                                classes="mb-2",
+                            )
+                            v3.VBtn(
+                                "{{ nt_bc_pick_mode ? '벽 선택 모드 ON' : '벽 선택 모드 OFF' }}",
+                                click=self.ctrl.nt_toggle_wall_pick,
+                                color=("nt_bc_pick_mode ? 'primary' : undefined",),
+                                variant=("nt_bc_pick_mode ? 'flat' : 'tonal'",),
+                                block=True,
+                                disabled=("nt_busy",),
+                                prepend_icon="mdi-cursor-default-click-outline",
+                            )
+                            html.Div(
+                                "{{ nt_bc_status }}",
+                                v_show=("nt_bc_status",),
+                                classes="text-caption text-info mt-1",
+                            )
+                            with html.Div(classes="d-flex mt-2", style="gap: 8px;"):
+                                v3.VBtn(
+                                    "선택 초기화",
+                                    click=self.ctrl.nt_clear_wall_pick,
+                                    variant="tonal",
+                                    classes="flex-grow-1",
+                                    disabled=("nt_busy || nt_bc_picked_cells.length === 0",),
+                                    prepend_icon="mdi-eraser",
+                                )
+                                v3.VBtn(
+                                    "wall-distance 계산",
+                                    click=self.ctrl.nt_compute_wall_distance,
+                                    color="primary",
+                                    classes="flex-grow-1",
+                                    disabled=(
+                                        "nt_busy || nt_bc_picked_cells.length === 0",
+                                    ),
+                                    prepend_icon="mdi-ruler",
+                                )
 
             # 2) Model — 방식 우선(method-first) 2단 선택.
             # 계열 분류/근거: .omc/plans/model-taxonomy-plan.md
