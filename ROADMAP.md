@@ -17,9 +17,16 @@
       param_names 호환
 - [ ] v5.2: EZyRB 서로게이트 (POD-GPR·UQ / POD-NN) — 진행 중
 - [ ] v5.2: FNO+SDF 채널 (형상=SDF 입력 채널, DeepCFD/Thuerey 방식) — 진행 중
+- [x] v5.2: EZyRB 서로게이트 — `ezyrb_gpr`(예측 σ UQ)/`ezyrb_ann` 키, 리더보드 포함
+- [x] v5.2: FNO+SDF 채널 core — `GeometryFNO2D` + `cases_to_grid_tensors`
+      (형상=SDF 채널 · 조건=브로드캐스트 채널, DeepCFD/Thuerey 방식)
+- [ ] v5.2: GeometryFNO service/app 배선 (operator 전략을 형상가변 케이스 세트에 활성화)
 - [ ] v5.1: 경계조건 서브시스템 (patch 메타 보존 · wall face 마우스 지정 ·
       메쉬 네이티브 wall-SDF)
 - [ ] v5.4: 분할 뷰어(실제|트윈) + 셀별 차이장 + 외삽 모드
+- [ ] v5.6: 성능/병렬 계층 — GPU 디바이스 배지/토글·AMP·미니배치, 케이스 로드/
+      전처리 process_map 병렬, 리더보드 조합 병렬, MPI 배치 CLI(클러스터 전용).
+      현재 실태: GPU 학습은 이미 자동(cuda), mpi4py 설치·미사용
 
 ## 직전 단계: v4.2.0 + 17 rounds — 연구 플랫폼 + 전영역 성숙화 ✅
 

@@ -142,6 +142,33 @@ StrategySpec
    기하는 `libigl.signed_distance`(winding number, 견고). 추가 특징:
    `compute_normals`, `curvature`, `compute_cell_sizes`, 위치 인코딩.
 
+### 4.4½ 성능/병렬 계층 (2026-07-18 사용자 추가 요구: MPI·멀티스레드·GPU)
+
+**현재 실태(실측):**
+- **GPU 학습은 이미 동작** — Physics AI(`cfd_field_model._resolve_device`)와
+  FNO 계열이 `device="auto"` → CUDA 자동 사용. WSL 에서 torch 2.11+cu130,
+  RTX 5070(12GB) 감지 확인. 단, **UI 에 어느 디바이스로 학습 중인지 표시가 없고**,
+  AMP(혼합정밀)·미니배치 스트리밍이 없다(전체 배치 + `max_train_points` 서브샘플).
+- **멀티스레드/프로세스**: 웹 앱 워커는 ThreadPoolExecutor, 카르만 케이스 세트
+  해석은 ProcessPoolExecutor(케이스 병렬) 사용 중. `utils/parallel.py`
+  (thread_map/process_map)는 존재하나 로드/전처리 경로에 미배선.
+- **MPI**: `mpi4py` 3.1.5 설치돼 있으나 **미사용**.
+
+**설계 원칙(솔직한 우선순위):** 인터랙티브 앱의 정답은 *스레드(로드/전처리) +
+GPU(학습)* 다. MPI 는 인터랙티브 GUI 가 아니라 **headless 배치**(클러스터에서
+수백 케이스 전처리/리더보드 학습 분산)에서만 의미가 있다 — GUI 이벤트 루프와
+MPI 런처(mpirun)는 근본적으로 궁합이 나쁘다. 따라서 MPI 는 CLI 파이프라인으로
+분리한다.
+
+| 우선 | 항목 | 방법 | 근거 |
+|---|---|---|---|
+| P0 | 학습 디바이스 표시 + 선택 | ②Model 에 "GPU(cuda)/CPU" 배지 + 강제 토글 | 이미 GPU 로 도는데 사용자가 모름 |
+| P0 | 케이스 로드/재샘플/텐서화 병렬 | `load_case_set`·tensorizer 에 process_map | 케이스 단위 완전 독립 — 즉효 |
+| P1 | AMP(혼합정밀) + 미니배치 | 학습 루프에 `torch.autocast`+DataLoader | 12GB GPU 에서 대형 격자 학습 가능화. `utils/mixed_precision` 재사용 |
+| P1 | 리더보드 조합 병렬 | compare_models 조합별 프로세스/스레드 | 조합 독립 — 벽시계 ÷ 조합 수 |
+| P2 | 멀티 GPU (단일 노드) | torch DDP 또는 조합-단위 GPU 분배 | GPU 2개+ 사용자용 |
+| P3 | MPI 배치 CLI | `naviertwin batch-train --mpi` (mpi4py, 케이스/조합 rank 분배) | 클러스터 대량 전처리·학습 전용. GUI 무관 |
+
 ### 4.4 분할 뷰어 + 에러장
 
 - **듀얼 `plotter_ui` 두 pane**(좌 실제/우 트윈), 카메라 링크. "분할" 토글 버튼.
@@ -309,6 +336,13 @@ AIAA'20) — 둘 다 "0-채움 = 형상 인코딩" 전제를 검증. FNO는 `in_
 - 셀별 |real−twin| 차이장 + 요약 에러. held-out 비교(재구성 오차 아님).
 - 외삽 모드(에러 N/A) 전 전략 일반화.
 - 검증: 학습에 없던 조건 예측 → 좌우 비교 → 차이장; 외삽 → 에러 숨김.
+
+### v5.6 — 성능/병렬 계층 (§4.4½, 사용자 추가 요구)
+- P0: 학습 디바이스 배지+토글(②Model), 케이스 로드/재샘플/텐서화 process_map 병렬.
+- P1: AMP+미니배치 학습 루프(Physics AI·GeometryFNO), 리더보드 조합 병렬.
+- P2: 멀티 GPU(DDP 또는 조합-단위 분배).
+- P3: `naviertwin batch-train --mpi` — mpi4py 배치 CLI(클러스터 전용, GUI 무관).
+- 검증: 동일 데모에서 병렬 전/후 벽시계 비교 수치를 기록.
 
 ### v5.5 — 3D 검증 + 벤치마크
 - 실 3D 케이스 end-to-end. AirfRANS(2D) → ShapeNet-Car(3D) 벤치 수치.
