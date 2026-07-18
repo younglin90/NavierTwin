@@ -18,6 +18,11 @@ def _env() -> dict[str, str]:
         "PYTHONPATH": str(ROOT / "src"),
         "QT_QPA_PLATFORM": "offscreen",
         "MPLCONFIGDIR": "/tmp/mpl",
+        # 호스트 로케일이 C/POSIX(ASCII)인 CI/샌드박스에서도 자식 프로세스가
+        # 항상 UTF-8 로 stdout/stderr 를 쓰게 강제한다 — 안 그러면 한국어
+        # 메시지가 섞인 출력을 부모가 디코드할 때 UnicodeDecodeError 가 난다.
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONUTF8": "1",
     }
     return env
 
@@ -39,6 +44,7 @@ def test_readme_minimal_quickstart_commands_execute() -> None:
         env=_env(),
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=False,
     )
     assert version.returncode == 0
@@ -58,6 +64,7 @@ def test_readme_minimal_quickstart_commands_execute() -> None:
         env=_env(),
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=False,
     )
     payload = json.loads(preflight.stdout)

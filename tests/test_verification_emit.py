@@ -34,14 +34,14 @@ class TestEmitter:
         script = Path(__file__).resolve().parent.parent / "scripts" / "emit_verification_report.py"
         rc = subprocess.run(
             [sys.executable, str(script), str(tmp_path)],
-            capture_output=True, text=True, check=False,
+            capture_output=True, text=True, encoding="utf-8", check=False,
         )
         assert rc.returncode == 0, rc.stderr
         report = json.loads((tmp_path / "verification_report.json").read_text())
         assert report["overall"] == "PASS"
         assert report["layers"]["L0_smoke"] is True
         assert report["details"]["smoke"]["installer_smoke_pass"] is True
-        md = (tmp_path / "verification_report.md").read_text()
+        md = (tmp_path / "verification_report.md").read_text(encoding="utf-8")
         assert "PASS" in md
 
     def test_installer_smoke_failure_fails_l0(self, tmp_path) -> None:
@@ -68,7 +68,7 @@ class TestEmitter:
         script = Path(__file__).resolve().parent.parent / "scripts" / "emit_verification_report.py"
         rc = subprocess.run(
             [sys.executable, str(script), str(tmp_path)],
-            capture_output=True, text=True, check=False,
+            capture_output=True, text=True, encoding="utf-8", check=False,
         )
 
         assert rc.returncode == 1
@@ -81,7 +81,7 @@ class TestEmitter:
         script = Path(__file__).resolve().parent.parent / "scripts" / "emit_verification_report.py"
         rc = subprocess.run(
             [sys.executable, str(script), str(tmp_path)],
-            capture_output=True, text=True, check=False,
+            capture_output=True, text=True, encoding="utf-8", check=False,
         )
         # all defaults → fails coverage gate (0% < 70%)
         assert rc.returncode == 1
@@ -114,7 +114,7 @@ class TestEmitter:
         script = Path(__file__).resolve().parent.parent / "scripts" / "emit_verification_report.py"
         rc = subprocess.run(
             [sys.executable, str(script), str(tmp_path)],
-            capture_output=True, text=True, check=False,
+            capture_output=True, text=True, encoding="utf-8", check=False,
         )
 
         assert rc.returncode == 1
@@ -149,7 +149,7 @@ class TestEmitter:
         script = Path(__file__).resolve().parent.parent / "scripts" / "emit_verification_report.py"
         rc = subprocess.run(
             [sys.executable, str(script), str(tmp_path)],
-            capture_output=True, text=True, check=False,
+            capture_output=True, text=True, encoding="utf-8", check=False,
         )
 
         assert rc.returncode == 0
@@ -190,7 +190,7 @@ class TestEmitter:
         script = Path(__file__).resolve().parent.parent / "scripts" / "emit_verification_report.py"
         rc = subprocess.run(
             [sys.executable, str(script), str(tmp_path)],
-            capture_output=True, text=True, check=False,
+            capture_output=True, text=True, encoding="utf-8", check=False,
         )
 
         assert rc.returncode == 1
