@@ -304,6 +304,9 @@ class NavierTwinWebApp:
         st.nt_bc_picked_cells = []  # 선택된 표면 셀 id (중복 제거, 정렬)
         st.nt_bc_patch_name = "wall"
         st.nt_bc_status = ""
+        # v5.1 후속 — seed+region growing: 클릭 한 번씩이 아니라 이미 선택된
+        # 셀을 시드 삼아 인접 셀로 rings 단계 확장한다.
+        st.nt_bc_grow_rings = 1
 
         # v5.1 후속 — BC 값 입력
         st.nt_bc_value_type = "velocity"  # velocity | pressure | temperature | custom
@@ -401,6 +404,7 @@ class NavierTwinWebApp:
         # 전체를 훑는 무거운 연산이라 비동기 래퍼(A) 로 감싼다.
         ctrl.nt_toggle_wall_pick = self.toggle_wall_pick_mode
         ctrl.nt_clear_wall_pick = self.clear_wall_pick
+        ctrl.nt_grow_wall_pick = self.grow_wall_pick
         ctrl.nt_compute_wall_distance = A(
             self.compute_wall_distance_from_picks, "벽 거리 계산 중…", render_after=True
         )
@@ -2066,6 +2070,34 @@ class NavierTwinWebApp:
             self.state.nt_bc_picked_cells = []
             self.state.nt_bc_status = ""
 
+    def grow_wall_pick(self) -> None:
+        """현재 선택을 시드로 인접 셀까지 확장한다 (v5.1 후속 — region growing).
+
+        한 셀씩 클릭하는 대신, 이미 찍은 셀들에서 표면 인접 그래프를 따라
+        ``nt_bc_grow_rings`` 단계만큼 넓힌다. GL 을 건드리지 않는 순수 계산이라
+        동기로 처리한다.
+        """
+        if self.dataset is None:
+            self._fail("선택 확장 실패", ValueError("데이터셋이 로드되지 않았습니다."))
+            return
+        cell_ids = list(self.state.nt_bc_picked_cells)
+        if not cell_ids:
+            self._fail(
+                "선택 확장 실패",
+                ValueError("확장할 시드 셀이 없습니다. 벽면 선택 모드에서 셀을 먼저 클릭하세요."),
+            )
+            return
+        try:
+            grown = service.grow_wall_selection(
+                self.dataset, cell_ids, rings=int(self.state.nt_bc_grow_rings or 1)
+            )
+        except Exception as exc:  # noqa: BLE001 — 사용자 입력/메쉬 문제를 안내
+            self._fail("선택 확장 실패", exc)
+            return
+        with self.state:
+            self.state.nt_bc_picked_cells = grown
+            self.state.nt_bc_status = f"선택된 셀 {len(grown)}개 (확장 완료)"
+
     def compute_wall_distance_from_picks(self) -> None:
         """피킹한 셀들로 벽면을 구성하고 wall-distance/SDF 를 부착한다.
 
@@ -3429,6 +3461,31 @@ class NavierTwinWebApp:
                                 v_show=("nt_bc_status",),
                                 classes="text-caption text-info mt-1",
                             )
+                            # v5.1 후속 — seed+region growing: 한 셀씩 클릭하는
+                            # 대신, 이미 선택된 셀을 시드로 인접 셀까지 넓힌다.
+                            with html.Div(
+                                classes="d-flex align-center mt-2",
+                                style="gap: 8px;",
+                                v_show=("nt_bc_picked_cells.length > 0",),
+                            ):
+                                v3.VTextField(
+                                    v_model_number=("nt_bc_grow_rings",),
+                                    type="number",
+                                    label="확장 단계",
+                                    density="compact",
+                                    hide_details=True,
+                                    style="max-width: 96px;",
+                                    min=1,
+                                    max=20,
+                                )
+                                v3.VBtn(
+                                    "선택 확장",
+                                    click=self.ctrl.nt_grow_wall_pick,
+                                    variant="tonal",
+                                    classes="flex-grow-1",
+                                    disabled=("nt_busy",),
+                                    prepend_icon="mdi-arrow-expand-all",
+                                )
                             with html.Div(classes="d-flex mt-2", style="gap: 8px;"):
                                 v3.VBtn(
                                     "선택 초기화",

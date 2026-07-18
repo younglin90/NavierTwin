@@ -151,6 +151,86 @@ def test_attach_wall_distance_from_picks_uses_custom_prefix() -> None:
 
 
 # ---------------------------------------------------------------------------
+# service: grow_wall_selection (v5.1 후속 — seed+region growing)
+# ---------------------------------------------------------------------------
+
+
+def test_grow_wall_selection_expands_beyond_seed() -> None:
+    from naviertwin.web.service import grow_wall_selection
+
+    dataset = _make_dataset(_make_grid(n=8))
+    surface = dataset.mesh.extract_surface()
+    ids = _face_cell_ids(surface, axis=0, value=float(dataset.mesh.bounds[0]))
+    seed = [ids[0]]
+
+    grown = grow_wall_selection(dataset, seed, rings=1)
+
+    assert grown == sorted(set(grown))  # 중복 제거·정렬
+    assert set(seed).issubset(grown)
+    assert len(grown) > len(seed), "1단계 확장이면 이웃이 최소 하나는 붙어야 한다"
+
+
+def test_grow_wall_selection_more_rings_yields_superset() -> None:
+    """rings 를 늘리면 이전 rings 결과를 항상 포함해야 한다(단조 증가)."""
+    from naviertwin.web.service import grow_wall_selection
+
+    dataset = _make_dataset(_make_grid(n=8))
+    surface = dataset.mesh.extract_surface()
+    ids = _face_cell_ids(surface, axis=0, value=float(dataset.mesh.bounds[0]))
+    seed = [ids[len(ids) // 2]]
+
+    grown_1 = set(grow_wall_selection(dataset, seed, rings=1))
+    grown_2 = set(grow_wall_selection(dataset, seed, rings=2))
+    grown_3 = set(grow_wall_selection(dataset, seed, rings=3))
+
+    assert grown_1.issubset(grown_2)
+    assert grown_2.issubset(grown_3)
+
+
+def test_grow_wall_selection_zero_rings_returns_seed_only() -> None:
+    from naviertwin.web.service import grow_wall_selection
+
+    dataset = _make_dataset(_make_grid())
+    surface = dataset.mesh.extract_surface()
+    ids = _face_cell_ids(surface, axis=0, value=0.0)
+    seed = [ids[0], ids[1]]
+
+    grown = grow_wall_selection(dataset, seed, rings=0)
+
+    assert grown == sorted(set(int(c) for c in seed))
+
+
+def test_grow_wall_selection_stays_within_surface_cell_count() -> None:
+    """넓게 확장해도 표면 셀 총수를 넘지 않는다 (인접 그래프가 유계)."""
+    from naviertwin.web.service import grow_wall_selection
+
+    dataset = _make_dataset(_make_grid(n=6))
+    surface = dataset.mesh.extract_surface()
+    ids = _face_cell_ids(surface, axis=0, value=float(dataset.mesh.bounds[0]))
+
+    grown = grow_wall_selection(dataset, [ids[0]], rings=50)
+
+    assert len(grown) <= int(surface.n_cells)
+    assert all(0 <= c < int(surface.n_cells) for c in grown)
+
+
+def test_grow_wall_selection_empty_raises() -> None:
+    from naviertwin.web.service import grow_wall_selection
+
+    dataset = _make_dataset(_make_grid())
+    with pytest.raises(ValueError):
+        grow_wall_selection(dataset, [])
+
+
+def test_grow_wall_selection_out_of_range_raises() -> None:
+    from naviertwin.web.service import grow_wall_selection
+
+    dataset = _make_dataset(_make_grid())
+    with pytest.raises(ValueError):
+        grow_wall_selection(dataset, [10**9])
+
+
+# ---------------------------------------------------------------------------
 # app: trame state/controller 배선 (GL 피킹 자체는 헤드리스에서 검증 불가)
 # ---------------------------------------------------------------------------
 
@@ -173,9 +253,15 @@ def test_wall_pick_state_and_controllers_wired() -> None:
         "nt_bc_picked_cells",
         "nt_bc_patch_name",
         "nt_bc_status",
+        "nt_bc_grow_rings",
     ]:
         assert hasattr(st, key), f"missing state key: {key}"
-    for cb in ["nt_toggle_wall_pick", "nt_clear_wall_pick", "nt_compute_wall_distance"]:
+    for cb in [
+        "nt_toggle_wall_pick",
+        "nt_clear_wall_pick",
+        "nt_compute_wall_distance",
+        "nt_grow_wall_pick",
+    ]:
         assert callable(getattr(app.ctrl, cb, None)), f"missing controller: {cb}"
 
 
@@ -245,3 +331,48 @@ def test_toggle_wall_pick_without_dataset_fails_gracefully() -> None:
 
     assert st.nt_error
     assert st.nt_bc_pick_mode is False
+
+
+# ---------------------------------------------------------------------------
+# app: grow_wall_pick (v5.1 후속 — seed+region growing)
+# ---------------------------------------------------------------------------
+
+
+def test_grow_wall_pick_expands_manually_seeded_selection() -> None:
+    app = _make_app("nt-test-wallpick-grow")
+    st = app.server.state
+    app.load_demo()
+    assert st.nt_has_dataset is True
+
+    surface = app.dataset.mesh.extract_surface()
+    n_surface_cells = int(surface.n_cells)
+    assert n_surface_cells > 1
+    st.nt_bc_picked_cells = [0]
+    st.nt_bc_grow_rings = 1
+
+    app.grow_wall_pick()
+
+    assert st.nt_error == ""
+    assert len(st.nt_bc_picked_cells) > 1
+    assert 0 in st.nt_bc_picked_cells
+    assert st.nt_bc_status
+
+
+def test_grow_wall_pick_without_dataset_fails_gracefully() -> None:
+    app = _make_app("nt-test-wallpick-grow-nodataset")
+    st = app.server.state
+
+    app.grow_wall_pick()
+
+    assert st.nt_error
+
+
+def test_grow_wall_pick_with_no_picks_sets_error_not_crash() -> None:
+    app = _make_app("nt-test-wallpick-grow-empty")
+    st = app.server.state
+    app.load_demo()
+
+    st.nt_bc_picked_cells = []
+    app.grow_wall_pick()
+
+    assert st.nt_error

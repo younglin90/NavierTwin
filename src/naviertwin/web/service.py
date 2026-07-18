@@ -3066,6 +3066,73 @@ def attach_wall_distance_from_picks(
     return attach_wall_features(dataset, wall_surface, prefix=prefix)
 
 
+def grow_wall_selection(
+    dataset: CFDDataset, cell_ids: list[int], *, rings: int = 1
+) -> list[int]:
+    """픽킹한 표면 셀 선택을 인접(edge-connected) 셀로 ``rings`` 단계 확장한다.
+
+    v5.1 은 클릭 한 번에 셀 하나씩만 누적했다 — 넓은 벽면(실린더 표면 전체
+    등)을 지정하려면 수십 번 클릭해야 하는 문제가 있었다(로드맵 "seed+region
+    growing 확장"). 이 함수는 이미 선택된 셀들을 **시드**로 BFS 를 돌려,
+    표면 메쉬에서 변(edge)을 공유하는 이웃 셀만 단계별로 편입한다 — 점만
+    공유하는 대각 이웃은 제외해(``connections="edges"``) 모서리를 넘어
+    다른 면으로 선택이 새는 것을 막는다.
+
+    :func:`wall_surface_from_picked_cells` 와 같은 표면 추출
+    (``mesh.extract_surface()``) 을 써서 셀 id 좌표계를 맞춘다 — 확장
+    결과를 그대로 ``nt_bc_picked_cells``/``attach_wall_distance_from_picks``
+    에 넘길 수 있다.
+
+    Args:
+        dataset: 대상 :class:`~naviertwin.core.cfd_reader.base.CFDDataset`.
+        cell_ids: 시드 표면 셀 id 목록(``dataset.mesh.extract_surface()`` 기준).
+        rings: 확장 단계 수. 0 이하면 시드를 정리(중복 제거·정렬)만 해 그대로
+            돌려준다.
+
+    Returns:
+        확장된 표면 셀 id 목록(중복 제거, 오름차순).
+
+    Raises:
+        ValueError: ``cell_ids`` 가 비었거나, 표면을 추출할 수 없거나,
+            모든 id 가 유효 범위를 벗어난 경우.
+    """
+    if not cell_ids:
+        raise ValueError("확장할 시드 셀이 없습니다. 벽면 선택 모드에서 셀을 먼저 클릭하세요.")
+
+    mesh = getattr(dataset, "mesh", None)
+    if mesh is None:
+        raise ValueError("데이터셋에 메쉬가 없습니다.")
+    try:
+        surface = mesh.extract_surface()
+    except Exception as exc:  # noqa: BLE001 — 표면 추출 실패는 사용자 오류로 안내
+        raise ValueError(f"메쉬에서 표면을 추출할 수 없습니다: {exc}") from exc
+
+    n_surface_cells = int(getattr(surface, "n_cells", 0))
+    if n_surface_cells == 0:
+        raise ValueError("메쉬에 표면이 없습니다 (표면 셀 0개).")
+
+    seeds = sorted({int(c) for c in cell_ids if 0 <= int(c) < n_surface_cells})
+    if not seeds:
+        raise ValueError("선택된 셀이 모두 유효 범위를 벗어났습니다.")
+    if rings <= 0:
+        return seeds
+
+    selected = set(seeds)
+    frontier = set(seeds)
+    for _ in range(int(rings)):
+        next_frontier: set[int] = set()
+        for cell_id in frontier:
+            for neighbor in surface.cell_neighbors(cell_id, connections="edges"):
+                neighbor_id = int(neighbor)
+                if neighbor_id not in selected:
+                    next_frontier.add(neighbor_id)
+        if not next_frontier:
+            break
+        selected |= next_frontier
+        frontier = next_frontier
+    return sorted(selected)
+
+
 # ---------------------------------------------------------------------------
 # v5.1 후속 — 경계조건(BC) 값 입력
 # ---------------------------------------------------------------------------
