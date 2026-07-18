@@ -3620,3 +3620,60 @@ def dataset_signatures(datasets: Sequence[Any]) -> list[dict[str, Any]]:
     from naviertwin.core.data_model.signature import compute_signature
 
     return [asdict(compute_signature(ds)) for ds in datasets]
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 실험 관리 — MLflow 학습 실행(run) 기록 (외부 검토 §6½ #6, 저장 계층)
+# ──────────────────────────────────────────────────────────────────────
+
+# lazy-singleton: 모듈이 import 될 때가 아니라 실제로 필요할 때만
+# ExperimentTracker (와 그 속의 mlflow 지연 import)를 만든다.
+_experiment_tracker: Any | None = None
+
+
+def _get_experiment_tracker() -> Any:
+    """모듈 레벨 :class:`ExperimentTracker` 싱글턴을 지연 생성해 돌려준다."""
+    global _experiment_tracker
+    if _experiment_tracker is None:
+        from naviertwin.core.experiment import ExperimentTracker
+
+        _experiment_tracker = ExperimentTracker()
+    return _experiment_tracker
+
+
+def log_training_run(
+    strategy: str,
+    params: dict[str, Any],
+    metrics: dict[str, Any],
+    *,
+    tags: dict[str, Any] | None = None,
+) -> str | None:
+    """학습 실행 하나를 :class:`ExperimentTracker` 로 기록하는 얇은 래퍼.
+
+    ``app.py`` 의 각 ``_build_*_twin`` 메서드가 학습 성공 직후 호출한다.
+    :class:`~naviertwin.core.experiment.tracking.ExperimentTracker` 자체가
+    mlflow 미설치/실패를 조용히 삼키므로, 이 함수도 학습 흐름을 절대
+    막지 않는다.
+
+    Args:
+        strategy: 학습 전략 식별자(예: ``"geometry_fno"``).
+        params: 기록할 하이퍼파라미터.
+        metrics: 기록할 지표.
+        tags: 추가 MLflow 태그(선택).
+
+    Returns:
+        성공하면 MLflow run_id, 그렇지 않으면 None.
+    """
+    return _get_experiment_tracker().log_run(strategy, params, metrics, tags=tags)
+
+
+def list_training_runs(strategy: str | None = None) -> list[dict[str, Any]]:
+    """기록된 학습 실행(run)들을 최신순으로 나열하는 얇은 래퍼.
+
+    Args:
+        strategy: 지정하면 해당 전략의 run 만 필터링한다.
+
+    Returns:
+        :meth:`ExperimentTracker.list_runs` 와 동일한 dict 목록.
+    """
+    return _get_experiment_tracker().list_runs(strategy)

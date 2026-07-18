@@ -241,6 +241,10 @@ class NavierTwinWebApp:
         # 학습에 실제 쓰인 디바이스 배지 (v5.6) — GPU 로 도는데 사용자가 모르는
         # 문제 해소. 학습 완료 시 엔진 metadata 에서 읽어 채운다.
         st.nt_train_device = ""
+        # 실험 관리 (외부 검토 §6½ #6, 저장 계층) — MLflow 로 기록된 최근 학습
+        # run 목록(최신 N개). 학습 성공 직후 :meth:`_log_training_run` 이 채운다.
+        # mlflow 미설치 환경에서는 항상 빈 리스트(추적은 부가 기능일 뿐).
+        st.nt_experiment_runs = []
         # surrogate="physicsnemo" 로 학습된 엔진인지 — ④Export 의 "PhysicsNeMo
         # Module" 버튼(실제 physicsnemo 패키지로 감싸기)은 이때만 의미가 있다.
         st.nt_physics_ready = False
@@ -1221,9 +1225,40 @@ class NavierTwinWebApp:
                 self.state.nt_twin_param = 0.5 * (pmin + pmax)
                 self.state.nt_twin_step = max((pmax - pmin) / 100.0, 1e-6)
                 self.state.nt_twin_summary = summary
+            self._log_training_run(
+                "rom",
+                {
+                    "field": field,
+                    "n_modes": result["n_modes"],
+                    "reducer": reducer,
+                    "surrogate": surrogate,
+                },
+                {},
+            )
             self._set_status(f"모델 학습 완료: {reducer}+{surrogate}. ③Twin 에서 예측하세요.")
         except Exception as exc:  # noqa: BLE001
             self._fail("모델 학습 실패", exc)
+
+    def _log_training_run(
+        self, strategy: str, params: dict[str, Any], metrics: dict[str, Any]
+    ) -> None:
+        """학습 성공 직후 MLflow run 을 기록하고 최근 run 목록 상태를 갱신한다.
+
+        외부 검토 §6½ #6(저장 계층 — 실험 관리). ``service.log_training_run``
+        자체가 이미 mlflow 미설치/실패를 조용히 삼키지만, 상태(state) 갱신까지
+        포함해 한 번 더 감싼다 — **실험 기록 실패가 학습 성공 흐름을 절대
+        막으면 안 된다**는 원칙 때문이다.
+
+        Args:
+            strategy: 학습 전략 식별자(예: ``"geometry_fno"``).
+            params: 기록할 하이퍼파라미터.
+            metrics: 기록할 지표.
+        """
+        try:
+            service.log_training_run(strategy=strategy, params=params, metrics=metrics)
+            self.state.nt_experiment_runs = service.list_training_runs()[:10]
+        except Exception:  # noqa: BLE001 — 실험 기록은 학습 결과에 영향을 주면 안 된다.
+            pass
 
     def _build_parametric_dmd_twin(self) -> None:
         """②Model — 비정상 케이스 세트의 (μ, t) 예보 트윈 (ParametricDMD, v5.2).
@@ -1264,6 +1299,15 @@ class NavierTwinWebApp:
                 self.state.nt_twin_ready = True
                 self.state.nt_twin_summary = summary
             self._set_twin_param_ranges(names, result["param_mins"], result["param_maxs"])
+            self._log_training_run(
+                "parametric_dmd",
+                {"field": field, "param_names": names, "n_cases": result["n_cases"]},
+                {
+                    "reconstruction_error": float(err),
+                    "train_t_max": float(result["train_t_max"]),
+                    "forecast_t_max": float(result["forecast_t_max"]),
+                },
+            )
             self._set_status(
                 f"ParametricDMD 학습 완료 (재구성 오차 {err * 100:.1f}%). "
                 "③Twin 에서 학습에 없던 운전조건·미래 t 를 예보하세요."
@@ -1312,6 +1356,11 @@ class NavierTwinWebApp:
                 self.state.nt_twin_param = pmax
                 self.state.nt_twin_step = max((fmax - pmin) / 200.0, 1e-6)
                 self.state.nt_twin_summary = summary
+            self._log_training_run(
+                "dmd",
+                {"field": field, "method": method, "n_modes": result["n_modes"]},
+                {"reconstruction_error": float(err), "forecast_max": float(fmax)},
+            )
             self._set_status(
                 f"DMD 학습 완료 (재구성 오차 {err * 100:.1f}%). "
                 "③Twin 에서 학습 구간 밖까지 예보하세요."
@@ -1361,6 +1410,18 @@ class NavierTwinWebApp:
                 self.state.nt_twin_ready = True
                 self.state.nt_twin_summary = summary
             self._set_twin_param_ranges(names, result["param_mins"], result["param_maxs"])
+            self._log_training_run(
+                "rom_sweep",
+                {
+                    "field": field,
+                    "n_modes": result["n_modes"],
+                    "reducer": reducer,
+                    "surrogate": surrogate,
+                    "n_cases": result["n_cases"],
+                    "param_names": names,
+                },
+                {},
+            )
             self._set_status(
                 f"모델 학습 완료: {reducer}+{surrogate} (파라미터 스윕). "
                 "③Twin 에서 예측하세요."
@@ -1413,6 +1474,16 @@ class NavierTwinWebApp:
                 self.state.nt_twin_param = 0.5 * (pmin + pmax)
                 self.state.nt_twin_step = max((pmax - pmin) / 100.0, 1e-6)
                 self.state.nt_twin_summary = summary
+            self._log_training_run(
+                "physics_ai",
+                {
+                    "fields": fields,
+                    "input_fields": inputs,
+                    "hidden": int(self.state.nt_physics_hidden or 32),
+                    "epochs": int(self.state.nt_physics_epochs or 150),
+                },
+                {k: v for k, v in metrics.items() if isinstance(v, (int, float))},
+            )
             self._set_status("PhysicsNeMo 모델 학습 완료. ③Twin 에서 예측하세요.")
         except Exception as exc:  # noqa: BLE001
             self._fail("PhysicsNeMo 학습 실패", exc)
@@ -1456,6 +1527,21 @@ class NavierTwinWebApp:
                 self.state.nt_twin_ready = True
                 self.state.nt_twin_summary = summary
             self._set_twin_param_ranges(names, result["param_mins"], result["param_maxs"])
+            self._log_training_run(
+                "physics_ai_sweep",
+                {
+                    "fields": fields,
+                    "n_cases": result["n_cases"],
+                    "param_names": names,
+                    "hidden": int(self.state.nt_physics_hidden or 32),
+                    "epochs": int(self.state.nt_physics_epochs or 150),
+                },
+                {
+                    k: v
+                    for k, v in result["validation_metrics"].items()
+                    if isinstance(v, (int, float))
+                },
+            )
             self._set_status(
                 "PhysicsNeMo 모델 학습 완료 (파라미터 스윕). ③Twin 에서 예측하세요."
             )
@@ -1525,6 +1611,24 @@ class NavierTwinWebApp:
                 self.state.nt_twin_summary = summary
                 self.state.nt_operator_holdout_summary = holdout_summary
             self._set_twin_param_ranges(names, result["param_mins"], result["param_maxs"])
+            eval_split = result.get("eval_split") or {}
+            fno_metrics: dict[str, Any] = {"remap_floor_rel_l2": floor}
+            if eval_split.get("val_rel_l2_mean") is not None:
+                fno_metrics["val_rel_l2_mean"] = float(eval_split["val_rel_l2_mean"])
+            if eval_split.get("test_rel_l2_mean") is not None:
+                fno_metrics["test_rel_l2_mean"] = float(eval_split["test_rel_l2_mean"])
+            self._log_training_run(
+                "geometry_fno",
+                {
+                    "field": field,
+                    "resolution": result["resolution"],
+                    "epochs": int(self.state.nt_operator_epochs or 200),
+                    "n_cases": result["n_cases"],
+                    "param_names": names,
+                    "group_split": group_split,
+                },
+                fno_metrics,
+            )
             self._set_status(
                 f"GeometryFNO 학습 완료 — 케이스 {result['n_cases']}개, "
                 f"공통 격자 해상도 {result['resolution']}. ③Twin 에서 예측하세요 "
@@ -1577,6 +1681,17 @@ class NavierTwinWebApp:
                 self.state.nt_twin_ready = True
                 self.state.nt_twin_summary = summary
             self._set_twin_param_ranges(names, result["param_mins"], result["param_maxs"])
+            self._log_training_run(
+                "mesh_gnn",
+                {
+                    "fields": fields,
+                    "n_cases": result["n_cases"],
+                    "param_names": names,
+                    "hidden": int(self.state.nt_mesh_gnn_hidden or 64),
+                    "epochs": int(self.state.nt_mesh_gnn_epochs or 200),
+                },
+                {"train_loss": loss},
+            )
             self._set_status(
                 f"메쉬 GNN 학습 완료 — 케이스 {result['n_cases']}개, 재샘플 없음. "
                 "③Twin 에서 예측하세요 (보고 있는 형상 위에 표시됩니다)."
