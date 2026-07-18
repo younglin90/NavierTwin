@@ -2916,3 +2916,95 @@ def attach_wall_distance_from_picks(
 
     wall_surface = wall_surface_from_picked_cells(dataset, cell_ids)
     return attach_wall_features(dataset, wall_surface, prefix=prefix)
+
+
+# ---------------------------------------------------------------------------
+# v5.1 후속 — 경계조건(BC) 값 입력
+# ---------------------------------------------------------------------------
+
+
+def attach_boundary_condition_values(
+    dataset: CFDDataset,
+    patch_name: str,
+    values: dict[str, float],
+    *,
+    cell_ids: list[int] | None = None,
+) -> list[str]:
+    """경계조건 값(속도/압력/온도 등)을 patch 이름별로 메타데이터에 저장한다.
+
+    BC 값은 패치 전체를 설명하는 스칼라/벡터일 뿐 점마다 다른 공간 배열이
+    아니므로, 메쉬 필드(``point_data``/``cell_data``)가 아니라
+    ``dataset.metadata["boundary_conditions"]`` 에 저장한다. 뷰어 피킹으로
+    지정한 patch(:func:`wall_surface_from_picked_cells` 계열)는 대응하는
+    ``cell_ids`` 를 함께 남겨 나중에 다시 벽면을 구성할 수 있게 한다.
+
+    Args:
+        dataset: 대상 :class:`~naviertwin.core.cfd_reader.base.CFDDataset`.
+        patch_name: 경계 patch 이름 (예: ``"inlet"``, ``"wall"``).
+        values: 경계조건 값 딕셔너리 (예: ``{"u": 1.0, "v": 0.0, "w": 0.0}``).
+        cell_ids: 뷰어 피킹으로 이 patch 를 구성한 경우, 그 표면 셀 id 목록.
+            OpenFOAM 등 파일 기반 patch 는 ``None``.
+
+    Returns:
+        현재까지 경계조건이 저장된 patch 이름 목록.
+
+    Raises:
+        ValueError: ``patch_name`` 이 비었거나 ``values`` 가 비어 있는 경우.
+    """
+    if not patch_name:
+        raise ValueError("patch 이름이 비어 있습니다.")
+    if not values:
+        raise ValueError("경계조건 값이 비어 있습니다.")
+
+    boundary_conditions = dataset.metadata.setdefault("boundary_conditions", {})
+    boundary_conditions[patch_name] = {
+        "values": dict(values),
+        "cell_ids": list(cell_ids) if cell_ids else None,
+    }
+    return list(boundary_conditions.keys())
+
+
+def list_boundary_patches(dataset: CFDDataset) -> list[dict]:
+    """파일 기반(OpenFOAM) patch 와 피킹으로 지정한 patch 를 하나의 목록으로 합친다.
+
+    ``dataset.metadata["boundary_patches"]`` (OpenFOAM 리더가 채운, 존재하면
+    ``n_cells``/``n_points`` 를 담은 딕셔너리) 와
+    ``dataset.metadata["boundary_conditions"]``
+    (:func:`attach_boundary_condition_values` 로 저장된 patch) 를 병합해,
+    출처(``source``)와 함께 UI 가 한 테이블로 보여줄 수 있는 통일된 목록을
+    돌려준다. 두 출처 모두에 같은 이름이 있으면(예: OpenFOAM patch 에 값을
+    입력한 경우) 파일 쪽 메타(``n_cells``)와 입력한 BC 값을 하나의 항목으로
+    합친다.
+
+    Args:
+        dataset: 대상 :class:`~naviertwin.core.cfd_reader.base.CFDDataset`.
+
+    Returns:
+        ``{"name": str, "source": "file"|"picked", "n_cells": int|None,
+        "bc_values": dict|None}`` 딕셔너리 목록 (patch 이름 순 정렬).
+    """
+    file_patches: dict[str, Any] = dict(dataset.metadata.get("boundary_patches", {}) or {})
+    boundary_conditions: dict[str, Any] = dict(
+        dataset.metadata.get("boundary_conditions", {}) or {}
+    )
+
+    names = sorted(set(file_patches) | set(boundary_conditions))
+    result: list[dict] = []
+    for name in names:
+        file_info = file_patches.get(name)
+        bc_info = boundary_conditions.get(name)
+        source = "file" if file_info is not None else "picked"
+        n_cells = None
+        if file_info is not None:
+            n_cells = file_info.get("n_cells")
+        elif bc_info is not None and bc_info.get("cell_ids"):
+            n_cells = len(bc_info["cell_ids"])
+        result.append(
+            {
+                "name": name,
+                "source": source,
+                "n_cells": n_cells,
+                "bc_values": bc_info.get("values") if bc_info else None,
+            }
+        )
+    return result
