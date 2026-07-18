@@ -911,6 +911,11 @@ def build_geometry_fno_twin(
     width: int = 32,
     epochs: int = 200,
     backend: str = "builtin",
+    group_split: bool = False,
+    group_ids: Sequence[int] | None = None,
+    val_frac: float = 0.15,
+    test_frac: float = 0.15,
+    split_seed: int = 0,
 ) -> dict[str, Any]:
     """케이스 세트에서 형상 인지 FNO(GeometryFNO, SDF 채널) 트윈을 학습한다.
 
@@ -936,12 +941,24 @@ def build_geometry_fno_twin(
         width: FNO 은닉 채널 폭.
         epochs: 학습 epoch 수.
         backend: FNO 백엔드 ("builtin" | "neuralop").
+        group_split: True 면 케이스를 **그룹(기본은 케이스=그룹) 단위**로
+            train/val/test 로 나누고 train 만으로 학습한다 — held-out
+            케이스는 순수 평가 전용(검토 §6½ #2, `group_split.py`). False(기본)
+            면 이전과 동일하게 전체 케이스로 학습한다(하위 호환, 결과 bit-동일).
+        group_ids: 케이스별 그룹 id(예: 같은 형상군에 같은 id). None 이면
+            케이스 하나 = 그룹 하나. ``group_split=True`` 일 때만 쓰인다.
+        val_frac: validation 에 배정할 그룹 비율(``group_split=True`` 일 때만).
+        test_frac: test 에 배정할 그룹 비율(``group_split=True`` 일 때만).
+        split_seed: 그룹 셔플 시드 — 재현 가능한 분할.
 
     Returns:
         ``engine``, ``field``, ``fields``, ``n_cases``, ``param_names``,
         ``param_mins``, ``param_maxs``, ``resolution``, ``grid_summary``,
         ``target_names``, ``train_loss``, ``remap_floor_rel_l2``(대표 케이스
-        1개로 잰 재샘플 왕복 오차 — 모델 오차와 분리해 보는 바닥값, 검토 §11.2)
+        1개로 잰 재샘플 왕복 오차 — 모델 오차와 분리해 보는 바닥값, 검토 §11.2),
+        ``eval_split``(``group_split=True`` 일 때만 의미 있음 — ``train_idx``/
+        ``val_idx``/``test_idx``, held-out 케이스별 오차+4-way 일반화 라벨을
+        담은 ``holdout`` 목록, ``val_rel_l2_mean``/``test_rel_l2_mean``)
         를 담은 dict.
 
     Raises:
@@ -953,6 +970,10 @@ def build_geometry_fno_twin(
         cases_to_grid_tensors,
     )
     from naviertwin.core.operator_learning.fno.geometry_fno import GeometryFNO2D
+    from naviertwin.core.preprocessing.group_split import (
+        classify_query_split,
+        group_train_val_test_split,
+    )
 
     fields = [field] if isinstance(field, str) else [str(f) for f in field if str(f).strip()]
     if not fields:
@@ -990,6 +1011,28 @@ def build_geometry_fno_twin(
         param_names=names,
     )
     target_names = [str(t) for t in tensors["meta"]["target_names"]]
+
+    # 그룹 스플릿 (검토 §6½ #2, v5.6 P1+) — 기본은 group_split=False 로 전체
+    # 케이스를 학습에 쓴다(이전과 bit-동일). True 면 케이스(또는 group_ids)
+    # 단위로 train 만 학습에 쓰고 val/test 는 held-out 평가 전용으로 남긴다 —
+    # 공통 격자는 항상 전체 케이스 바운딩 박스로 만들어지므로(tensors["grid"]),
+    # 학습에 쓴 케이스 수와 무관하게 held-out 케이스도 같은 격자 위에서 바로
+    # 비교할 수 있다(재격자화 불필요).
+    n_cases_total = len(cases)
+    if group_split:
+        split = group_train_val_test_split(
+            n_cases_total,
+            group_ids,
+            val_frac=float(val_frac),
+            test_frac=float(test_frac),
+            seed=int(split_seed),
+        )
+        train_idx, val_idx, test_idx = split.train_idx, split.val_idx, split.test_idx
+    else:
+        train_idx = np.arange(n_cases_total, dtype=np.int64)
+        val_idx = np.zeros(0, dtype=np.int64)
+        test_idx = np.zeros(0, dtype=np.int64)
+
     operator = GeometryFNO2D(
         n_params=params_arr.shape[1],
         out_channels=len(target_names),
@@ -1000,7 +1043,11 @@ def build_geometry_fno_twin(
     )
     # 마스크 손실 (v5.6, 검토 §6½ #1) — 고체/무효 셀(0-채움)을 loss 에서 제외.
     # 0 이 물리값인지 결측인지 모델이 헷갈리지 않게 한다. builtin backend 전용.
-    operator.fit(tensors["inputs"], tensors["targets"], sample_masks=tensors["valid_mask"])
+    operator.fit(
+        tensors["inputs"][train_idx],
+        tensors["targets"][train_idx],
+        sample_masks=tensors["valid_mask"][train_idx],
+    )
 
     grid_summary = str(tensors["meta"]["grid_summary"])
     # 재샘플 오차 바닥 (v5.6, 검토 §11.2) — 대표 케이스 1개로 왕복 시험해,
@@ -1009,8 +1056,8 @@ def build_geometry_fno_twin(
     remap_floor = estimate_remap_floor(cases[0], fields[0], resolution=int(resolution))
     engine = GeometryFNOTwinEngine(
         operator,
-        train_inputs=tensors["inputs"],
-        train_params=params_arr,
+        train_inputs=tensors["inputs"][train_idx],
+        train_params=params_arr[train_idx],
         param_names=names,
         field_names=fields,
         target_names=target_names,
@@ -1022,6 +1069,61 @@ def build_geometry_fno_twin(
             "remap_floor_rel_l2": remap_floor["rel_l2"],
         },
     )
+
+    eval_split: dict[str, Any] = {"enabled": bool(group_split)}
+    if group_split:
+        height, width = tensors["meta"]["hw"]
+        train_params_used = params_arr[train_idx]
+        geometry_ids_arr = np.asarray(group_ids) if group_ids is not None else None
+        holdout: list[dict[str, Any]] = []
+        for split_name, idx_array in (("val", val_idx), ("test", test_idx)):
+            for case_idx in idx_array.tolist():
+                truth_chw = np.moveaxis(tensors["targets"][case_idx], -1, 0)
+                valid_hw = tensors["valid_mask"][case_idx].astype(bool)
+                valid_full = np.broadcast_to(valid_hw, truth_chw.shape)
+                pred_chw = np.asarray(
+                    engine.predict(params_arr[case_idx]), dtype=np.float64
+                ).reshape(len(target_names), int(height), int(width))
+                if valid_full.any():
+                    metrics = compute_error_field(
+                        truth_chw[valid_full], pred_chw[valid_full]
+                    )
+                else:
+                    metrics = {"rel_l2": 0.0, "rmse": 0.0, "max_error": 0.0}
+                query_geometry_id = (
+                    int(geometry_ids_arr[case_idx]) if geometry_ids_arr is not None else None
+                )
+                query_split_class = classify_query_split(
+                    params_arr[case_idx],
+                    train_params_used,
+                    geometry_ids=(
+                        geometry_ids_arr[train_idx] if geometry_ids_arr is not None else None
+                    ),
+                    query_geometry_id=query_geometry_id,
+                )
+                holdout.append(
+                    {
+                        "case_index": int(case_idx),
+                        "split": split_name,
+                        "query_split_class": query_split_class,
+                        "rel_l2": float(metrics["rel_l2"]),
+                        "rmse": float(metrics["rmse"]),
+                        "max_error": float(metrics["max_error"]),
+                    }
+                )
+        val_scores = [h["rel_l2"] for h in holdout if h["split"] == "val"]
+        test_scores = [h["rel_l2"] for h in holdout if h["split"] == "test"]
+        eval_split.update(
+            {
+                "train_idx": train_idx.tolist(),
+                "val_idx": val_idx.tolist(),
+                "test_idx": test_idx.tolist(),
+                "holdout": holdout,
+                "val_rel_l2_mean": float(np.mean(val_scores)) if val_scores else None,
+                "test_rel_l2_mean": float(np.mean(test_scores)) if test_scores else None,
+            }
+        )
+
     meta = engine.training_metadata
     return {
         "engine": engine,
@@ -1034,6 +1136,7 @@ def build_geometry_fno_twin(
         "resolution": int(resolution),
         "grid_summary": grid_summary,
         "target_names": target_names,
+        "eval_split": eval_split,
         "train_loss": (
             float(operator.train_losses_[-1]) if operator.train_losses_ else float("nan")
         ),

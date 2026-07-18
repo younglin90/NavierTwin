@@ -37,9 +37,11 @@
       (`core/preprocessing/group_split.py`) — 아직 학습 경로 미배선, 척추만 확보
 - [x] v5.6 P1+: remap 오차 바닥 분리(reconstruction test) — `estimate_remap_floor()`,
       공통 격자 왕복 오차를 GeometryFNO 학습 결과에 표기(모델 오차와 분리)
+- [x] v5.6 P1+: 그룹 스플릿을 실제 학습 경로에 배선 — `build_geometry_fno_twin(
+      group_split=True)`, held-out 케이스만 평가(4-way 일반화 라벨), 기본값은
+      이전과 동일(하위 호환)
 - [ ] v5.1 후속: seed+region growing 확장, CGNS ZoneBC 자동 wall 인식
-- [ ] v5.6 P1+: 그룹 스플릿을 실제 학습 경로(build_twin_from_cases 등)에 배선,
-      MPI 배치 CLI(클러스터)
+- [ ] v5.6 P1+: MPI 배치 CLI(클러스터)
 
 ## 직전 단계: v4.2.0 + 17 rounds — 연구 플랫폼 + 전영역 성숙화 ✅
 
