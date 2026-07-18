@@ -742,6 +742,7 @@ def build_twin_from_cases(
         "param_mins": mins,
         "param_maxs": maxs,
     }
+    _record_surrogate_uq(engine)
     return {
         "engine": engine,
         "field": field,
@@ -1419,7 +1420,29 @@ def pod_mode_field(reducer: Any, mode_index: int = 0) -> np.ndarray:
 
 
 REDUCERS = ("pod", "randomized_pod")
-SURROGATES = ("rbf", "kriging")
+# "ezyrb_gpr"/"ezyrb_ann" 은 EZyRB(mathLab) 래퍼 — POD-GPR(예측 std 제공),
+# POD-NN(torch MLP). 문자열은 TwinEngine._build_surrogate 가 해석한다 (v5.2).
+SURROGATES = ("rbf", "kriging", "ezyrb_gpr", "ezyrb_ann")
+# 리더보드(compare_models) 기본 조합용 부분집합 — ezyrb_ann 은 조합마다 수천
+# epoch 신경망 학습이라 자동 비교의 반응성을 해쳐 기본에서 제외한다.
+# (원하면 combos 인자로 명시해 포함할 수 있다.)
+LEADERBOARD_SURROGATES = tuple(s for s in SURROGATES if s != "ezyrb_ann")
+
+
+def _record_surrogate_uq(engine: Any) -> None:
+    """서로게이트가 예측 std 를 노출하면 트윈 메타데이터에 평균값을 기록한다.
+
+    POD-GPR(``ezyrb_gpr``)은 fit 직후 학습점에서의 예측 표준편차를
+    ``surrogate.last_std_`` 에 남긴다 — 그 평균을 ``uq_mean_std`` 키로
+    ``engine.training_metadata`` 에 실어 저장/보고서 경로에서 쓸 수 있게
+    한다. std 를 제공하지 않는 서로게이트(rbf/kriging/ann)는 조용히 건너뛴다.
+    """
+    last_std = getattr(getattr(engine, "surrogate", None), "last_std_", None)
+    if last_std is None:
+        return
+    metadata = getattr(engine, "training_metadata", None)
+    if isinstance(metadata, dict):
+        metadata["uq_mean_std"] = float(np.mean(np.asarray(last_std, dtype=np.float64)))
 
 
 def build_twin(
@@ -1441,7 +1464,8 @@ def build_twin(
         field: 학습 대상 물리량 field.
         n_modes: POD 모드 수.
         reducer: 차원 축소기 ``"pod"`` | ``"randomized_pod"``.
-        surrogate: 서로게이트 ``"rbf"`` | ``"kriging"``.
+        surrogate: 서로게이트 ``"rbf"`` | ``"kriging"`` | ``"ezyrb_gpr"``
+            | ``"ezyrb_ann"``.
 
     Returns:
         ``engine`` (TwinEngine), ``param_min``/``param_max`` (예측 슬라이더
@@ -1488,6 +1512,7 @@ def build_twin(
         "param_min": float(times.min()),
         "param_max": float(times.max()),
     }
+    _record_surrogate_uq(engine)
 
     return {
         "engine": engine,
@@ -2061,7 +2086,13 @@ def compare_models(
     params = times.reshape(-1, 1)
     single = params[len(params) // 2 : len(params) // 2 + 1]
     if combos is None:
-        combos = [(reducer, surrogate) for reducer in REDUCERS for surrogate in SURROGATES]
+        # 기본 조합은 LEADERBOARD_SURROGATES — ezyrb_ann(POD-NN)은 신경망 학습이
+        # 느려 자동 비교에서 제외한다 (combos 인자로 명시하면 포함 가능).
+        combos = [
+            (reducer, surrogate)
+            for reducer in REDUCERS
+            for surrogate in LEADERBOARD_SURROGATES
+        ]
 
     rows: list[dict[str, Any]] = []
     n_combos = len(combos)
@@ -2368,6 +2399,7 @@ def export_report(
 __all__ = [
     "DERIVED_EXTRA",
     "DERIVED_PREFIXES",
+    "LEADERBOARD_SURROGATES",
     "REDUCERS",
     "RESULT_FIELD",
     "SURROGATES",

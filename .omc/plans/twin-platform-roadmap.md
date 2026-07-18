@@ -284,6 +284,9 @@ AIAA'20) — 둘 다 "0-채움 = 형상 인코딩" 전제를 검증. FNO는 `in_
 - **★ FNO + SDF/마스크/BC 입력 채널** — 가장 싼 승리. `NeuralOpFNO`가 `in_channels`를
   이미 노출하므로 모델 변경 0, 데이터 배관만(v5.1의 SDF 재사용). DeepCFD/Thuerey 검증.
 - **EZyRB** 배선 — POD-NN/POD-GPR(UQ)/KNN을 기존 POD+RBF/Kriging 옆에. 최고 ROI.
+  ✅ 완료(부분): `ezyrb_gpr`(POD-GPR, uq_mean_std 메타데이터)·`ezyrb_ann`(POD-NN)을
+  `core/surrogate/ezyrb_surrogate.py` + TwinEngine + web SURROGATES/UI 에 배선.
+  KNN 은 후속.
 - **ParametricDMD** 켜기(비정상 파라미터 스윕) — pydmd 이미 의존.
 - **POD-of-SDF → μ 다리**(§5.4) — 자유형상이 손 파라미터 없이 문-A ROM 구동.
 - **U-Net + SDF 채널**(기존 unet.py) — 벽면 급구배 강함, FNO와 데이터 파이프 공유.

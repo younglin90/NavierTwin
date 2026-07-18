@@ -20,6 +20,10 @@ from naviertwin.core.surrogate.certification_metrics import (
     rmse,
 )
 from naviertwin.core.surrogate.ensemble import EnsembleSurrogate, MixtureOfExperts
+from naviertwin.core.surrogate.ezyrb_surrogate import (
+    EzyRBANNSurrogate,
+    EzyRBGPRSurrogate,
+)
 from naviertwin.core.surrogate.gp_scratch import GPRegressor, rbf_kernel
 from naviertwin.core.surrogate.gradient_sensitivity import (
     finite_difference_gradient,
@@ -63,6 +67,8 @@ __all__ = [
     "BaseSurrogate",
     "BayesianLinearRegression",
     "EnsembleSurrogate",
+    "EzyRBANNSurrogate",
+    "EzyRBGPRSurrogate",
     "GPRegressor",
     "KrigingSurrogate",
     "LinearMultiFidelity",
