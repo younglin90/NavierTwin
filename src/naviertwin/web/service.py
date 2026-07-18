@@ -916,6 +916,8 @@ def build_geometry_fno_twin(
     val_frac: float = 0.15,
     test_frac: float = 0.15,
     split_seed: int = 0,
+    use_tensor_cache: bool = True,
+    tensor_cache_dir: Path | None = None,
 ) -> dict[str, Any]:
     """케이스 세트에서 형상 인지 FNO(GeometryFNO, SDF 채널) 트윈을 학습한다.
 
@@ -950,6 +952,16 @@ def build_geometry_fno_twin(
         val_frac: validation 에 배정할 그룹 비율(``group_split=True`` 일 때만).
         test_frac: test 에 배정할 그룹 비율(``group_split=True`` 일 때만).
         split_seed: 그룹 셔플 시드 — 재현 가능한 분할.
+        use_tensor_cache: True(기본)면 텐서화 결과를 콘텐츠 주소(해시) 기반
+            Zarr 캐시(:class:`~naviertwin.core.storage.tensor_cache.
+            TensorCache`)에서 먼저 찾고, miss 면 계산 후 저장한다 — 같은
+            케이스 세트로 학습을 반복할 때 재계산을 없앤다(검토 §6½ #6,
+            저장 계층의 ML 캐시). 캐시 히트/미스는 결과에 영향을 주지
+            않는다 — 키가 메쉬·파라미터·필드·해상도 내용에서 나오므로
+            입력이 조금이라도 다르면 다른 항목이다. zarr 미설치 등 캐시가
+            불가능한 환경에서는 조용히 캐시 없이 진행한다.
+        tensor_cache_dir: 캐시 디렉토리 재지정 (기본
+            ``~/.naviertwin/tensor_cache/`` — 테스트 격리용 주입 지점).
 
     Returns:
         ``engine``, ``field``, ``fields``, ``n_cases``, ``param_names``,
@@ -1003,13 +1015,38 @@ def build_geometry_fno_twin(
         else [f"param_{i}" for i in range(params_arr.shape[1])]
     )
 
-    tensors = cases_to_grid_tensors(
-        cases,
-        params_arr,
-        field_names=fields,
-        resolution=int(resolution),
-        param_names=names,
-    )
+    # ML 텐서 캐시 (검토 §6½ #6, 저장 계층) — 텐서화는 케이스별 grid.sample
+    # + EDT 를 도는 비싼 연산이라, 콘텐츠 주소(메쉬 시그니처 + params 바이트
+    # + 필드 + 해상도) 키로 Zarr 에 캐시한다. 캐시는 파생물일 뿐이므로 어떤
+    # 실패(zarr 부재/항목 손상)도 조용히 "재계산"으로 폴백한다 — 히트/미스가
+    # 결과를 바꾸면 안 된다.
+    tensors: dict[str, Any] | None = None
+    cache = None
+    cache_key = None
+    if use_tensor_cache:
+        try:
+            from naviertwin.core.storage.tensor_cache import TensorCache
+
+            cache = TensorCache(cache_dir=tensor_cache_dir)
+            cache_key = TensorCache.key_for(
+                cases, params_arr, fields, int(resolution), names
+            )
+            tensors = cache.get(cache_key)
+        except Exception:  # noqa: BLE001 — 캐시 실패는 성능 문제일 뿐.
+            cache = None
+            tensors = None
+        if tensors is not None:
+            logger.info("텐서 캐시 히트: %s — 텐서화 재계산 생략", cache_key)
+    if tensors is None:
+        tensors = cases_to_grid_tensors(
+            cases,
+            params_arr,
+            field_names=fields,
+            resolution=int(resolution),
+            param_names=names,
+        )
+        if cache is not None and cache_key is not None:
+            cache.put(cache_key, tensors)
     target_names = [str(t) for t in tensors["meta"]["target_names"]]
 
     # 그룹 스플릿 (검토 §6½ #2, v5.6 P1+) — 기본은 group_split=False 로 전체
