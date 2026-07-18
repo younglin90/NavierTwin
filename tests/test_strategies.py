@@ -17,7 +17,7 @@ from naviertwin.web import service, strategies  # noqa: E402
 def test_registry_covers_all_wired_methods() -> None:
     """앱의 nt_model_method 값과 레지스트리 키가 일치해야 카드 표시가 성립한다."""
     keys = {spec.key for spec in strategies.STRATEGIES}
-    assert keys == {"rom", "physics", "dynamics", "operator"}
+    assert keys == {"rom", "physics", "dynamics", "operator", "mesh_gnn"}
 
 
 def test_single_snapshot_nothing_trainable() -> None:
@@ -58,6 +58,9 @@ def test_steady_sweep_enables_rom_and_physics_not_dmd() -> None:
     assert report["operator"]["ok"]
     assert "수백 장이 문헌 기준" in report["operator"]["reason"]
     assert "정성적" in report["operator"]["reason"]
+    # Route 2: 정상 케이스 세트(3개+)는 mesh_gnn 도 가능 — 재샘플 없음 명시.
+    assert report["mesh_gnn"]["ok"]
+    assert "재샘플 없이" in report["mesh_gnn"]["reason"]
     assert strategies.recommend(profile)["method"] == "rom"
 
 
@@ -83,6 +86,9 @@ def test_varying_mesh_only_physics_and_recommends_it() -> None:
     # GeometryFNO 는 케이스 3개 미만이면 거절한다 (여긴 2개).
     assert not report["operator"]["ok"]
     assert "최소 3개" in report["operator"]["reason"]
+    # mesh_gnn 도 같은 3개 게이트 — 2개면 거절.
+    assert not report["mesh_gnn"]["ok"]
+    assert "최소 3개" in report["mesh_gnn"]["reason"]
     rec = strategies.recommend(profile)
     assert rec["method"] == "physics"
     assert "형상 가변" in rec["reason"]
@@ -141,6 +147,8 @@ def test_all_specs_declare_valid_tier() -> None:
     assert tiers["physics"] == "production"
     assert tiers["dynamics"] == "production"
     assert tiers["operator"] == "experimental"
+    # mesh_gnn(Route 2 첫 배선)은 소표본 정성적 수준 — 실험적 등급.
+    assert tiers["mesh_gnn"] == "experimental"
 
 
 def test_strategy_report_includes_tier_and_korean_label() -> None:
