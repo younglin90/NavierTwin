@@ -760,6 +760,69 @@ def test_dmd_rejected_for_case_sets(tmp_path) -> None:
     assert "시계열" in st.nt_error
 
 
+def test_unsteady_sweep_demo_end_to_end() -> None:
+    """비정상 스윕 데모(v5.0): 케이스+타임스텝 슬라이더 공존, (μ, t) 트윈 학습.
+
+    예전에는 케이스 세트가 마지막 스텝만 남겨 시간축이 사라졌다 — 이 테스트가
+    그 붕괴의 회귀 방지다.
+    """
+    app = _make_app("nt-test-unsteady-sweep")
+    st = app.server.state
+    st.nt_demo_kind = "sweep_unsteady"
+    app.load_demo()
+    assert st.nt_error == ""
+    # 케이스 슬라이더와 타임스텝 슬라이더가 **둘 다** 살아 있다.
+    assert st.nt_case_mode is True
+    assert st.nt_case_count == 4
+    assert st.nt_has_timesteps is True
+    assert st.nt_nsteps == 8
+    # 전략 판정: ROM/Physics 가능, DMD 는 이유와 함께 불가.
+    status = st.nt_strategy_status
+    assert status["rom"]["ok"] and status["physics"]["ok"]
+    assert not status["dynamics"]["ok"]
+    assert "ParametricDMD" in status["dynamics"]["reason"]
+    assert "시간(t)도 입력 파라미터" in st.nt_method_hint
+
+    # ROM 학습 → 슬라이더가 μ 와 t 두 개.
+    st.nt_model_method = "rom"
+    app.build_twin()
+    assert st.nt_error == ""
+    assert st.nt_param_names == ["inlet_velocity", "t"]
+    assert len(st.nt_twin_params) == 2
+    assert st.nt_twin_maxs[1] == pytest.approx(1.4)
+
+    # (μ, t) 예측이 t 에 실제로 반응한다.
+    import numpy as np
+
+    st.nt_twin_params = [15.0, 0.2]
+    app.predict()
+    assert st.nt_error == ""
+    early = np.asarray(app.dataset.mesh.point_data["twin_prediction"]).copy()
+    st.nt_twin_params = [15.0, 1.2]
+    app.predict()
+    late = np.asarray(app.dataset.mesh.point_data["twin_prediction"])
+    assert not np.allclose(early, late), "t 슬라이더가 예측에 반영되지 않습니다"
+
+    # DMD 는 케이스 세트에서 명시 거절 — 첫 케이스만으로 조용히 학습하면 안 된다.
+    st.nt_model_method = "dynamics"
+    app.build_twin()
+    assert "ParametricDMD" in st.nt_error
+
+
+def test_strategy_status_follows_loaded_data() -> None:
+    """전략 카드 상태가 데이터를 따라간다 — 시계열↔단일스냅샷 전환."""
+    app = _make_app("nt-test-strategy-status")
+    st = app.server.state
+    app.load_demo()  # filament 시계열
+    assert st.nt_strategy_status["dynamics"]["ok"] is True
+    assert st.nt_strategy_status["operator"]["ok"] is False
+
+    st.nt_demo_kind = "sweep"
+    app.load_demo()
+    assert st.nt_strategy_status["rom"]["ok"] is True
+    assert st.nt_strategy_status["dynamics"]["ok"] is False
+
+
 def test_coarsen_reduces_dataset_and_resets_model() -> None:
     """①Import 해상도 낮추기: 점 수가 줄고 파생 상태가 리셋된다."""
     app = _make_app("nt-test-coarsen")

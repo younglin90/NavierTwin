@@ -254,7 +254,7 @@ def resample_cases_to_common_grid(
 # 데이터가 없으면 기능을 시험할 수 없다 (예: DMD 는 "waves" 없이는 늘 크게 빗나감).
 # ──────────────────────────────────────────────────────────────────────
 DEMO_TIME_SERIES_KINDS = ("filament", "advecting", "waves", "karman")
-DEMO_CASE_SET_KINDS = ("sweep", "shapes", "karman_shapes")
+DEMO_CASE_SET_KINDS = ("sweep", "sweep_unsteady", "shapes", "karman_shapes")
 
 # 실제 LBM 해석이 필요한 데모 — 합성 데모와 달리 즉시 만들 수 없고(케이스당 수십 초)
 # 결과를 디스크에 캐시한다. 앱은 이 목록으로 "오래 걸린다"는 안내를 띄운다.
@@ -281,6 +281,13 @@ DEMO_CATALOG: list[dict[str, str]] = [
         "value": "sweep",
         "title": "정상 파라미터 스윕 (5케이스 × 조건 2개)",
         "note": "동일 메쉬 · 운전조건(inlet 속도, 받음각)이 다른 정상해 — 문제 유형 B.",
+    },
+    {
+        "value": "sweep_unsteady",
+        "title": "비정상 파라미터 스윕 (4케이스 × 시간 8스텝)",
+        "note": "케이스마다 운전조건(inlet 속도)이 다르고 각 케이스가 시계열 — 문제 유형 C. "
+        "(운전조건 μ, 시간 t) 둘 다 입력으로 학습되고, ③Twin 에 μ·t 슬라이더가 함께 "
+        "생깁니다.",
     },
     {
         "value": "shapes",
@@ -507,8 +514,12 @@ def load_case_set(
     순서는 파일명 정렬 순서와 일치**해야 한다. CSV 가 없으면 케이스 인덱스를
     유일한 입력으로 폴백한다 (실제 운전조건 학습에는 CSV 필요).
 
-    각 케이스는 마지막 타임스텝(정상 해석의 수렴 해)만 단일 스냅샷으로
-    materialize 한다 — 케이스당 정확히 1 스냅샷이라 파라미터 표 행 수와 맞는다.
+    각 케이스는 **시간축을 보존**한다 (v5.0) — 정상 해석 파일은 어차피 스텝 1개고,
+    비정상 결과(케이스당 시계열)는 (μ, t) 학습의 재료가 된다. 예전에는 마지막
+    스텝만 남겨서 비정상×다케이스가 조용히 정상 스윕으로 붕괴됐다.
+
+    폴더에 ``.pvd`` 가 하나라도 있으면 **pvd 만** 케이스로 센다 — pvd 가 참조하는
+    개별 .vtk 들이 각각 케이스로 잘못 세어지는 것을 막는다.
 
     Args:
         directory: 케이스 파일들이 있는 폴더.
@@ -548,18 +559,19 @@ def load_case_set(
         ),
         key=lambda p: p.name.lower(),
     )
+    # 비정상 케이스 = pvd 하나(시계열 컬렉션). pvd 가 있으면 그것만 케이스다 —
+    # pvd 가 참조하는 낱개 .vtk 를 케이스로 같이 세면 케이스 수가 폭발한다.
+    pvds = [p for p in files if p.suffix.lower() == ".pvd"]
+    if pvds:
+        files = pvds
     if len(files) < 2:
         raise ValueError(
             f"케이스 세트에는 CFD 파일이 2개 이상 필요합니다 (찾음: {len(files)}개). "
             "파일 하나가 운전조건 하나여야 합니다."
         )
 
-    datasets: list[CFDDataset] = []
-    for target in files:
-        loaded = load_dataset(target)
-        n_steps = max(1, int(getattr(loaded, "n_time_steps", 1)))
-        # 정상 해석 = 마지막 스텝이 수렴 해.
-        datasets.append(snapshot_dataset(loaded, n_steps - 1))
+    # 시간축 보존 (v5.0) — 비정상 결과는 케이스당 시계열 그대로 싣는다.
+    datasets: list[CFDDataset] = [load_dataset(target) for target in files]
 
     csv: Path | None = Path(params_path).expanduser() if params_path else None
     if csv is None:
@@ -582,6 +594,16 @@ def load_case_set(
     identical = meshes_are_identical(datasets)
     grid_summary = ""
     resampled = False
+    if (
+        (resample is True or (resample == "auto" and not identical))
+        and any(max(1, int(getattr(d, "n_time_steps", 1))) > 1 for d in datasets)
+    ):
+        # 재샘플은 현재 스냅샷 1장만 옮긴다 — 시계열을 조용히 버리느니 거절한다.
+        raise ValueError(
+            "비정상(시계열) 케이스 세트의 공통 격자 재샘플은 아직 지원하지 않습니다 — "
+            "resample=False 로 두고 Physics AI(좌표 기반)로 학습하거나, 케이스를 "
+            "정상 해(스텝 1개)로 저장하세요."
+        )
     if resample is True or (resample == "auto" and not identical):
         result = resample_cases_to_common_grid(datasets, resolution=resolution)
         datasets = result["datasets"]
@@ -606,6 +628,42 @@ def load_case_set(
         "resampled": resampled,
         "grid_summary": grid_summary,
     }
+
+
+def expand_case_params_over_time(
+    datasets: Sequence[CFDDataset],
+    params: np.ndarray,
+    names: Sequence[str],
+) -> tuple[np.ndarray, list[str], bool]:
+    """케이스별 μ 행을 스냅샷별 (μ, t) 행으로 전개한다 — 비정상 스윕 지원 (v5.0).
+
+    케이스가 전부 스텝 1개(정상)면 그대로 돌려준다. 하나라도 시계열이면 각
+    케이스의 타임스텝마다 행을 만들고 ``t`` 파라미터를 뒤에 붙인다 — 그러면
+    (형상/조건 × 시간) 곱이 기존 파라미터 학습 경로를 그대로 탄다.
+
+    Returns:
+        ``(expanded_params, expanded_names, has_time)`` —
+        ``expanded_params`` 행 수 = 전 케이스 스냅샷 합.
+    """
+    params_arr = np.asarray(params, dtype=np.float64)
+    if params_arr.ndim == 1:
+        params_arr = params_arr.reshape(-1, 1)
+    if params_arr.shape[0] != len(datasets):
+        raise ValueError(
+            f"파라미터 행 수({params_arr.shape[0]})와 케이스 수({len(datasets)})가 다릅니다."
+        )
+    steps = [max(1, int(getattr(d, "n_time_steps", 1))) for d in datasets]
+    if all(s == 1 for s in steps):
+        return params_arr, list(names), False
+
+    rows: list[np.ndarray] = []
+    for i, dataset in enumerate(datasets):
+        times = [float(t) for t in (getattr(dataset, "time_steps", None) or [0.0])]
+        if not times:
+            times = [0.0]
+        for t in times:
+            rows.append(np.concatenate([params_arr[i], [t]]))
+    return np.asarray(rows, dtype=np.float64), [*names, "t"], True
 
 
 def build_twin_from_cases(
@@ -637,37 +695,38 @@ def build_twin_from_cases(
     if surrogate not in SURROGATES:
         raise ValueError(f"지원하지 않는 surrogate: {surrogate}")
 
-    params_arr = np.asarray(params, dtype=np.float64)
-    if params_arr.ndim == 1:
-        params_arr = params_arr.reshape(-1, 1)
-    if params_arr.shape[0] != len(cases):
-        raise ValueError(
-            f"파라미터 행 수({params_arr.shape[0]})와 케이스 수({len(cases)})가 다릅니다."
-        )
+    base_names = (
+        list(param_names)
+        if param_names
+        else [f"param_{i}" for i in range(np.atleast_2d(np.asarray(params)).shape[-1])]
+    )
+    # 비정상 케이스 세트: 케이스별 μ 를 (μ, t) 스냅샷 행으로 전개 (v5.0).
+    params_arr, names, has_time = expand_case_params_over_time(cases, params, base_names)
 
-    columns = [
-        np.asarray(case.extract_field_snapshots(field), dtype=np.float64)[:, -1]
+    # 케이스당 전체 타임스텝을 열로 쌓는다 — 정상 파일은 어차피 1열이다.
+    per_case = [
+        np.atleast_2d(np.asarray(case.extract_field_snapshots(field), dtype=np.float64))
         for case in cases
     ]
-    n_features = int(columns[0].shape[0])
-    if any(int(column.shape[0]) != n_features for column in columns):
+    n_features = int(per_case[0].shape[0])
+    if any(int(block.shape[0]) != n_features for block in per_case):
         raise ValueError(
             f"케이스마다 점 수가 달라(예: {n_features} vs "
-            f"{next(int(c.shape[0]) for c in columns if int(c.shape[0]) != n_features)}) "
+            f"{next(int(b.shape[0]) for b in per_case if int(b.shape[0]) != n_features)}) "
             "ROM 학습이 불가능합니다 — POD 는 길이가 같은 스냅샷 벡터를 쌓아야 합니다. "
             "격자에 진짜 구멍이 뚫린 형상 가변 데이터는 ②Model 에서 "
             "'직접 회귀 (Physics AI)' 를 쓰세요 — 좌표를 입력으로 받아 격자에 "
             "묶이지 않습니다. (공통 격자로 재샘플하면 ROM 도 되지만, 구멍이 "
             "0 으로 채워진 가짜 empty 가 됩니다.)"
         )
-    snapshots = np.stack(columns, axis=1)  # (n_features, n_cases)
+    snapshots = np.hstack(per_case)  # (n_features, total_snapshots)
+    if snapshots.shape[1] != params_arr.shape[0]:
+        raise ValueError(
+            f"스냅샷 수({snapshots.shape[1]})와 파라미터 행 수({params_arr.shape[0]})가 "
+            "다릅니다 — 케이스별 타임스텝과 time_steps 메타데이터를 확인하세요."
+        )
 
-    names = (
-        list(param_names)
-        if param_names
-        else [f"param_{i}" for i in range(params_arr.shape[1])]
-    )
-    n_modes = max(1, min(int(n_modes), len(cases), n_features))
+    n_modes = max(1, min(int(n_modes), snapshots.shape[1], n_features))
     engine = TwinEngine(reducer_type=reducer, surrogate_type=surrogate, n_modes=n_modes)
     engine.fit(snapshots, params_arr)
 
@@ -678,7 +737,7 @@ def build_twin_from_cases(
         "n_modes": n_modes,
         "reducer": reducer,
         "surrogate": surrogate,
-        "problem_type": "steady_sweep",
+        "problem_type": "unsteady_sweep" if has_time else "steady_sweep",
         "param_names": names,
         "param_mins": mins,
         "param_maxs": maxs,
@@ -724,13 +783,16 @@ def build_physics_ai_twin_from_cases(
     if len(cases) < 2:
         raise ValueError(f"트윈 학습에는 케이스가 2개 이상 필요합니다. 현재: {len(cases)}")
 
-    params_arr = np.asarray(params, dtype=np.float64)
-    if params_arr.ndim == 1:
-        params_arr = params_arr.reshape(-1, 1)
-    if params_arr.shape[0] != len(cases):
-        raise ValueError(
-            f"파라미터 행 수({params_arr.shape[0]})와 케이스 수({len(cases)})가 다릅니다."
-        )
+    base_names = (
+        list(param_names)
+        if param_names
+        else [f"param_{i}" for i in range(np.atleast_2d(np.asarray(params)).shape[-1])]
+    )
+    # 비정상 케이스 세트: μ 행을 스냅샷별 (μ, t) 행으로 전개 (v5.0) — 모델의
+    # prepare 는 params 행 수 = 총 스냅샷 수를 요구한다.
+    params_arr, expanded_names, has_time = expand_case_params_over_time(
+        cases, params, base_names
+    )
 
     # 형상 가변(격자에 진짜 구멍이 뚫린 케이스)도 학습한다 — 신경장은 좌표를
     # 입력으로 받으므로 케이스마다 점 수가 달라도 된다. ROM 과 갈리는 지점이다.
@@ -739,7 +801,7 @@ def build_physics_ai_twin_from_cases(
         cases,
         field_names=fields,
         params=params_arr,
-        parameter_names=list(param_names) if param_names else None,
+        parameter_names=expanded_names,
         allow_varying_mesh=varying_mesh,
         hidden=hidden,
         max_epochs=max_epochs,
@@ -756,7 +818,7 @@ def build_physics_ai_twin_from_cases(
             "field_names": list(fields),
             "reducer": "direct_physics_ai",
             "surrogate": "physicsnemo_cfd_field",
-            "problem_type": "steady_sweep",
+            "problem_type": "unsteady_sweep" if has_time else "steady_sweep",
             "param_names": names,
             "param_mins": mins,
             "param_maxs": maxs,
@@ -1023,6 +1085,55 @@ def make_demo_case_set(
             "params": params,
             "param_names": ["inlet_velocity", "angle_of_attack"],
             "case_names": [f"case_v{v:g}_a{a:g}" for v, a in zip(velocities, angles)],
+            "params_source": "데모 (내장 파라미터 표)",
+            "resampled": False,
+            "grid_summary": "",
+        }
+
+    if kind == "sweep_unsteady":
+        # 비정상 파라미터 스윕 (문제 유형 C) — 케이스마다 운전조건이 다르고,
+        # 각 케이스가 시계열이다. 진행파의 속도·진폭이 μ 에 걸려 있어 (μ, t)
+        # 둘 다에 대해 필드가 실제로 변한다 — 시간축 보존 경로(v5.0)의 검증대.
+        velocities = [10.0, 15.0, 20.0, 25.0]
+        n_steps = 8
+        times = np.linspace(0.0, 1.4, n_steps)
+        datasets = []
+        for speed in velocities:
+            grid = pv.ImageData(
+                dimensions=(n_side, n_side, 1),
+                spacing=(1.0 / (n_side - 1), 1.0 / (n_side - 1), 1.0),
+            )
+            coords = np.asarray(grid.points, dtype=np.float64)
+            x, y = coords[:, 0], coords[:, 1]
+            pressure = np.zeros((n_steps, grid.n_points), dtype=np.float64)
+            velocity = np.zeros((n_steps, grid.n_points, 3), dtype=np.float64)
+            for j, t in enumerate(times):
+                phase = 2.0 * np.pi * (x - 0.04 * speed * t)
+                pressure[j] = (1.0 + 0.05 * speed) * np.sin(phase) * np.cos(
+                    np.pi * y
+                ) + 0.02 * speed
+                velocity[j, :, 0] = speed * (1.0 + 0.15 * np.sin(phase))
+                velocity[j, :, 1] = 0.1 * speed * np.cos(phase) * np.sin(np.pi * y)
+            grid.point_data["p"] = pressure[0]
+            grid.point_data["U"] = velocity[0]
+            datasets.append(
+                CFDDataset(
+                    mesh=grid,
+                    time_steps=[float(t) for t in times],
+                    field_names=["p", "U"],
+                    metadata={
+                        "source": "demo_unsteady_sweep",
+                        "time_series_fields": {"p": pressure, "U": velocity},
+                        "time_series_locations": {"p": "point", "U": "point"},
+                    },
+                )
+            )
+        params = np.asarray(velocities, dtype=np.float64).reshape(-1, 1)
+        return {
+            "datasets": datasets,
+            "params": params,
+            "param_names": ["inlet_velocity"],
+            "case_names": [f"case_v{v:g}" for v in velocities],
             "params_source": "데모 (내장 파라미터 표)",
             "resampled": False,
             "grid_summary": "",
@@ -1401,49 +1512,40 @@ def predict_twin(engine: Any, param_value: float | Sequence[float]) -> np.ndarra
     return prediction
 
 
-def recommend_method(dataset: CFDDataset) -> dict[str, str]:
-    """로드된 데이터 특성으로 ④Model 학습 방식을 추천한다.
+def recommend_method(
+    dataset: CFDDataset, case_datasets: Sequence[CFDDataset] | None = None
+) -> dict[str, str]:
+    """로드된 데이터 특성으로 ②Model 학습 방식을 추천한다 (레지스트리 기반, v5.0).
 
-    문헌 통례 기반 휴리스틱:
-      - 비정형/스냅샷 적음 → ROM(축소+보간)이 표준.
-      - 균일 격자 + 스냅샷 많음 → 신경 연산자(FNO)도 후보.
-      - 타임스텝 1개 → 학습 불가(예측 전용).
+    예전에는 (ImageData 여부, 스텝 수) 휴리스틱이었다 — 이제 능력 기반 전략
+    레지스트리(:mod:`naviertwin.web.strategies`)가 형상 가변·케이스 세트·차원까지
+    보고 판정한다.
 
     Returns:
-        ``method`` ("rom" | "operator" | "none") 과 한국어 ``reason``.
+        ``method`` ("rom" | "physics" | "none" …) 과 한국어 ``reason``.
     """
-    n_steps = int(getattr(dataset, "n_time_steps", 0))
-    n_points = int(getattr(dataset, "n_points", 0))
-    if n_steps < 2:
+    from naviertwin.web import strategies
+
+    profile = strategies.profile_data(dataset, case_datasets)
+    rec = strategies.recommend(profile)
+    if rec["method"] == "none" and profile.n_cases == 1 and profile.n_time_steps < 2:
+        # 기존 계약 유지: 단일 스냅샷은 "예측 전용" 안내.
         return {
             "method": "none",
             "reason": "타임스텝이 1개뿐이라 (시간→필드) 학습이 불가능합니다. "
-            "저장된 트윈이 있다면 ⑤Twin 예측만 가능합니다.",
+            "저장된 트윈이 있다면 ③Twin 예측만 가능합니다.",
         }
-    try:
-        import pyvista as pv
+    return rec
 
-        uniform = isinstance(dataset.mesh, pv.ImageData)
-    except Exception:  # noqa: BLE001
-        uniform = False
-    prefix = f"현재 데이터: {n_steps} 타임스텝 · {n_points:,} 포인트"
-    if uniform and n_steps >= 100:
-        return {
-            "method": "operator",
-            "reason": f"{prefix} · 균일 격자 — 스냅샷이 많아 신경 연산자(FNO)도 "
-            "고려할 만합니다. ROM 은 여전히 안전한 기본값입니다.",
-        }
-    if n_steps < 50:
-        return {
-            "method": "rom",
-            "reason": f"{prefix} — 스냅샷이 적어 축소+보간(ROM)이 가장 안정적입니다. "
-            "신경 연산자 학습에는 샘플이 부족합니다.",
-        }
-    return {
-        "method": "rom",
-        "reason": f"{prefix} — 단일 시계열은 ROM 권장. 물리 제약이 필요하거나 "
-        "데이터가 희소하면 Physics AI 가 대안입니다.",
-    }
+
+def strategy_status(
+    dataset: CFDDataset, case_datasets: Sequence[CFDDataset] | None = None
+) -> dict[str, dict[str, Any]]:
+    """전략별 가능/불가 + 이유 — ②Model 카드가 그대로 표시한다 (v5.0)."""
+    from naviertwin.web import strategies
+
+    profile = strategies.profile_data(dataset, case_datasets)
+    return strategies.strategy_report(profile)
 
 
 def build_physics_ai_twin(

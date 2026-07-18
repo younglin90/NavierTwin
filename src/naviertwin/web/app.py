@@ -211,6 +211,10 @@ class NavierTwinWebApp:
         # .omc/plans/model-taxonomy-plan.md 참조.
         st.nt_model_method = "rom"
         st.nt_method_hint = ""  # 데이터 로드 시 service.recommend_method 결과
+        # 능력 기반 전략 판정 (v5.0) — {key: {ok, reason, name}}. 카드가 이걸로
+        # 가능/불가 + 이유를 데이터 로드 시점에 보여준다 (학습 버튼 눌러야 아는
+        # 대신).
+        st.nt_strategy_status = {}
         st.nt_reducer = "pod"
         st.nt_reducer_choices = [
             {"title": "POD (snapshot)", "value": "pod"},
@@ -558,19 +562,33 @@ class NavierTwinWebApp:
             ]
             self.state.nt_case_resampled = resampled
             self.state.nt_case_grid_summary = grid_summary
-            # 케이스 세트는 시계열이 아니므로 recommend_method(단일 스냅샷)의
-            # "타임스텝 1개" 안내가 맞지 않는다 — 문제 유형 B 안내로 대체.
             shape_note = (
                 " 케이스마다 메쉬가 달라 공통 격자로 재샘플했습니다(형상 가변) — "
                 "sdf 필드로 형상 경계를 볼 수 있습니다."
                 if resampled
                 else ""
             )
+            # 비정상 케이스 세트 (v5.0): 케이스마다 시계열이면 (μ, t) 로 학습된다.
+            steps_per_case = max(
+                (max(1, int(getattr(d, "n_time_steps", 1))) for d in datasets), default=1
+            )
+            time_note = (
+                f" 케이스당 타임스텝 {steps_per_case}개 — 시간(t)도 입력 파라미터로 "
+                "함께 학습됩니다 (비정상 스윕)."
+                if steps_per_case > 1
+                else " 정상 파라미터 스윕입니다."
+            )
             self.state.nt_method_hint = (
                 f"케이스 세트: {len(datasets)}개 케이스 × 입력 파라미터 {len(names)}개 "
-                f"({', '.join(names)}) — 정상 파라미터 스윕입니다. "
+                f"({', '.join(names)}) —{time_note} "
                 f"스냅샷이 적으면 ROM 이 안정적입니다.{shape_note}"
             )
+            try:
+                self.state.nt_strategy_status = service.strategy_status(
+                    datasets[0], datasets
+                )
+            except Exception:  # noqa: BLE001 — 판정은 부가 정보
+                self.state.nt_strategy_status = {}
         self._set_twin_param_ranges(names, mins, maxs)
         # _set_dataset 은 케이스 모드를 켜기 전에 돌았으므로 단일 데이터셋 기준
         # 미리보기를 남긴다 — 케이스 세트에는 해당 없으니 지운다.
@@ -1048,6 +1066,18 @@ class NavierTwinWebApp:
             )
             return
         if method == "dynamics":
+            if self.state.nt_case_mode:
+                # 비정상 케이스 세트에서 뷰어 데이터셋(첫 케이스)만으로 DMD 가
+                # 조용히 "성공"하는 것을 막는다 — 사용자는 전체 케이스를 학습했다고
+                # 믿게 된다. ParametricDMD 배선(로드맵 v5.2) 전까지는 명시 거절.
+                self._fail(
+                    "동역학 예보",
+                    RuntimeError(
+                        "케이스 세트의 동역학 예보(ParametricDMD)는 아직 지원하지 "
+                        "않습니다 — 단일 케이스 시계열에서 쓰세요."
+                    ),
+                )
+                return
             self._build_dmd_twin()
             return
         if self.state.nt_case_mode:
@@ -1867,8 +1897,10 @@ class NavierTwinWebApp:
             self.state.nt_train_input_fields = []
             try:
                 self.state.nt_method_hint = service.recommend_method(dataset)["reason"]
+                self.state.nt_strategy_status = service.strategy_status(dataset)
             except Exception:  # noqa: BLE001 — 추천은 부가 정보, 로드를 막지 않는다
                 self.state.nt_method_hint = ""
+                self.state.nt_strategy_status = {}
             self.state.nt_twin_ready = False
             self.state.nt_twin_summary = ""
             self.state.nt_fft_summary = ""
@@ -2723,6 +2755,13 @@ class NavierTwinWebApp:
                         ),
                     ]
                     for key, name, subtitle, icon in method_cards:
+                        # 능력 레지스트리 판정 (v5.0) — 불가면 카드를 흐리게 하고
+                        # 이유를 카드 안에 쓴다. 학습 버튼을 눌러야 알던 것을
+                        # 로드 시점에 미리 보여주는 것.
+                        infeasible = (
+                            f"nt_strategy_status['{key}'] && "
+                            f"!nt_strategy_status['{key}'].ok"
+                        )
                         with v3.VCard(
                             classes="mb-1",
                             click=f"nt_model_method = '{key}'",
@@ -2732,6 +2771,7 @@ class NavierTwinWebApp:
                             color=(
                                 f"nt_model_method === '{key}' ? 'primary' : undefined",
                             ),
+                            style=(f"{infeasible} ? 'opacity:0.55' : ''",),
                         ):
                             with v3.VCardText(classes="py-2 d-flex align-center"):
                                 v3.VIcon(icon, classes="mr-3", size="small")
@@ -2740,6 +2780,12 @@ class NavierTwinWebApp:
                                     html.Div(
                                         subtitle,
                                         classes="text-caption text-disabled",
+                                    )
+                                    html.Div(
+                                        f"{{{{ nt_strategy_status['{key}'] ? "
+                                        f"nt_strategy_status['{key}'].reason : '' }}}}",
+                                        v_show=(infeasible,),
+                                        classes="text-caption text-warning",
                                     )
                     # 데이터 기반 자동 추천 (service.recommend_method)
                     html.Div(
