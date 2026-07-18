@@ -20,6 +20,7 @@ from typing import Any, Sequence
 
 __all__ = [
     "STRATEGIES",
+    "TIER_LABELS",
     "DataProfile",
     "StrategySpec",
     "profile_data",
@@ -41,6 +42,11 @@ class DataProfile:
         n_points: 대표(첫) 케이스의 점 수.
         dims: 공간 차원 (1/2/3 — 바운딩 박스의 유한 두께 축 수).
         n_params: 케이스 파라미터(μ) 차원 (케이스 세트가 아니면 0).
+        topological_dim: 셀이 실제로 span 하는 차원 — 바운딩 박스에서 두께 0
+            축을 뺀 개수 (2D 평면 메쉬=2, 볼륨=3). ``dims`` 와 같은 값이지만
+            embedding_dim 과의 대비를 위해 이름을 명시한다 (리뷰 #10).
+        embedding_dim: 좌표가 사는 공간의 차원 — 점 좌표 배열의 성분 수
+            (PyVista 는 항상 3). 2D 평면 메쉬도 3D 공간에 놓이므로 보통 3.
     """
 
     n_cases: int
@@ -51,6 +57,8 @@ class DataProfile:
     n_points: int
     dims: int
     n_params: int
+    topological_dim: int = 3
+    embedding_dim: int = 3
 
 
 @dataclass(frozen=True)
@@ -67,6 +75,9 @@ class StrategySpec:
         single_case_needs_steps: 단일 케이스일 때 필요한 최소 타임스텝.
         min_snapshots: 학습에 필요한 최소 총 스냅샷.
         note: 사람용 한 줄 설명 (툴팁).
+        tier: 모델 등급 (리뷰 #8) — "production"(검증됨) | "domain"(도메인
+            특화) | "experimental"(실험적). UI 가 뱃지로 표시해 사용자가
+            성숙도를 학습 전에 알게 한다.
     """
 
     key: str
@@ -78,6 +89,15 @@ class StrategySpec:
     single_case_needs_steps: int
     min_snapshots: int
     note: str
+    tier: str = "production"
+
+
+#: tier 값 → 한국어 라벨 (UI 뱃지 텍스트).
+TIER_LABELS: dict[str, str] = {
+    "production": "검증됨",
+    "domain": "도메인 특화",
+    "experimental": "실험적",
+}
 
 
 # 현재 앱이 실제로 배선한 4개 전략의 선언. 새 전략(EZyRB, ParametricDMD, GINO,
@@ -93,6 +113,7 @@ STRATEGIES: tuple[StrategySpec, ...] = (
         single_case_needs_steps=2,
         min_snapshots=2,
         note="POD 로 압축 후 계수 보간 — 적은 스냅샷에 안정적. 케이스 간 동일 격자 필수.",
+        tier="production",
     ),
     StrategySpec(
         key="physics",
@@ -104,6 +125,7 @@ STRATEGIES: tuple[StrategySpec, ...] = (
         single_case_needs_steps=2,
         min_snapshots=2,
         note="좌표 기반 신경장 — 격자 무관, 형상 가변(케이스마다 다른 격자) 가능.",
+        tier="production",
     ),
     StrategySpec(
         key="dynamics",
@@ -117,6 +139,7 @@ STRATEGIES: tuple[StrategySpec, ...] = (
         note="시간 전이 규칙을 학습해 학습 구간 밖 t 까지 예보 — 비정상 스윕은 "
         "ParametricDMD(케이스별 DMD + μ 보간). 저랭크 선형 동역학일 때만 맞으니 "
         "적합도(재구성 오차) 확인 필수.",
+        tier="production",
     ),
     StrategySpec(
         key="operator",
@@ -133,6 +156,9 @@ STRATEGIES: tuple[StrategySpec, ...] = (
         note="함수→함수 연산자 — 정상 케이스 세트는 SDF 채널(GeometryFNO)로 "
         "형상 가변까지 학습(공통 격자 자동 재샘플). 샘플 수백 장이 문헌 기준 — "
         "소수 케이스는 정성적. 단일 케이스 직접 학습은 ⑥연산자 랩 전용.",
+        # 소표본 few-shot 한계가 note 에 명시된 대로 — 결과가 정성적 수준이라
+        # 아직 "검증됨" 이 아니다 (리뷰 #8).
+        tier="experimental",
     ),
 )
 
@@ -181,12 +207,21 @@ def profile_data(
     except Exception:  # noqa: BLE001
         uniform = False
 
+    # topological vs embedding 차원 분리 (리뷰 #10):
+    #   topological_dim — 셀이 실제로 span 하는 차원 (두께 0 축 제외).
+    #   embedding_dim — 좌표가 사는 공간 (점 좌표 성분 수, PyVista 는 항상 3).
     dims = 3
     try:
         bounds = dataset.mesh.bounds
         spans = [abs(bounds[2 * i + 1] - bounds[2 * i]) for i in range(3)]
         scale = max(max(spans), 1e-12)
         dims = max(1, sum(1 for s in spans if s > 1e-9 * scale))
+    except Exception:  # noqa: BLE001
+        pass
+
+    embedding = 3
+    try:
+        embedding = int(dataset.mesh.points.shape[1])
     except Exception:  # noqa: BLE001
         pass
 
@@ -199,6 +234,8 @@ def profile_data(
         n_points=int(getattr(dataset, "n_points", 0)),
         dims=dims,
         n_params=0,  # 호출자가 케이스 파라미터를 알면 replace 로 채운다
+        topological_dim=dims,
+        embedding_dim=embedding,
     )
 
 
@@ -261,12 +298,20 @@ def strategy_report(profile: DataProfile) -> dict[str, dict[str, Any]]:
     """모든 전략의 가능/불가 판정 — UI(②Model 카드)가 그대로 쓴다.
 
     Returns:
-        ``{key: {"ok": bool, "reason": str, "name": str}}``
+        ``{key: {"ok": bool, "reason": str, "name": str, "tier": str,
+        "tier_label": str}}`` — tier 는 모델 등급(리뷰 #8), tier_label 은
+        한국어 뱃지 텍스트.
     """
     report: dict[str, dict[str, Any]] = {}
     for spec in STRATEGIES:
         ok, reason = _check(spec, profile)
-        report[spec.key] = {"ok": ok, "reason": reason, "name": spec.name}
+        report[spec.key] = {
+            "ok": ok,
+            "reason": reason,
+            "name": spec.name,
+            "tier": spec.tier,
+            "tier_label": TIER_LABELS.get(spec.tier, spec.tier),
+        }
     return report
 
 
