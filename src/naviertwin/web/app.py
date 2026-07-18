@@ -3701,6 +3701,23 @@ class NavierTwinWebApp:
                                         v_show=(infeasible,),
                                         classes="text-caption text-warning",
                                     )
+                                # 모델 등급 뱃지 (리뷰 #8) — production 은 기본
+                                # 회색, experimental 은 warning 색으로 성숙도를
+                                # 학습 전에 알린다. 판정 상태가 없으면 숨긴다.
+                                v3.VChip(
+                                    f"{{{{ nt_strategy_status['{key}'].tier_label }}}}",
+                                    v_if=(
+                                        f"nt_strategy_status['{key}'] && "
+                                        f"nt_strategy_status['{key}'].tier_label",
+                                    ),
+                                    size="x-small",
+                                    variant="tonal",
+                                    classes="ml-auto flex-shrink-0",
+                                    color=(
+                                        f"nt_strategy_status['{key}'].tier === "
+                                        "'experimental' ? 'warning' : undefined",
+                                    ),
+                                )
                     # 데이터 기반 자동 추천 (service.recommend_method)
                     html.Div(
                         "{{ nt_method_hint }}",

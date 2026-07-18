@@ -123,3 +123,56 @@ def test_recommend_method_wrapper_keeps_contract(tmp_path) -> None:
 def test_profile_dims_detects_2d() -> None:
     ds = service.make_demo_dataset(nx=8, ny=8, n_steps=2)
     assert strategies.profile_data(ds).dims == 2
+
+
+# ---------------------------------------------------------------------------
+# 모델 등급제 (리뷰 #8) — 모든 전략이 성숙도 tier 를 선언하고 UI 로 전달한다.
+# ---------------------------------------------------------------------------
+
+
+def test_all_specs_declare_valid_tier() -> None:
+    """spec 마다 tier 가 있고 유효값이어야 UI 뱃지가 성립한다."""
+    valid = {"production", "domain", "experimental"}
+    tiers = {spec.key: spec.tier for spec in strategies.STRATEGIES}
+    assert set(tiers.values()) <= valid
+    # 현재 배정: ROM/DMD/Physics 는 검증됨, operator(GeometryFNO)는 few-shot
+    # 한계(spec note 참조)로 실험적.
+    assert tiers["rom"] == "production"
+    assert tiers["physics"] == "production"
+    assert tiers["dynamics"] == "production"
+    assert tiers["operator"] == "experimental"
+
+
+def test_strategy_report_includes_tier_and_korean_label() -> None:
+    labels = {"production": "검증됨", "domain": "도메인 특화", "experimental": "실험적"}
+    ds = service.make_demo_dataset(nx=8, ny=8, n_steps=4)
+    report = strategies.strategy_report(strategies.profile_data(ds))
+    for entry in report.values():
+        assert entry["tier"] in labels
+        assert entry["tier_label"] == labels[entry["tier"]]
+    assert report["rom"]["tier_label"] == "검증됨"
+    assert report["operator"]["tier_label"] == "실험적"
+
+
+def test_service_strategy_status_carries_tier_to_app_state() -> None:
+    """app.py 카드 뱃지가 읽는 경로(service.strategy_status)에도 tier 가 실린다."""
+    ds = service.make_demo_dataset(nx=8, ny=8, n_steps=4)
+    status = service.strategy_status(ds)
+    assert status["operator"]["tier"] == "experimental"
+    assert status["physics"]["tier"] == "production"
+    assert all("tier_label" in v for v in status.values())
+
+
+# ---------------------------------------------------------------------------
+# topological vs embedding 차원 분리 (리뷰 #10).
+# ---------------------------------------------------------------------------
+
+
+def test_profile_separates_topological_and_embedding_dims() -> None:
+    """2D 평면 데모: 셀은 2D 를 span 하지만 좌표는 3D 공간에 산다."""
+    ds = service.make_demo_dataset(nx=8, ny=8, n_steps=2)
+    profile = strategies.profile_data(ds)
+    assert profile.topological_dim == 2
+    assert profile.embedding_dim == 3
+    # 하위 호환: 기존 dims 는 topological_dim 과 같은 값을 유지한다.
+    assert profile.dims == profile.topological_dim
