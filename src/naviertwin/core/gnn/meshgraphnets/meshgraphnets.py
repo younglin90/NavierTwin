@@ -19,7 +19,11 @@ dataset 규약 (fit):
 predict 규약:
     - ``"x"``: (n_nodes, f) 초기 상태
     - ``"n_steps"``: int 예측 스텝 수
-    - ``"edge_index"``: 선택
+    - ``"edge_index"``: 선택 — 넘기면 fit() 시점 그래프 대신 이 그래프로 롤아웃한다.
+    - ``"edge_features"``: 선택 — ``edge_index`` 를 넘길 때만 유효. 함께 주지
+      않으면 fit() 에서 edge_features 미지정 시와 동일하게 새 edge_index 개수에
+      맞춰 1로 채운다(fit() 시점 edge_features 를 재사용하지 않는다 — 그래프가
+      바뀌었는데 옛 값을 쓰면 조용히 틀리거나 크기 불일치로 크래시하기 때문).
 
 Examples:
     >>> import numpy as np
@@ -224,22 +228,44 @@ class MeshGraphNets(BaseOperator):
             raise ValueError(f"x 는 (N, f) 2D 필요: {x0.shape}")
 
         edge = inputs.get("edge_index")
-        edge_t = (
-            self._edge
-            if edge is None
-            else torch.tensor(
+        if edge is None:
+            # 그래프를 넘기지 않으면 fit() 시점 그래프를 그대로 쓴다(기존 동작 유지).
+            edge_t = self._edge
+            edge_feat_t = self._edge_features
+        else:
+            edge_t = torch.tensor(
                 np.asarray(edge, dtype=np.int64),
                 dtype=torch.long,
                 device=self._device,
             )
-        )
+            # edge_index 를 오버라이드했는데 fit() 시점 edge_features 를 그대로
+            # 재사용하면, 그래프(형상)가 바뀌었을 때 조용히 틀린 값을 쓰거나(에지 개수가
+            # 우연히 같은 경우) 텐서 크기 불일치로 크래시한다(에지 개수가 다른 경우).
+            # 새 edge_index 에 맞춰 매번 (재)계산한다: 호출자가 edge_features 를
+            # 함께 주면 그것을, 안 주면 fit() 에서 edge_features 미지정 시와 동일하게
+            # 1로 채운 기본값을 새 에지 개수에 맞춰 생성한다.
+            edge_feat_in = inputs.get("edge_features")
+            if edge_feat_in is None:
+                edge_feat_np = np.ones((edge_t.shape[1], self.edge_feat), dtype=np.float32)
+            else:
+                edge_feat_np = np.asarray(edge_feat_in, dtype=np.float32)
+                if edge_feat_np.shape[1] != self.edge_feat:
+                    raise ValueError(
+                        f"edge_features 차원({edge_feat_np.shape[1]}) != {self.edge_feat}"
+                    )
+                if edge_feat_np.shape[0] != edge_t.shape[1]:
+                    raise ValueError(
+                        f"edge_features 개수({edge_feat_np.shape[0]}) != "
+                        f"edge_index 개수({edge_t.shape[1]})"
+                    )
+            edge_feat_t = torch.tensor(edge_feat_np, device=self._device)
 
         out = [x0.copy()]
         x = torch.tensor(x0, device=self._device)
         with torch.no_grad():
             step_idx = 0
             while step_idx < n_steps:
-                delta = self._model(x, edge_t, self._edge_features)
+                delta = self._model(x, edge_t, edge_feat_t)
                 x = x + delta
                 out.append(x.cpu().numpy())
                 step_idx += 1
