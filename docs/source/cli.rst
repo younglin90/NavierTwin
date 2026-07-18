@@ -34,6 +34,16 @@ server
 Expected: starts the FastAPI service. It exits with code 1 if ``uvicorn`` is not
 installed.
 
+web
+---
+
+.. code-block:: bash
+
+   naviertwin web --host 127.0.0.1 --port 8080 --no-browser
+
+Expected: starts the trame-based browser GUI. It exits with code 1 if the
+optional ``trame`` dependency is not installed.
+
 pipeline
 --------
 
@@ -64,6 +74,27 @@ model-sweep
 Expected: evaluates the configured ROM/surrogate candidates on the same
 synthetic CFD-like snapshot set, sorts them by validation RMSE, and prints a
 ranked table or JSON payload with ``best`` and ``rows``.
+
+batch-train
+-----------
+
+.. code-block:: bash
+
+   naviertwin batch-train --config jobs.json --json
+   mpirun -n 4 naviertwin batch-train --config jobs.json
+
+Expected: runs the headless batch twin-training orchestrator. The JSON config
+contains a ``jobs`` list where each job selects ``kind`` (``rom`` or
+``physics``), a synthetic ``demo`` dataset (or a ``data_path`` input), the
+target ``field``, and training sizes (``n_modes`` or ``epochs``). Jobs are
+distributed round-robin as ``jobs[rank::size]`` across MPI ranks; without
+``mpi4py`` or ``mpirun`` the command degrades gracefully to a sequential
+rank 0 / size 1 run. Each rank writes ``batch_results_rank{rank}.json`` with
+per-job ``name``/``status``/``rmse`` (or ``train_loss``)/``elapsed_s``
+summaries, and when MPI is active rank 0 also gathers a merged
+``batch_results.json``. MPI is initialized only on this headless path — never
+inside the desktop or web GUI event loops. The command exits 1 if any job
+fails and 2 on config or runtime errors.
 
 build-twin
 ----------
@@ -261,6 +292,19 @@ Release maintainers can generate the signed metadata with
 ``python scripts/sign_release_metadata.py --input release-unsigned.json --output release.json --key-id naviertwin-release-2026q2``.
 The Ed25519 private key is read from ``NAVIER_TWIN_RELEASE_PRIVATE_KEY_B64`` or
 ``--private-key-file`` and is never stored in the repository.
+
+feature-pack
+------------
+
+.. code-block:: bash
+
+   naviertwin feature-pack list --json
+   naviertwin feature-pack download --pack gpu-extras --install
+   naviertwin feature-pack install --archive naviertwin-featurepack-gpu-extras.zip
+
+Expected: lists, downloads, or installs large optional feature packs. The
+``install`` action validates the archive layout (and an optional SHA256)
+before activating the pack for subsequent runs.
 
 doctor
 ------
