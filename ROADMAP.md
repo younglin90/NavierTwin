@@ -15,8 +15,6 @@
 - [x] v5.2: ParametricDMD — 비정상 스윕의 (μ, t) 예보 (partitioned + ezyrb 보간)
 - [x] GUI 패리티: 데스크톱 전략 어드바이저 + 데모 데이터 메뉴 + 웹 엔진
       param_names 호환
-- [ ] v5.2: EZyRB 서로게이트 (POD-GPR·UQ / POD-NN) — 진행 중
-- [ ] v5.2: FNO+SDF 채널 (형상=SDF 입력 채널, DeepCFD/Thuerey 방식) — 진행 중
 - [x] v5.2: EZyRB 서로게이트 — `ezyrb_gpr`(예측 σ UQ)/`ezyrb_ann` 키, 리더보드 포함
 - [x] v5.2: FNO+SDF 채널 core — `GeometryFNO2D` + `cases_to_grid_tensors`
       (형상=SDF 채널 · 조건=브로드캐스트 채널, DeepCFD/Thuerey 방식)
@@ -37,9 +35,11 @@
 - [x] v5.6 P1+: 리더보드 조합 병렬(ThreadPoolExecutor, 완료순 진행률 보고로 갱신)
 - [x] 검토 §6½ #2: 그룹(trajectory/case) 스플릿 + train-only 정규화 primitive
       (`core/preprocessing/group_split.py`) — 아직 학습 경로 미배선, 척추만 확보
+- [x] v5.6 P1+: remap 오차 바닥 분리(reconstruction test) — `estimate_remap_floor()`,
+      공통 격자 왕복 오차를 GeometryFNO 학습 결과에 표기(모델 오차와 분리)
 - [ ] v5.1 후속: seed+region growing 확장, CGNS ZoneBC 자동 wall 인식
-- [ ] v5.6 P1+: remap 오차 바닥 분리(reconstruction test), 그룹 스플릿을 실제
-      학습 경로(build_twin_from_cases 등)에 배선, MPI 배치 CLI(클러스터)
+- [ ] v5.6 P1+: 그룹 스플릿을 실제 학습 경로(build_twin_from_cases 등)에 배선,
+      MPI 배치 CLI(클러스터)
 
 ## 직전 단계: v4.2.0 + 17 rounds — 연구 플랫폼 + 전영역 성숙화 ✅
 
