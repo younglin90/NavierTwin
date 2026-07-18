@@ -40,7 +40,10 @@
 - [x] v5.6 P1+: 그룹 스플릿을 실제 학습 경로에 배선 — `build_geometry_fno_twin(
       group_split=True)`, held-out 케이스만 평가(4-way 일반화 라벨), 기본값은
       이전과 동일(하위 호환)
-- [ ] v5.1 후속: seed+region growing 확장, CGNS ZoneBC 자동 wall 인식
+- [x] v5.1 후속: seed+region growing 확장 — `grow_wall_selection()` BFS
+      (edge-connected 이웃만, 모서리 넘어 새는 것 방지) + "선택 확장" 버튼
+- [ ] v5.1 후속: CGNS ZoneBC 자동 wall 인식 (CGNS 리더가 연결성부터 미지원 —
+      리더 고도화 선행 필요)
 - [ ] v5.6 P1+: MPI 배치 CLI(클러스터)
 
 ## 직전 단계: v4.2.0 + 17 rounds — 연구 플랫폼 + 전영역 성숙화 ✅
