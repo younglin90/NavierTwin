@@ -22,6 +22,7 @@ import logging
 from typing import Any, Optional
 
 from naviertwin import __version__
+from naviertwin.core.preprocessing.field_semantics import flag_conserved_fields
 from naviertwin.web import bench, render, service, theme
 
 log = logging.getLogger(__name__)
@@ -163,6 +164,10 @@ class NavierTwinWebApp:
         # 케이스 세트의 공통 격자 해상도 — 메쉬가 서로 다를 때(형상 가변) 로드
         # 시점에 재샘플되므로, 로드 전에 정해야 한다.
         st.nt_case_resolution = 32
+        # 보존량 의심 필드 경고 — 점 보간 재샘플(coarsen/공통 격자)은 셀 부피
+        # 가중이 없어 질량·유량 같은 보존량의 적분 총량을 보존하지 않는다.
+        # 외부 검토 §6½ #5. conservative remap 구현 전까지는 경고만 띄운다.
+        st.nt_coarsen_conserved_warning = ""
 
         # Viewer
         st.nt_fields = []
@@ -2500,10 +2505,12 @@ class NavierTwinWebApp:
         격자 치수만 계산하는 저렴한 추정이라 슬라이더를 움직일 때마다 호출해도
         된다.
         """
+        conserved_warning = self._conserved_resample_warning()
         if self.dataset is None or self.state.nt_case_mode:
             with self.state:
                 self.state.nt_coarsen_preview = ""
                 self.state.nt_coarsen_increases = False
+                self.state.nt_coarsen_conserved_warning = conserved_warning
             return
         increases = False
         try:
@@ -2518,6 +2525,28 @@ class NavierTwinWebApp:
         with self.state:
             self.state.nt_coarsen_preview = preview
             self.state.nt_coarsen_increases = increases
+            self.state.nt_coarsen_conserved_warning = conserved_warning
+
+    def _conserved_resample_warning(self) -> str:
+        """보존량 의심 필드가 있으면 점 보간 재샘플 경고문을 만든다.
+
+        점 보간(sample)은 셀 부피 가중 없이 점 값만 옮기므로 질량·유량 같은
+        보존량은 재샘플 후 적분 총량이 보존되지 않는다 (외부 검토 §6½ #5).
+        conservative remap 구현 전까지는 경고만 표시한다.
+        """
+        if self.dataset is None:
+            return ""
+        try:
+            flagged = flag_conserved_fields(render.available_fields(self.dataset))
+        except Exception:  # noqa: BLE001 — 경고는 부가 정보, UI 를 막지 않는다
+            flagged = []
+        if not flagged:
+            return ""
+        return (
+            f"⚠ 보존량 의심 필드({', '.join(flagged)}): 점 보간 재샘플은 "
+            "총량을 보존하지 않습니다. 적분량(총질량·총유량 등) 평가에는 "
+            "원본 해상도를 쓰세요."
+        )
 
     def _refresh_fields(self, prefer: str = "") -> None:
         names = render.available_fields(self.dataset) if self.dataset is not None else []
@@ -3130,6 +3159,12 @@ class NavierTwinWebApp:
                             density="compact",
                             hide_details=True,
                         )
+                        # 공통 격자 재샘플도 점 보간 — 보존량 경고를 재사용한다.
+                        html.Div(
+                            "{{ nt_coarsen_conserved_warning }}",
+                            v_show=("nt_coarsen_conserved_warning",),
+                            classes="text-caption text-warning mt-1",
+                        )
                     html.Div(
                         "예측 결과를 올릴 메쉬 파일을 클릭하세요 — 그 격자의 "
                         "좌표에서 트윈을 평가합니다.",
@@ -3367,6 +3402,12 @@ class NavierTwinWebApp:
                                     "? 'text-caption text-warning mt-1' "
                                     ": 'text-caption text-info mt-1'",
                                 ),
+                            )
+                            # 보존량 의심 필드 — 점 보간 재샘플은 총량 불보존.
+                            html.Div(
+                                "{{ nt_coarsen_conserved_warning }}",
+                                v_show=("nt_coarsen_conserved_warning",),
+                                classes="text-caption text-warning mt-1",
                             )
                             v3.VBtn(
                                 "적용",
