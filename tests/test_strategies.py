@@ -189,9 +189,9 @@ def test_service_strategy_status_carries_tier_to_app_state() -> None:
 
 
 def test_strategy_report_exposes_supports_time_in_sweep_for_all_strategies() -> None:
-    """8개 전략 spec 이 전부 supports_time_in_sweep=True 를 선언하므로,
-    strategy_report() 의 dict 도 그 값을 그대로(누락 없이) 실어 날라야
-    카드가 정상/비정상 지원 캡션을 데이터로부터 정확히 그릴 수 있다.
+    """strategy_report() 의 dict 가 각 전략 spec 의 supports_time_in_sweep/
+    supports_case_sets 값을 그대로(누락 없이) 실어 날라야 카드가 정상/비정상
+    지원 캡션을 데이터로부터 정확히 그릴 수 있다.
     """
     ds = service.make_demo_dataset(nx=8, ny=8, n_steps=4)
     report = strategies.strategy_report(strategies.profile_data(ds))
@@ -201,9 +201,15 @@ def test_strategy_report_exposes_supports_time_in_sweep_for_all_strategies() -> 
         spec = specs_by_key[key]
         assert entry["supports_time_in_sweep"] is spec.supports_time_in_sweep
         assert entry["supports_case_sets"] is spec.supports_case_sets
-    # 현재 배선된 8개 전략은 전부 케이스 세트에서 시간축(t)까지 지원한다 —
-    # 이 회귀가 깨지면 GUI 가 "비정상은 일부 전략만 된다"고 잘못 보여준다.
-    assert all(entry["supports_time_in_sweep"] for entry in report.values())
+    # 케이스 세트(파라미터 스윕)를 지원하는 전략은 전부 그 안에서 시간축(t)
+    # 까지 지원한다 — 이 회귀가 깨지면 GUI 가 "비정상은 일부 전략만 된다"고
+    # 잘못 보여준다. mesh_gnn_rollout 은 케이스 세트 자체를 지원하지 않는
+    # (단일 케이스 시계열 전용) 의도된 예외라 이 불변식에서 제외한다.
+    case_set_entries = [
+        entry for entry in report.values() if entry["supports_case_sets"]
+    ]
+    assert case_set_entries, "케이스 세트를 지원하는 전략이 하나도 없습니다."
+    assert all(entry["supports_time_in_sweep"] for entry in case_set_entries)
 
     # 기존 키(ok/reason/name/tier/tier_label)는 그대로 유지되는 추가 전용
     # 확장이어야 하위 호환이 성립한다.

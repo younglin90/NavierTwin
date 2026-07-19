@@ -102,7 +102,7 @@ class RegisteredStrategy:
         # 세트(파라미터 스윕)와 비정상(unsteady) 둘 다 지원해야 한다 — 둘
         # 다 CapabilityAxes 에 이미 선언돼 있으므로 새로 판정하지 않고
         # 그대로 옮긴다 (strategies.py 의 StrategySpec.supports_time_in_sweep
-        # 과 8개 전략 전부 동일한 값을 낸다).
+        # 과 각 전략마다 동일한 값을 낸다).
         supports_time_in_sweep = bool(
             self.capability.supports_case_sets and self.capability.supports_unsteady
         )

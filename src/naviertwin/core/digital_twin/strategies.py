@@ -255,7 +255,7 @@ STRATEGIES: tuple[StrategySpec, ...] = (
     StrategySpec(
         key="mesh_gnn_rollout",
         name="메쉬 GNN 롤아웃 (자기회귀 예보)",
-        # 다른 8개 전략과 정반대 방향 — **단일 케이스 시계열 전용**이다. 원본
+        # 다른 전략들과 정반대 방향 — **단일 케이스 시계열 전용**이다. 원본
         # MeshGraphNets(mesh_gnn_mp 가 감싸는 것과 같은 클래스)의 진짜
         # 자기회귀 시간 롤아웃(u_{t+1}=u_t+MGN(u_t,edge))을 그대로 쓴다 —
         # mesh_gnn_mp 는 정상 케이스 세트를 "1스텝 가짜 트레젝토리"로
