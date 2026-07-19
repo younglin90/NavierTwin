@@ -357,6 +357,25 @@ class NavierTwinWebApp:
         # 잡아 외삽을 허용하므로, 이 값을 넘으면 UI 가 경고한다.
         st.nt_twin_train_max = 1.0
 
+        # Model — 계열 Ⓓ 예보 백엔드 선택. DMD(저랭크 선형 동역학) 옆에
+        # core/time_series 의 완성돼 있던 대안 4종을 배선한다 — 비선형/카오스
+        # 동역학도 원칙적으로 표현 가능하지만 신경망 롤아웃 특유의 오차 누적이
+        # 있다. 학습 흐름·적합도 UI(nt_dmd_ready/fit_error/summary)는 DMD 와
+        # 공유한다 — 트래픽 라이트 의미가 백엔드에 상관없이 같기 때문.
+        st.nt_forecast_backend = "dmd"
+        st.nt_forecast_backend_choices = [
+            {"title": "DMD (기본, 선형 동역학)", "value": "dmd"},
+            {"title": "LSTM (자기회귀)", "value": "lstm"},
+            {"title": "Koopman Neural Operator", "value": "koopman_no"},
+            {"title": "Latent Dynamics (AE+Neural ODE)", "value": "latent_ode"},
+            {"title": "Neural ODE", "value": "neural_ode"},
+        ]
+        # 신경망 예보 백엔드 공용 하이퍼파라미터 — 스모크 스케일 기본값.
+        st.nt_forecast_epochs = 30
+        st.nt_forecast_hidden = 32
+        st.nt_forecast_latent = 8
+        st.nt_forecast_lookback = 8
+
         # Twin — 문제 유형 A(시계열)는 스칼라 t 슬라이더 하나,
         # 문제 유형 B(케이스 세트)는 파라미터별 슬라이더 k 개(배열 상태).
         st.nt_twin_ready = False
@@ -1573,11 +1592,20 @@ class NavierTwinWebApp:
             )
             return
         if method == "dynamics":
+            backend = self.state.nt_forecast_backend or "dmd"
             if self.state.nt_case_mode:
+                if backend != "dmd":
+                    # LSTM/KNO/LatentODE/NeuralODE 대안 — 케이스 전체 계수
+                    # 시퀀스를 한 예보기에 합쳐 학습하고 μ 는 초기조건 보간.
+                    self._build_parametric_forecast_twin(backend)
+                    return
                 # 비정상 케이스 세트 → ParametricDMD (v5.2). 뷰어 데이터셋(첫
                 # 케이스)만으로 단일 DMD 가 조용히 "성공"하는 함정을 막고 전체
                 # 케이스로 학습한다.
                 self._build_parametric_dmd_twin()
+                return
+            if backend != "dmd":
+                self._build_forecast_twin(backend)
                 return
             self._build_dmd_twin()
             return
@@ -1754,6 +1782,157 @@ class NavierTwinWebApp:
             )
         except Exception as exc:  # noqa: BLE001
             self._fail("DMD 학습 실패", exc)
+
+    def _forecast_backend_kwargs(self, backend: str) -> dict[str, Any]:
+        """②Model 폼의 예보 백엔드 하이퍼파라미터 — 백엔드마다 받는 인자가 달라 여기서 추린다.
+
+        스모크 스케일 기본값(nt_forecast_* state)을 공유하되, 백엔드가 실제로
+        받는 생성자 인자로만 추려 전달한다(``LSTMForecaster`` 만 ``lookback``
+        을 받는 등 — service.build_forecast_twin/build_parametric_forecast_twin
+        에 그대로 ``**backend_kwargs`` 로 전달된다).
+        """
+        epochs = int(self.state.nt_forecast_epochs or 30)
+        hidden = int(self.state.nt_forecast_hidden or 32)
+        latent = int(self.state.nt_forecast_latent or 8)
+        lookback = int(self.state.nt_forecast_lookback or 8)
+        if backend == "lstm":
+            return {"hidden": hidden, "lookback": lookback, "max_epochs": epochs}
+        if backend == "koopman_no":
+            return {"latent": latent, "hidden": hidden, "max_epochs": epochs}
+        if backend == "latent_ode":
+            return {
+                "latent": latent,
+                "hidden": hidden,
+                "field_hidden": hidden,
+                "max_epochs": epochs,
+            }
+        if backend == "neural_ode":
+            return {"hidden": hidden, "max_epochs": epochs}
+        raise ValueError(f"지원하지 않는 예보 백엔드: {backend}")
+
+    def _build_forecast_twin(self, backend: str) -> None:
+        """②Model — 단일 케이스 POD+{LSTM|KNO|LatentODE|NeuralODE} 예보 트윈 (DMD 대안).
+
+        UI 상태(nt_dmd_ready/nt_dmd_fit_error/nt_dmd_summary, nt_twin_*)는
+        :meth:`_build_dmd_twin` 과 공유한다 — "학습 구간 밖 t 예보 + 적합도
+        트래픽 라이트"라는 의미가 백엔드에 상관없이 같기 때문이다.
+        """
+        if self.state.nt_case_mode:
+            self._fail(
+                "동역학 예보",
+                RuntimeError(
+                    "동역학 예보는 시계열 데이터 전용입니다 — 케이스 세트"
+                    "(파라미터 스윕)에는 시간축이 없습니다."
+                ),
+            )
+            return
+        field = self._training_field()
+        try:
+            kwargs = self._forecast_backend_kwargs(backend)
+            result = service.build_forecast_twin(
+                self.dataset,
+                field,
+                backend=backend,
+                n_modes=int(self.state.nt_n_modes or 6),
+                **kwargs,
+            )
+            self.engine = result["engine"]
+            pmin, pmax = result["param_min"], result["param_max"]
+            fmax = result["forecast_max"]
+            err = result["reconstruction_error"]
+            summary = (
+                f"field='{field}', POD+{backend} · 모드 {result['n_modes']}개 · "
+                f"학습 t ∈ [{pmin:.3g}, {pmax:.3g}] · 예보 t ≤ {fmax:.3g}"
+            )
+            with self.state:
+                self.state.nt_model_ready = True
+                self.state.nt_model_summary = summary
+                self.state.nt_physics_ready = False
+                self.state.nt_dmd_ready = True
+                self.state.nt_dmd_fit_error = float(err)
+                self.state.nt_dmd_summary = summary
+                self.state.nt_twin_ready = True
+                self.state.nt_twin_min = pmin
+                self.state.nt_twin_max = fmax
+                self.state.nt_twin_train_max = pmax
+                self.state.nt_twin_param = pmax
+                self.state.nt_twin_step = max((fmax - pmin) / 200.0, 1e-6)
+                self.state.nt_twin_summary = summary
+            self._log_training_run(
+                f"forecast_{backend}",
+                {"field": field, "backend": backend, "n_modes": result["n_modes"]},
+                {"reconstruction_error": float(err), "forecast_max": float(fmax)},
+            )
+            self._set_status(
+                f"{backend} 예보 학습 완료 (재구성 오차 {err * 100:.1f}%). "
+                "③Twin 에서 학습 구간 밖까지 예보하세요."
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._fail(f"{backend} 예보 학습 실패", exc)
+
+    def _build_parametric_forecast_twin(self, backend: str) -> None:
+        """②Model — 비정상 케이스 세트의 (μ, t) POD+{LSTM|KNO|LatentODE|NeuralODE} 예보.
+
+        μ 조건부는 케이스 초기 lookback 윈도우의 RBF 보간으로 반영한다 —
+        자세한 설계 근거는 ``forecast_twin_engine`` 모듈 docstring 참고.
+        """
+        if not self.case_datasets:
+            self._fail(
+                "케이스 없음",
+                RuntimeError("케이스 폴더를 다시 로드하세요."),
+            )
+            return
+        field = self._training_field()
+        try:
+            kwargs = self._forecast_backend_kwargs(backend)
+            result = service.build_parametric_forecast_twin(
+                self.case_datasets,
+                field,
+                self.case_params,
+                param_names=self.case_param_names,
+                backend=backend,
+                n_modes=int(self.state.nt_n_modes or 6),
+                **kwargs,
+            )
+            self.engine = result["engine"]
+            names = result["param_names"]
+            err = result["reconstruction_error"]
+            summary = (
+                f"field='{field}', POD+{backend}(공유 동역학+μ 초기조건 보간) · "
+                f"케이스 {result['n_cases']}개 · 입력 ({', '.join(names)}) · "
+                f"학습 t ≤ {result['train_t_max']:.3g} · "
+                f"예보 t ≤ {result['forecast_t_max']:.3g}"
+            )
+            with self.state:
+                self.state.nt_model_ready = True
+                self.state.nt_model_summary = summary
+                self.state.nt_physics_ready = False
+                self.state.nt_dmd_ready = True
+                self.state.nt_dmd_fit_error = float(err)
+                self.state.nt_dmd_summary = summary
+                self.state.nt_twin_ready = True
+                self.state.nt_twin_summary = summary
+            self._set_twin_param_ranges(names, result["param_mins"], result["param_maxs"])
+            self._log_training_run(
+                f"parametric_forecast_{backend}",
+                {
+                    "field": field,
+                    "backend": backend,
+                    "param_names": names,
+                    "n_cases": result["n_cases"],
+                },
+                {
+                    "reconstruction_error": float(err),
+                    "train_t_max": float(result["train_t_max"]),
+                    "forecast_t_max": float(result["forecast_t_max"]),
+                },
+            )
+            self._set_status(
+                f"{backend} 파라메트릭 예보 학습 완료 (재구성 오차 {err * 100:.1f}%). "
+                "③Twin 에서 학습에 없던 운전조건·미래 t 를 예보하세요."
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._fail(f"{backend} 파라메트릭 예보 학습 실패", exc)
 
     def _build_sweep_twin(self) -> None:
         """②Model — 케이스 세트에서 (운전조건 → 필드) ROM 트윈을 학습한다.
@@ -5197,27 +5376,99 @@ class NavierTwinWebApp:
 
                     # Ⓓ 동역학 예보 (PyDMD) — 학습 구간 밖 외삽이 가능한 유일 계열.
                     with html.Div(v_show=("nt_model_method === 'dynamics'",)):
-                        # DMD 는 부적합해도 조용히 학습에 "성공"한다 — 못 보면
-                        # 결과가 조용히 틀어지므로 ⚠ 로 신호를 남긴다.
-                        self._tip_row(
-                            "데이터가 맞아야만 쓸 수 있습니다",
-                            "상태의 시간 전이 규칙을 학습해 학습 구간 밖까지 "
-                            "예보합니다. 유동이 '공간모드 × 고유 주파수'의 저랭크 "
-                            "선형 동역학으로 근사될 때만 맞습니다 — 강한 이류나 "
-                            "불연속(필라멘트 데모 등)에는 부적합하니 학습 후 "
-                            "적합도(재구성 오차)를 반드시 확인하세요. 모드 수는 "
-                            "PyDMD 가 자동 결정합니다 (실수 진동은 켤레쌍 때문에 "
-                            "물리 모드당 랭크 2가 필요해 수동 지정 시 과소적합되기 "
-                            "쉽습니다).",
-                            warn=True,
-                        )
+                        # 예보 방법 선택 — DMD(선형 동역학, 기본) 옆에 신경망
+                        # 예보기 4종(LSTM/KNO/LatentODE/NeuralODE)을 대안으로
+                        # 배선한다. 적합도 UI(nt_dmd_ready 등)는 모든 백엔드가
+                        # 공유한다 — "학습 구간 밖 t 예보" 의미가 같기 때문.
                         v3.VSelect(
-                            v_model=("nt_dmd_method",),
-                            items=("nt_dmd_choices",),
-                            label="DMD 변형",
+                            v_model=("nt_forecast_backend",),
+                            items=("nt_forecast_backend_choices",),
+                            label="예보 방법",
                             density="compact",
                             classes="mt-1",
                         )
+                        with html.Div(v_show=("nt_forecast_backend === 'dmd'",)):
+                            # DMD 는 부적합해도 조용히 학습에 "성공"한다 — 못 보면
+                            # 결과가 조용히 틀어지므로 ⚠ 로 신호를 남긴다.
+                            self._tip_row(
+                                "데이터가 맞아야만 쓸 수 있습니다",
+                                "상태의 시간 전이 규칙을 학습해 학습 구간 밖까지 "
+                                "예보합니다. 유동이 '공간모드 × 고유 주파수'의 저랭크 "
+                                "선형 동역학으로 근사될 때만 맞습니다 — 강한 이류나 "
+                                "불연속(필라멘트 데모 등)에는 부적합하니 학습 후 "
+                                "적합도(재구성 오차)를 반드시 확인하세요. 모드 수는 "
+                                "PyDMD 가 자동 결정합니다 (실수 진동은 켤레쌍 때문에 "
+                                "물리 모드당 랭크 2가 필요해 수동 지정 시 과소적합되기 "
+                                "쉽습니다).",
+                                warn=True,
+                            )
+                            v3.VSelect(
+                                v_model=("nt_dmd_method",),
+                                items=("nt_dmd_choices",),
+                                label="DMD 변형",
+                                density="compact",
+                                classes="mt-1",
+                            )
+                        with html.Div(v_show=("nt_forecast_backend !== 'dmd'",)):
+                            # 신경망 예보기는 DMD 의 저랭크 선형 가정이 없어
+                            # 비선형 동역학도 표현할 수 있지만, 자기회귀
+                            # 롤아웃이라 먼 미래로 갈수록 오차가 누적된다.
+                            self._tip_row(
+                                "자기회귀 롤아웃 — 먼 미래일수록 오차가 누적됩니다",
+                                "LSTM·Koopman Neural Operator·Latent Dynamics"
+                                "(AE+Neural ODE)·Neural ODE 는 POD 계수 시계열의 "
+                                "시간 전이를 신경망으로 학습해 롤아웃합니다 — DMD 의 "
+                                "저랭크 선형 가정이 없어 비선형 동역학도 원칙적으로 "
+                                "맞지만, 학습 구간 밖으로 갈수록 예보 오차가 누적될 "
+                                "수 있으니 적합도(재구성 오차)를 반드시 확인하세요. "
+                                "케이스 세트(비정상 스윕)는 모든 케이스의 계수 "
+                                "시퀀스를 예보기 하나로 함께 학습하고, 학습에 없던 "
+                                "운전조건(μ)은 케이스 초기 상태를 보간해 "
+                                "조건부화합니다.",
+                                warn=True,
+                            )
+                            with html.Div(classes="d-flex flex-wrap"):
+                                v3.VTextField(
+                                    v_model=("nt_forecast_epochs",),
+                                    label="Epochs",
+                                    type="number",
+                                    density="compact",
+                                    hide_details=True,
+                                    classes="mt-1 mr-2",
+                                    style="min-width: 120px; flex: 1 1 120px;",
+                                )
+                                v3.VTextField(
+                                    v_model=("nt_forecast_hidden",),
+                                    label="Hidden width",
+                                    type="number",
+                                    density="compact",
+                                    hide_details=True,
+                                    classes="mt-1 mr-2",
+                                    style="min-width: 120px; flex: 1 1 120px;",
+                                )
+                                v3.VTextField(
+                                    v_model=("nt_forecast_lookback",),
+                                    label="Lookback (LSTM)",
+                                    type="number",
+                                    density="compact",
+                                    hide_details=True,
+                                    classes="mt-1 mr-2",
+                                    style="min-width: 120px; flex: 1 1 120px;",
+                                    v_show=("nt_forecast_backend === 'lstm'",),
+                                )
+                                v3.VTextField(
+                                    v_model=("nt_forecast_latent",),
+                                    label="Latent dim",
+                                    type="number",
+                                    density="compact",
+                                    hide_details=True,
+                                    classes="mt-1 mr-2",
+                                    style="min-width: 120px; flex: 1 1 120px;",
+                                    v_show=(
+                                        "nt_forecast_backend === 'koopman_no' || "
+                                        "nt_forecast_backend === 'latent_ode'",
+                                    ),
+                                )
                         with v3.VCard(
                             variant="tonal", classes="mt-2", v_show=("nt_dmd_ready",)
                         ):

@@ -3000,6 +3000,330 @@ def build_dmd_twin(
     }
 
 
+# DMD 옆에 배선하는 대안 예보 백엔드 4종 — core/time_series/, core/operator_learning/koopman/
+# 에 이미 완성돼 있던 BaseTimeSeries 구현들 (모델 계보는 model-taxonomy-plan.md 참고).
+FORECAST_BACKENDS = ("lstm", "koopman_no", "latent_ode", "neural_ode")
+
+
+def _build_forecaster(backend: str, *, n_features: int, **kwargs: Any) -> Any:
+    """백엔드 문자열로 ``BaseTimeSeries`` 예보기를 생성한다.
+
+    Raises:
+        ValueError: 지원하지 않는 backend.
+    """
+    if backend == "lstm":
+        from naviertwin.core.time_series.lstm.lstm import LSTMForecaster
+
+        return LSTMForecaster(n_features=n_features, **kwargs)
+    if backend == "koopman_no":
+        from naviertwin.core.operator_learning.koopman.kno import KNO
+
+        return KNO(n_features=n_features, **kwargs)
+    if backend == "latent_ode":
+        from naviertwin.core.time_series.latent_dynamics.latent_dynamics import (
+            LatentDynamicsForecaster,
+        )
+
+        return LatentDynamicsForecaster(n_features=n_features, **kwargs)
+    if backend == "neural_ode":
+        from naviertwin.core.time_series.neural_ode.neural_ode import NeuralODEForecaster
+
+        return NeuralODEForecaster(n_features=n_features, **kwargs)
+    raise ValueError(
+        f"지원하지 않는 예보 백엔드: '{backend}'. 지원 목록: {FORECAST_BACKENDS}"
+    )
+
+
+def _forecast_lookback(backend: str, n_steps: int, requested: int) -> int:
+    """LSTM 만 lookback 윈도우를 받는다 — 나머지는 내부에서 1로 고정돼 있다.
+
+    ``n_steps`` (케이스당 타임스텝) 보다 lookback 이 크면 슬라이딩 윈도우를
+    하나도 못 만들어 학습이 실패하므로, 최소 1 ~ n_steps-2 사이로 clamp한다.
+    """
+    if backend != "lstm":
+        return 1
+    return max(1, min(int(requested), max(1, n_steps - 2)))
+
+
+def build_forecast_twin(
+    dataset: CFDDataset,
+    field: str,
+    *,
+    backend: str = "lstm",
+    n_modes: int = 6,
+    forecast_factor: float = 1.5,
+    **backend_kwargs: Any,
+) -> dict[str, Any]:
+    """시계열에서 POD+{LSTM|KNO|LatentODE|NeuralODE} 예보 트윈을 학습한다 (DMD 대안).
+
+    :func:`build_dmd_twin` 과 같은 존재 이유(학습 구간 밖 t 외삽)를 신경망
+    예보기로 구현한다. DMD 는 저랭크 선형 동역학만 맞는 반면, 여기 백엔드들은
+    비선형/카오스 동역학도 원칙적으로 표현할 수 있다 — 대신 신경망 롤아웃
+    특유의 오차 누적 때문에 먼 미래로 갈수록 신뢰도가 떨어질 수 있다. 그래서
+    DMD 처럼 ``reconstruction_error`` (POD 절단오차 포함)를 반드시 함께
+    돌려준다.
+
+    필드는 기존 ROM 이 쓰는 :class:`SnapshotPOD` 로 계수로 압축한 뒤, 예보기가
+    그 **계수 시계열**의 시간 전이를 학습한다 — 예측 시 계수를 롤아웃하고
+    POD 역변환으로 필드를 복원한다.
+
+    Args:
+        dataset: 시계열 데이터셋 (타임스텝 4개 이상 — sliding window/lookback
+            학습에 DMD 보다 더 긴 시계열이 필요하다).
+        field: 학습 대상 물리량.
+        backend: ``lstm`` | ``koopman_no`` | ``latent_ode`` | ``neural_ode``.
+        n_modes: POD 모드 수.
+        forecast_factor: 예측 슬라이더 상한 배수 (DMD 와 같은 의미).
+        **backend_kwargs: 백엔드 생성자에 그대로 전달 (예: ``hidden``,
+            ``latent``, ``max_epochs``, LSTM 이면 ``lookback``).
+
+    Returns:
+        ``engine`` (TimeSeriesForecastTwinEngine), ``n_modes``,
+        ``param_min``/``param_max``, ``forecast_max``,
+        ``reconstruction_error`` 를 담은 dict.
+
+    Raises:
+        ValueError: 타임스텝 4개 미만이거나 미지원 backend.
+    """
+    from naviertwin.core.digital_twin.forecast_twin_engine import (
+        TimeSeriesForecastTwinEngine,
+    )
+    from naviertwin.core.dimensionality_reduction.linear.pod import SnapshotPOD
+
+    if backend not in FORECAST_BACKENDS:
+        raise ValueError(
+            f"지원하지 않는 예보 백엔드: '{backend}'. 지원 목록: {FORECAST_BACKENDS}"
+        )
+    n_steps = int(getattr(dataset, "n_time_steps", 0))
+    if n_steps < 4:
+        raise ValueError(
+            f"{backend} 예보 학습에는 타임스텝 4개 이상이 필요합니다. 현재: {n_steps}"
+        )
+
+    snapshots = np.asarray(dataset.extract_field_snapshots(field), dtype=np.float64)
+    times = np.asarray(getattr(dataset, "time_steps", []), dtype=np.float64)
+    dt = estimate_dt(dataset)
+
+    n_modes_eff = max(1, min(n_modes, n_steps, snapshots.shape[0]))
+    reducer = SnapshotPOD(n_modes=n_modes_eff)
+    reducer.fit(snapshots)
+    coeffs = reducer.encode(snapshots)  # (n_time, n_modes)
+
+    fit_kwargs = dict(backend_kwargs)
+    if backend == "lstm":
+        fit_kwargs["lookback"] = _forecast_lookback(
+            backend, n_steps, int(fit_kwargs.get("lookback", 8))
+        )
+
+    forecaster = _build_forecaster(backend, n_features=n_modes_eff, **fit_kwargs)
+    forecaster.fit({"sequences": coeffs[np.newaxis, :, :].astype(np.float32), "dt": dt})
+
+    engine = TimeSeriesForecastTwinEngine.for_single_case(
+        reducer,
+        forecaster,
+        backend=backend,
+        train_coeffs=coeffs,
+        t0=float(times[0]),
+        dt=dt,
+        forecast_factor=forecast_factor,
+    )
+
+    # 적합도 = 학습 구간 재구성 상대오차 (POD 절단오차 + 예보기 오차 포함).
+    rebuilt = np.stack([engine.predict([float(t)]) for t in times], axis=1)
+    denom = float(np.linalg.norm(snapshots))
+    reconstruction_error = (
+        float(np.linalg.norm(rebuilt - snapshots) / denom) if denom > 0 else float("nan")
+    )
+
+    param_min, param_max = float(times.min()), float(times.max())
+    span = max(param_max - param_min, 1e-9)
+    forecast_max = param_min + span * float(forecast_factor)
+    engine.training_metadata = {
+        "field_name": field,
+        "reducer": "pod_forecast",
+        "surrogate": backend,
+        "problem_type": "dynamics_forecast",
+        "param_min": param_min,
+        "param_max": param_max,
+        "forecast_max": forecast_max,
+        "dt": dt,
+        "reconstruction_error": reconstruction_error,
+        "n_modes": n_modes_eff,
+    }
+    return {
+        "engine": engine,
+        "field": field,
+        "backend": backend,
+        "n_modes": n_modes_eff,
+        "dt": dt,
+        "param_min": param_min,
+        "param_max": param_max,
+        "forecast_max": forecast_max,
+        "reconstruction_error": reconstruction_error,
+    }
+
+
+def build_parametric_forecast_twin(
+    datasets: Sequence[CFDDataset],
+    field: str,
+    params: np.ndarray,
+    *,
+    param_names: Sequence[str] | None = None,
+    backend: str = "lstm",
+    n_modes: int = 6,
+    forecast_factor: float = 1.5,
+    **backend_kwargs: Any,
+) -> dict[str, Any]:
+    """비정상 케이스 세트에서 POD+{LSTM|KNO|LatentODE|NeuralODE} (μ, t) 예보 트윈을 학습한다.
+
+    :func:`build_parametric_dmd_twin` 의 대안 계열. ParametricDMD 는 케이스마다
+    독립 DMD 를 적합(partitioned)하지만, 여기서는 **모든 케이스의 계수
+    시퀀스를 하나의 예보기에 합쳐** 학습한다(공유 동역학 가정) — 신경망
+    예보기는 케이스 수만큼 독립 학습하면 각자 데이터가 적어 과적합하기
+    쉽기 때문이다. 대신 μ 조건부는 **케이스 초기 lookback 윈도우**를
+    :class:`RBFSurrogate` 로 μ 보간해서 반영한다 — "새 μ" 는 "다른
+    초기조건"으로 치환된다(자세한 설계 근거는
+    :mod:`naviertwin.core.digital_twin.forecast_twin_engine` docstring).
+
+    이 conditioning 방식은 μ 축의 국소적 동역학 차이(케이스마다 다른 지배
+    주파수 등)를 신경망이 공유 가중치로 표현할 만큼 학습됐을 때만 맞는다 —
+    ``reconstruction_error`` 로 반드시 확인해야 한다.
+
+    Raises:
+        ValueError: 케이스 2개 미만, 시계열이 아님(스텝 < 4), 케이스 간 격자
+            또는 시간 격자가 다르거나 미지원 backend.
+    """
+    from naviertwin.core.digital_twin.forecast_twin_engine import (
+        TimeSeriesForecastTwinEngine,
+    )
+    from naviertwin.core.dimensionality_reduction.linear.pod import SnapshotPOD
+    from naviertwin.core.surrogate.rbf_surrogate import RBFSurrogate
+
+    if backend not in FORECAST_BACKENDS:
+        raise ValueError(
+            f"지원하지 않는 예보 백엔드: '{backend}'. 지원 목록: {FORECAST_BACKENDS}"
+        )
+    cases = list(datasets)
+    if len(cases) < 2:
+        raise ValueError(f"트윈 학습에는 케이스가 2개 이상 필요합니다. 현재: {len(cases)}")
+    steps = [max(1, int(getattr(d, "n_time_steps", 1))) for d in cases]
+    if min(steps) < 4:
+        raise ValueError(
+            f"{backend} 예보 학습에는 케이스당 타임스텝 4개 이상이 필요합니다 "
+            f"(현재 최소 {min(steps)}개) — 정상 스윕이면 ROM/Physics AI 를 쓰세요."
+        )
+    if not meshes_are_identical(cases):
+        raise ValueError(
+            "케이스마다 격자가 달라 예보 학습이 불가능합니다 — 스냅샷 행렬을 "
+            "쌓으려면 동일 격자가 필요합니다."
+        )
+    times0 = [float(t) for t in (cases[0].time_steps or [])]
+    for case in cases[1:]:
+        if [float(t) for t in (case.time_steps or [])] != times0:
+            raise ValueError("케이스마다 시간 격자가 다릅니다 — 같은 타임스텝이 필요합니다.")
+
+    params_arr = np.asarray(params, dtype=np.float64)
+    if params_arr.ndim == 1:
+        params_arr = params_arr.reshape(-1, 1)
+    if params_arr.shape[0] != len(cases):
+        raise ValueError(
+            f"파라미터 행 수({params_arr.shape[0]})와 케이스 수({len(cases)})가 다릅니다."
+        )
+    base_names = (
+        list(param_names)
+        if param_names
+        else [f"param_{i}" for i in range(params_arr.shape[1])]
+    )
+
+    blocks = [
+        np.atleast_2d(np.asarray(case.extract_field_snapshots(field), dtype=np.float64))
+        for case in cases
+    ]
+    n_features = int(blocks[0].shape[0])
+    if any(int(b.shape[0]) != n_features for b in blocks):
+        raise ValueError("케이스마다 점 수가 달라 예보 학습이 불가능합니다.")
+
+    n_time = min(steps)
+    stacked_snapshots = np.concatenate([b[:, :n_time] for b in blocks], axis=1)
+    n_modes_eff = max(1, min(n_modes, stacked_snapshots.shape[1], n_features))
+    reducer = SnapshotPOD(n_modes=n_modes_eff)
+    reducer.fit(stacked_snapshots)
+
+    coeff_seqs = np.stack(
+        [reducer.encode(block[:, :n_time]) for block in blocks], axis=0
+    )  # (n_cases, n_time, n_modes)
+
+    dt = float(times0[1] - times0[0]) if len(times0) > 1 else 1.0
+
+    fit_kwargs = dict(backend_kwargs)
+    if backend == "lstm":
+        fit_kwargs["lookback"] = _forecast_lookback(
+            backend, n_time, int(fit_kwargs.get("lookback", 8))
+        )
+
+    forecaster = _build_forecaster(backend, n_features=n_modes_eff, **fit_kwargs)
+    forecaster.fit({"sequences": coeff_seqs.astype(np.float32), "dt": dt})
+
+    lookback = max(1, int(getattr(forecaster, "lookback", 1)))
+    # μ 조건부: 케이스 초기 lookback 윈도우를 RBF 로 μ 보간 — "새 μ" = "다른 초기조건".
+    init_windows = coeff_seqs[:, :lookback, :].reshape(len(cases), -1)
+    mu_interp = RBFSurrogate()
+    mu_interp.fit(params_arr, init_windows)
+
+    engine = TimeSeriesForecastTwinEngine.for_case_set(
+        reducer,
+        forecaster,
+        backend=backend,
+        mu_interp=mu_interp,
+        n_train_steps=n_time,
+        t0=times0[0],
+        dt=dt,
+        forecast_factor=forecast_factor,
+    )
+
+    # 적합도: 학습 (μ, t) 전부 재구성해 rel-L2 — DMD 트래픽 라이트를 그대로 공유한다.
+    errors: list[float] = []
+    for i, case_block in enumerate(blocks):
+        for j, t in enumerate(times0[:n_time]):
+            pred = engine.predict([*params_arr[i], float(t)])
+            truth = case_block[:, j]
+            denom = float(np.linalg.norm(truth))
+            if denom > 1e-12:
+                errors.append(float(np.linalg.norm(pred - truth)) / denom)
+    reconstruction_error = float(np.mean(errors)) if errors else float("nan")
+
+    names = [*base_names, "t"]
+    mins = [float(v) for v in params_arr.min(axis=0)] + [times0[0]]
+    maxs = [float(v) for v in params_arr.max(axis=0)] + [float(engine.t_max_forecast)]
+    engine.training_metadata = {
+        "field_name": field,
+        "reducer": "pod_forecast",
+        "surrogate": backend,
+        "problem_type": "parametric_forecast",
+        "param_names": names,
+        "param_mins": mins,
+        "param_maxs": maxs,
+        "train_t_max": times0[n_time - 1],
+        "forecast_t_max": float(engine.t_max_forecast),
+        "reconstruction_error": reconstruction_error,
+        "n_cases": len(cases),
+        "n_modes": n_modes_eff,
+    }
+    return {
+        "engine": engine,
+        "field": field,
+        "backend": backend,
+        "n_cases": len(cases),
+        "n_modes": n_modes_eff,
+        "param_names": names,
+        "param_mins": mins,
+        "param_maxs": maxs,
+        "reconstruction_error": reconstruction_error,
+        "train_t_max": times0[n_time - 1],
+        "forecast_t_max": float(engine.t_max_forecast),
+    }
+
+
 def predict_to_mesh(
     engine: Any,
     param_value: float | Sequence[float],
