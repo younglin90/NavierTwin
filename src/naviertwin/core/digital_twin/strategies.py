@@ -244,6 +244,25 @@ STRATEGIES: tuple[StrategySpec, ...] = (
         "케이스 3개 이상, 소수 케이스는 정성적.",
         tier="experimental",
     ),
+    StrategySpec(
+        key="mesh_gnn_rollout",
+        name="메쉬 GNN 롤아웃 (자기회귀 예보)",
+        # 다른 8개 전략과 정반대 방향 — **단일 케이스 시계열 전용**이다. 원본
+        # MeshGraphNets(mesh_gnn_mp 가 감싸는 것과 같은 클래스)의 진짜
+        # 자기회귀 시간 롤아웃(u_{t+1}=u_t+MGN(u_t,edge))을 그대로 쓴다 —
+        # mesh_gnn_mp 는 정상 케이스 세트를 "1스텝 가짜 트레젝토리"로
+        # 재해석한 파라미터 회귀일 뿐 진짜 시간 예보가 아니다.
+        needs_identical_mesh=False,
+        needs_uniform_grid=False,
+        supports_case_sets=False,
+        supports_time_in_sweep=False,
+        single_case_needs_steps=3,
+        min_snapshots=3,
+        note="단일 케이스 시계열 전용 — 원본 메쉬 위 자기회귀 시간 롤아웃(재샘플 "
+        "없음). 케이스 세트(파라미터 스윕)는 미지원 — 필요하면 mesh_gnn_mp"
+        "(정상/비정상 파라미터 회귀)를 쓰세요.",
+        tier="experimental",
+    ),
 )
 
 
@@ -369,6 +388,15 @@ def profile_data(
 def _check(spec: StrategySpec, p: DataProfile) -> tuple[bool, str]:
     """전략 하나를 데이터 프로파일과 대조 — (가능 여부, 이유)."""
     if p.n_cases > 1:
+        if spec.key == "mesh_gnn_rollout":
+            # 다른 7개와 정반대 방향의 제약 — 여기서만 특정 안내를 준다
+            # (generic supports_case_sets 메시지보다 대안(mesh_gnn_mp)을
+            # 명시하는 편이 사용자에게 더 유용하다).
+            return False, (
+                "메쉬 GNN 롤아웃은 단일 케이스 시계열 전용입니다 — 케이스 세트"
+                "(파라미터 스윕)는 미지원입니다. 필요하면 메쉬 GNN(메시지패싱, "
+                "mesh_gnn_mp)을 쓰세요."
+            )
         if not spec.supports_case_sets:
             return False, "케이스 세트(파라미터 스윕) 학습은 아직 미지원입니다."
         if spec.key == "operator":
