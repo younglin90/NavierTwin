@@ -166,6 +166,12 @@ _CAPABILITIES: dict[str, CapabilityAxes] = {
     "transolver": CapabilityAxes(
         (2, 3), True, True, True, True, True, False, "physics-slices", "torch",
     ),
+    # 단일 케이스 시계열 전용 — supports_steady=False(정상 데이터엔 적용 안 됨),
+    # supports_case_sets=False(다른 7개와 정반대 방향).
+    "mesh_gnn_rollout": CapabilityAxes(
+        (2, 3), False, True, False, False, True, False,
+        "mesh-graph+trajectory-rollout", "torch-geometric",
+    ),
 }
 
 

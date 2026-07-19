@@ -335,6 +335,14 @@ class NavierTwinWebApp:
         st.nt_mgn_hidden = 64
         st.nt_mgn_msgpass = 4
 
+        # Model — 메쉬 GNN 롤아웃 (mesh_gnn_rollout). mesh_gnn_mp 와 반대로
+        # **단일 케이스 시계열 전용** — 원본 MeshGraphNets 의 진짜 자기회귀
+        # 시간 롤아웃(u_{t+1}=u_t+MGN(u_t,edge))을 그대로 학습해 학습 구간
+        # 밖(미래) t 까지 원본 메쉬 위에서 예보한다. 케이스 세트는 미지원.
+        st.nt_mgn_rollout_epochs = 100
+        st.nt_mgn_rollout_hidden = 32
+        st.nt_mgn_rollout_msgpass = 4
+
         # Model — Transolver Physics-Attention. 학습된 slice token 으로 전역
         # 상호작용 비용을 mesh point 수에 선형으로 제한한다.
         st.nt_transolver_epochs = 200
@@ -1560,6 +1568,22 @@ class NavierTwinWebApp:
                 ),
             )
             return
+        if method == "mesh_gnn_rollout":
+            if not self.state.nt_case_mode:
+                # 단일 케이스 시계열 → MeshGraphNets 롤아웃(진짜 자기회귀 시간
+                # 예보). 다른 Route 2 전략들과 정반대 방향 — 케이스 세트는
+                # 여기서 거절한다.
+                self._build_mgn_rollout_twin()
+                return
+            self._fail(
+                "메쉬 GNN 롤아웃",
+                RuntimeError(
+                    "메쉬 GNN 롤아웃은 단일 케이스 시계열 전용입니다 — 케이스 "
+                    "세트(파라미터 스윕)는 미지원입니다. 필요하면 메쉬 GNN"
+                    "(메시지패싱, mesh_gnn_mp)을 쓰세요."
+                ),
+            )
+            return
         if method == "transolver":
             if self.state.nt_case_mode:
                 self._build_transolver_twin()
@@ -2205,6 +2229,73 @@ class NavierTwinWebApp:
             )
         except Exception as exc:  # noqa: BLE001
             self._fail("메쉬 GNN(메시지패싱) 학습 실패", exc)
+
+    def _build_mgn_rollout_twin(self) -> None:
+        """②Model — 단일 케이스 시계열에서 메쉬 GNN 롤아웃(mesh_gnn_rollout) 트윈을 학습한다.
+
+        다른 Route 2 전략들(mesh_gnn/gino/mesh_gnn_mp/transolver)과 정반대
+        방향 — 케이스 세트가 아니라 **단일 케이스 시계열 전용**이다. 원본
+        MeshGraphNets 의 진짜 자기회귀 시간 롤아웃(u_{t+1}=u_t+MGN(u_t,edge))을
+        그대로 학습해, DMD 와 같이 학습 구간 밖(미래) t 까지 원본 메쉬 위에서
+        예보한다 — 다만 DMD 와 달리 저랭크 선형 동역학 가정이 없다.
+        """
+        if self.state.nt_case_mode:
+            self._fail(
+                "메쉬 GNN 롤아웃",
+                RuntimeError(
+                    "메쉬 GNN 롤아웃은 단일 케이스 시계열 전용입니다 — 케이스 "
+                    "세트(파라미터 스윕)에는 적용할 수 없습니다."
+                ),
+            )
+            return
+        fields = self._training_fields()
+        try:
+            result = service.build_mgn_rollout_twin(
+                self.dataset,
+                fields,
+                hidden=int(self.state.nt_mgn_rollout_hidden or 32),
+                n_msgpass=int(self.state.nt_mgn_rollout_msgpass or 4),
+                max_epochs=int(self.state.nt_mgn_rollout_epochs or 100),
+            )
+            self.engine = result["engine"]
+            pmin, pmax = result["param_min"], result["param_max"]
+            loss = float(result.get("train_loss", float("nan")))
+            multi = f", 다중 출력 {len(fields)}개" if len(fields) > 1 else ""
+            summary = (
+                f"field(s)='{', '.join(fields)}', 메쉬 GNN 롤아웃(자기회귀 예보"
+                f"{multi}) · 학습 t ∈ [{pmin:.3g}, {pmax:.3g}] · train loss {loss:.3g}"
+            )
+            with self.state:
+                self.state.nt_model_ready = True
+                self.state.nt_model_summary = summary
+                self.state.nt_physics_ready = False
+                self.state.nt_dmd_ready = False
+                self.state.nt_twin_ready = True
+                self.state.nt_twin_min = pmin
+                # 자기회귀 롤아웃은 학습 구간 밖(미래)으로도 계속 굴릴 수 있다 —
+                # DMD 처럼 슬라이더 상한을 학습 구간 너머로 잡는다(외삽 허용).
+                span = max(pmax - pmin, 1e-9)
+                self.state.nt_twin_max = pmax + span * 1.5
+                self.state.nt_twin_train_max = pmax  # 경고 임계 = 학습 t 상한
+                self.state.nt_twin_param = pmax
+                self.state.nt_twin_step = max((pmax - pmin) / 100.0, 1e-6)
+                self.state.nt_twin_summary = summary
+            self._log_training_run(
+                "mesh_gnn_rollout",
+                {
+                    "fields": fields,
+                    "hidden": int(self.state.nt_mgn_rollout_hidden or 32),
+                    "n_msgpass": int(self.state.nt_mgn_rollout_msgpass or 4),
+                    "epochs": int(self.state.nt_mgn_rollout_epochs or 100),
+                },
+                {"train_loss": loss},
+            )
+            self._set_status(
+                "메쉬 GNN 롤아웃 학습 완료 — 자기회귀 시간 예보. ③Twin 에서 학습 "
+                "구간 밖까지 예측하세요 (원본 메쉬 위에 표시됩니다)."
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._fail("메쉬 GNN 롤아웃 학습 실패", exc)
 
     def _build_transolver_twin(self) -> None:
         """케이스 세트에서 Transolver Physics-Attention 트윈을 학습한다."""
@@ -4832,6 +4923,12 @@ class NavierTwinWebApp:
                             "mdi-transit-connection-variant",
                         ),
                         (
+                            "mesh_gnn_rollout",
+                            "메쉬 GNN 롤아웃 (자기회귀 예보)",
+                            "단일 케이스 시계열 전용 · 진짜 시간 롤아웃 · 학습 구간 밖 외삽",
+                            "mdi-play-speed",
+                        ),
+                        (
                             "transolver",
                             "Transolver (Physics-Attention)",
                             "학습 slice attention · 재샘플 없음 · 형상 가변",
@@ -5162,6 +5259,62 @@ class NavierTwinWebApp:
                                     classes="mt-1",
                                 )
 
+                    # Ⓗ 메쉬 GNN 롤아웃 (mesh_gnn_rollout) — 다른 Route 2
+                    # 전략들과 정반대 방향: 케이스 세트가 아니라 **단일 케이스
+                    # 시계열 전용**. 원본 MeshGraphNets 의 진짜 자기회귀 시간
+                    # 롤아웃을 그대로 학습한다.
+                    with html.Div(v_show=("nt_model_method === 'mesh_gnn_rollout'",)):
+                        with html.Div(v_show=("nt_case_mode",)):
+                            self._tip_row(
+                                "단일 케이스 시계열 전용",
+                                "메쉬 GNN 롤아웃은 케이스 세트(파라미터 스윕)가 "
+                                "아니라 단일 케이스 시계열에서만 학습할 수 "
+                                "있습니다 — ①Import 에서 시계열 데모나 다중 "
+                                "타임스텝 케이스를 로드하세요. 케이스 세트의 "
+                                "파라미터 회귀가 필요하면 메쉬 GNN(메시지패싱, "
+                                "mesh_gnn_mp)을 쓰세요.",
+                                warn=True,
+                            )
+                        with html.Div(v_show=("!nt_case_mode",)):
+                            self._tip_row(
+                                "진짜 자기회귀 시간 롤아웃 — 학습 구간 밖 예보 가능",
+                                "타임스텝마다 메쉬(노드=격자점, 에지=셀 연결)는 "
+                                "그대로 두고 상태만 u_{t+1} = u_t + MGN(u_t, edge) "
+                                "델타로 예측하는 진짜 시간 발전 모델(MeshGraphNets, "
+                                "Encode-Process-Decode)입니다. mesh_gnn_mp 와 달리 "
+                                "케이스 세트가 아니라 시간축 자체를 학습하므로, "
+                                "DMD 처럼 학습 구간 밖(미래) t 까지 원본 메쉬 위에서 "
+                                "예보할 수 있습니다 — 다만 저랭크 선형 가정이 없어 "
+                                "적합도 진단은 없습니다(예보를 늘 검증하세요). "
+                                "타임스텝 3개 이상 필요.",
+                                warn=True,
+                            )
+                            with html.Div(classes="d-flex"):
+                                v3.VTextField(
+                                    v_model=("nt_mgn_rollout_epochs",),
+                                    label="Epochs",
+                                    type="number",
+                                    density="compact",
+                                    hide_details=True,
+                                    classes="mt-1 mr-2",
+                                )
+                                v3.VTextField(
+                                    v_model=("nt_mgn_rollout_hidden",),
+                                    label="Hidden width",
+                                    type="number",
+                                    density="compact",
+                                    hide_details=True,
+                                    classes="mt-1 mr-2",
+                                )
+                                v3.VTextField(
+                                    v_model=("nt_mgn_rollout_msgpass",),
+                                    label="메시지패싱 층 수",
+                                    type="number",
+                                    density="compact",
+                                    hide_details=True,
+                                    classes="mt-1",
+                                )
+
                     with html.Div(v_show=("nt_model_method === 'transolver'",)):
                         with html.Div(v_show=("!nt_case_mode",)):
                             self._tip_row(
@@ -5244,14 +5397,17 @@ class NavierTwinWebApp:
                     # 첫 위치 인자는 텍스트 child 라 바인딩이 안 되므로 mustache 로.
                     # 메쉬/연산자 계열은 케이스 세트일 때만
                     # 학습 버튼이 뜬다 (단일 케이스는 각 카드의 안내가 대신 뜬다).
+                    # mesh_gnn_rollout 은 정반대 방향 — 단일 케이스일 때만
+                    # 학습 버튼이 뜬다(케이스 세트는 안내가 대신 뜬다).
                     with html.Div(
                         classes="d-flex align-center mt-2",
                         v_show=(
-                            "(nt_model_method !== 'operator' && "
+                            "((nt_model_method !== 'operator' && "
                             "nt_model_method !== 'mesh_gnn' && "
                             "nt_model_method !== 'gino' && "
                             "nt_model_method !== 'mesh_gnn_mp' && "
-                            "nt_model_method !== 'transolver') || nt_case_mode",
+                            "nt_model_method !== 'transolver') || nt_case_mode) && "
+                            "!(nt_model_method === 'mesh_gnn_rollout' && nt_case_mode)",
                         ),
                     ):
                         with v3.VBtn(

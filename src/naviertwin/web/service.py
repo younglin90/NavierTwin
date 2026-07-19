@@ -1652,6 +1652,124 @@ def build_mesh_gnn_twin_from_cases(
     }
 
 
+# ──────────────────────────────────────────────────────────────────────
+# MeshGraphNets 롤아웃 — 단일 케이스 시계열 자기회귀 예보 (Route 2, 원본 메쉬)
+#
+# build_mgn_twin_from_cases(mesh_gnn_mp, 위쪽)와는 완전히 다른 용도다 —
+# 그쪽은 정상 케이스 세트를 파라미터 회귀로 감싸고, 이쪽은 원본
+# MeshGraphNets(core/gnn/meshgraphnets/meshgraphnets.py)의 진짜 자기회귀
+# 시간 롤아웃을 그대로 쓴다. mesh_gnn_mp/mgn_case_set_engine.py 코드는
+# 건드리지 않고 이 구역에 새로 추가한다.
+# ──────────────────────────────────────────────────────────────────────
+
+
+def build_mgn_rollout_twin(
+    dataset: CFDDataset,
+    field: str | Sequence[str],
+    *,
+    hidden: int = 32,
+    n_msgpass: int = 4,
+    max_epochs: int = 100,
+    lr: float = 1e-3,
+    device: str = "auto",
+    seed: int | None = 0,
+) -> dict[str, Any]:
+    """단일 케이스 시계열에서 MeshGraphNets 롤아웃(mesh_gnn_rollout) 트윈을 학습한다.
+
+    **단일 케이스 시계열 전용** — 케이스 세트(파라미터 스윕)는 지원하지
+    않는다(다른 Route 2 전략들과 정반대 방향의 제약). 원본
+    :class:`~naviertwin.core.gnn.meshgraphnets.meshgraphnets.MeshGraphNets`
+    를 :func:`~naviertwin.core.gnn.meshgraphnets.rollout_dataset.
+    case_to_rollout_trajectory` 로 만든 진짜 트레젝토리(``(1, T+1, N, C)``)
+    로 그대로 학습해 ``u_{t+1} = u_t + MGN(u_t, edge)`` 델타 롤아웃을 배운다
+    — ``build_mgn_twin_from_cases``(mesh_gnn_mp)는 정상 케이스 세트를
+    "1스텝 가짜 트레젝토리"로 재해석한 파라미터 회귀일 뿐 진짜 시간 예보가
+    아니다.
+
+    Args:
+        dataset: 다중 타임스텝(최소 3개 — 다음스텝 예측 쌍 최소 2개) 단일
+            케이스 ``CFDDataset``.
+        field: 롤아웃 대상 필드 — 문자열 하나 또는 목록(다중 출력). 벡터
+            필드는 성분 채널(``U_x`` 등)로 전개된다.
+        hidden: MeshGraphNets 은닉 폭.
+        n_msgpass: 메시지패싱 층 수.
+        max_epochs: 학습 epoch 수.
+        lr: 학습률.
+        device: 학습 디바이스 ("auto" | "cpu" | "cuda") — 테스트는 "cpu" 로
+            결정성(save/load bit-동일)을 보장한다.
+        seed: 초기화 시드.
+
+    Returns:
+        ``engine`` (:class:`~naviertwin.core.digital_twin.mgn_rollout_engine.
+        MGNRolloutTwinEngine`), ``field``, ``fields``, ``target_names``,
+        ``param_min``/``param_max`` (학습 t 범위), ``dt`` (추정 타임스텝
+        간격), ``n_train_steps``, ``train_loss`` 를 담은 dict.
+
+    Raises:
+        ValueError: 타임스텝 3개 미만, 필드 미선택, 또는 시계열 내내 채널
+            구성이 다른 경우.
+        RuntimeError: torch_geometric 미설치(``MeshGraphNets._build`` 경유).
+    """
+    from naviertwin.core.digital_twin.mgn_rollout_engine import MGNRolloutTwinEngine
+    from naviertwin.core.gnn.meshgraphnets.meshgraphnets import MeshGraphNets
+    from naviertwin.core.gnn.meshgraphnets.rollout_dataset import (
+        case_to_rollout_trajectory,
+    )
+
+    fields = [field] if isinstance(field, str) else [str(f) for f in field if str(f).strip()]
+    if not fields:
+        raise ValueError("학습할 출력 필드를 최소 1개 선택하세요.")
+
+    built = case_to_rollout_trajectory(dataset, fields)
+    trajectories = built["trajectories"]  # (1, T+1, N, C)
+    target_names = built["target_names"]
+    times = built["times"]
+
+    operator = MeshGraphNets(
+        node_feat=int(trajectories.shape[-1]),
+        edge_feat=int(built["edge_features"].shape[1]),
+        hidden=int(hidden),
+        n_msgpass=int(n_msgpass),
+        max_epochs=int(max_epochs),
+        lr=float(lr),
+        device=str(device),
+        seed=seed,
+    )
+    operator.fit(
+        {
+            "trajectories": trajectories,
+            "edge_index": built["edge_index"],
+            "edge_features": built["edge_features"],
+        }
+    )
+
+    engine = MGNRolloutTwinEngine(
+        operator,
+        points=built["points"],
+        edge_index=built["edge_index"],
+        edge_features=built["edge_features"],
+        initial_state=trajectories[0, 0],
+        times=times,
+        field_names=fields,
+        target_names=target_names,
+    )
+
+    meta = engine.training_metadata
+    return {
+        "engine": engine,
+        "field": ",".join(fields),
+        "fields": list(fields),
+        "target_names": target_names,
+        "param_min": float(meta["param_min"]),
+        "param_max": float(meta["param_max"]),
+        "dt": float(meta["dt"]),
+        "n_train_steps": int(meta["n_train_steps"]),
+        "train_loss": (
+            float(operator.train_losses_[-1]) if operator.train_losses_ else float("nan")
+        ),
+    }
+
+
 def build_transolver_twin_from_cases(
     datasets: Sequence[CFDDataset],
     field: str | Sequence[str],
