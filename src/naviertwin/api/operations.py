@@ -271,6 +271,15 @@ def install_operations(app: Any, settings: APISettings) -> APIMetrics:
         "/openapi.json",
         "/redoc",
     }
+    docs_paths = {"/docs", "/redoc", "/docs/oauth2-redirect"}
+    docs_csp = (
+        "default-src 'self'; "
+        "script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
+        "style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
+        "img-src 'self' data: https://fastapi.tiangolo.com; "
+        "connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'none'"
+    )
+    default_csp = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
 
     @app.middleware("http")
     async def operations_middleware(request: Any, call_next: Any) -> Any:
@@ -335,6 +344,9 @@ def install_operations(app: Any, settings: APISettings) -> APIMetrics:
                 response.headers["Referrer-Policy"] = "no-referrer"
                 response.headers["Permissions-Policy"] = (
                     "camera=(), microphone=(), geolocation=()"
+                )
+                response.headers["Content-Security-Policy"] = (
+                    docs_csp if request.url.path in docs_paths else default_csp
                 )
                 if request.url.scheme == "https":
                     response.headers["Strict-Transport-Security"] = (
