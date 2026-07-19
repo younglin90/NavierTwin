@@ -109,3 +109,42 @@ def test_ntwin_embeds_project_lineage(tmp_path: Path) -> None:
 
     assert restored == workspace.project
     assert restored.lineage[0].kind is LineageKind.PREDICTION
+
+
+def test_all_lineage_kinds_round_trip_json_and_ntwin(tmp_path: Path) -> None:
+    """M9: mapping/model/prediction/validation lineage all persist and
+    round-trip identically through both the JSON sidecar manifest and the
+    `.ntwin` embedded manifest (not just a single kind in isolation)."""
+    from naviertwin.core.export.ntwin_format import (
+        load_embedded_project_manifest,
+        save_dataset,
+    )
+
+    workspace = TwinWorkspace()
+    dataset = _dataset()
+    workspace.load_single_dataset(dataset, name="all-kinds", source="memory://demo")
+
+    kinds = (
+        (LineageKind.MAPPING, "mapping-1"),
+        (LineageKind.MODEL, "model-1"),
+        (LineageKind.PREDICTION, "prediction-1"),
+        (LineageKind.VALIDATION, "validation-1"),
+    )
+    for kind, artifact_id in kinds:
+        workspace.record_lineage(kind, artifact_id=artifact_id, strategy=kind.value)
+
+    assert [record.kind for record in workspace.project.lineage] == [k for k, _ in kinds]
+
+    json_path = workspace.save_manifest(tmp_path / "all_kinds.manifest.json")
+    restored_json = load_project_manifest(json_path)
+    assert restored_json == workspace.project
+    assert [record.kind for record in restored_json.lineage] == [k for k, _ in kinds]
+
+    ntwin_path = tmp_path / "all_kinds.ntwin"
+    save_dataset(dataset, ntwin_path, canonical_project=workspace.project)
+    restored_ntwin = load_embedded_project_manifest(ntwin_path)
+    assert restored_ntwin == workspace.project
+    assert [record.kind for record in restored_ntwin.lineage] == [k for k, _ in kinds]
+
+    # Both persistence paths must agree with each other, not just with the source.
+    assert restored_json == restored_ntwin

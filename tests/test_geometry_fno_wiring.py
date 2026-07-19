@@ -149,6 +149,53 @@ def test_unsteady_case_set_expands_time_parameter() -> None:
     assert built["engine"].training_metadata["problem_type"] == "unsteady_sweep_operator"
 
 
+def test_group_split_on_unsteady_data_prevents_temporal_leakage() -> None:
+    """M11: source-case group split must keep every time step of one unsteady
+    trajectory entirely on one side of train/val/test — otherwise adjacent,
+    highly-correlated time frames from the same case would leak between the
+    training set and the held-out evaluation set."""
+    from naviertwin.core.preprocessing import expand_unsteady_case_snapshots
+
+    result = service.make_demo_case_set("sweep_unsteady", n_side=8)
+    built = service.build_geometry_fno_twin(
+        result["datasets"],
+        "p",
+        result["params"],
+        param_names=result["param_names"],
+        resolution=8,
+        modes=3,
+        width=4,
+        epochs=1,
+        use_tensor_cache=False,
+        group_split=True,
+        val_frac=0.25,
+        test_frac=0.25,
+        split_seed=0,
+    )
+    eval_split = built["eval_split"]
+    assert eval_split["enabled"] is True
+    assert eval_split["val_idx"] or eval_split["test_idx"]
+
+    expanded_cases, _, _, has_time = expand_unsteady_case_snapshots(
+        result["datasets"],
+        np.asarray(result["params"], dtype=np.float64),
+        result["param_names"],
+        field_names=["p"],
+    )
+    assert has_time
+    source_groups = [int(case.metadata["source_case_index"]) for case in expanded_cases]
+
+    def groups_of(indices: list[int]) -> set[int]:
+        return {source_groups[i] for i in indices}
+
+    train_groups = groups_of(eval_split["train_idx"])
+    held_out_groups = groups_of(eval_split["val_idx"] + eval_split["test_idx"])
+    assert train_groups.isdisjoint(held_out_groups), (
+        "a source case's time steps straddled train and held-out splits: "
+        f"{train_groups & held_out_groups}"
+    )
+
+
 def test_multi_field_output_specs_and_split(shapes_case_set: dict) -> None:
     """다중 출력(p + U 성분): output_fields 경계와 split_multi_prediction 계약."""
     built = service.build_geometry_fno_twin(
