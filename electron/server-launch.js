@@ -42,10 +42,16 @@ function resolveServerLaunch(options) {
   };
 
   if (platform !== "win32") {
+    // Packaged builds run main.js from inside app.asar, so
+    // path.resolve(__dirname, "..") no longer points at the NavierTwin
+    // Python source tree (it resolves to the resources/ directory of the
+    // packaged app instead). NAVIER_TWIN_REPO_ROOT lets a packaged install
+    // point at the real checkout, mirroring NAVIER_TWIN_WSL_PROJECT below.
+    const root = sourceEnv.NAVIER_TWIN_REPO_ROOT || repoRoot;
     return {
       command: "python3",
       args: serverArgs(port),
-      options: { cwd: repoRoot, env: runtimeEnv },
+      options: { cwd: root, env: runtimeEnv },
       mode: "local",
     };
   }

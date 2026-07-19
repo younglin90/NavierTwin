@@ -21,6 +21,18 @@ test("Linux launches the Python server directly", () => {
   assert.ok(launch.args.includes("8890"));
 });
 
+test("NAVIER_TWIN_REPO_ROOT overrides repoRoot on Linux (packaged builds)", () => {
+  const launch = resolveServerLaunch({
+    platform: "linux",
+    // Simulates the resources/ dir main.js resolves to when run from
+    // inside a packaged app.asar — not the real NavierTwin checkout.
+    repoRoot: "/opt/NavierTwin/resources",
+    port: 8890,
+    env: { NAVIER_TWIN_REPO_ROOT: "/home/user/NavierTwin" },
+  });
+  assert.equal(launch.options.cwd, "/home/user/NavierTwin");
+});
+
 test("WSL UNC roots map to distro and Linux path", () => {
   assert.deepEqual(
     uncToWslPath("\\\\wsl.localhost\\Ubuntu-24.04\\home\\user\\NavierTwin"),
