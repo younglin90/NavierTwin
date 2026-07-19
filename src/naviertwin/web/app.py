@@ -326,6 +326,16 @@ class NavierTwinWebApp:
         st.nt_gino_hidden = 16
         st.nt_gino_radius = 0.25
 
+        # Model — DeepONet (deeponet, operator 전략 3번째 backend · 케이스
+        # 세트 전용). GeometryFNO(SDF 채널 공통 격자)와 달리 공통 격자
+        # 재샘플이 아예 없다 — branch(운전조건 μ)·trunk(케이스 쿼리 좌표)
+        # 두 MLP 만으로 학습하는 순수 데이터 지도학습(PDE 잔차 없음). 예측은
+        # varying_mesh 경로로 보고 있는 케이스 좌표 위에 표시된다.
+        st.nt_deeponet_epochs = 200
+        st.nt_deeponet_hidden = 64
+        st.nt_deeponet_latent = 32
+        st.nt_deeponet_layers = 3
+
         # Model — 메쉬 GNN 메시지패싱 (mesh_gnn_mp, Route 2 세 번째 배선 ·
         # 케이스 세트 전용). mesh_gnn 과 같은 그래프 빌더를 쓰지만, 내부
         # 모델이 GCN 대신 진짜 edge_features(Δ좌표)를 메시지패싱에 쓰는
@@ -1546,6 +1556,20 @@ class NavierTwinWebApp:
                 ),
             )
             return
+        if method == "deeponet":
+            if self.state.nt_case_mode:
+                # 케이스 세트 → DeepONet (operator 전략 3번째 backend, 공통
+                # 격자 재샘플 없는 branch-trunk 순수 데이터 학습).
+                self._build_deeponet_twin()
+                return
+            self._fail(
+                "DeepONet",
+                RuntimeError(
+                    "DeepONet 은 케이스 세트(정상 파라미터 스윕) 전용입니다 — "
+                    "케이스 폴더나 데모 케이스 세트를 로드하세요."
+                ),
+            )
+            return
         if method == "mesh_gnn_mp":
             if self.state.nt_case_mode:
                 # 케이스 세트 → 메쉬 GNN 메시지패싱 (Route 2 세 번째 배선,
@@ -2139,6 +2163,77 @@ class NavierTwinWebApp:
             )
         except Exception as exc:  # noqa: BLE001
             self._fail("GINO 학습 실패", exc)
+
+    def _build_deeponet_twin(self) -> None:
+        """②Model — 케이스 세트에서 DeepONet(분기-줄기 연산자) 트윈을 학습한다.
+
+        정상 파라미터 스윕 전용 — operator 전략의 3번째 backend
+        (builtin/neuralop GeometryFNO 다음). SDF 채널 공통 격자 텐서화가
+        없다 — branch(운전조건 μ)·trunk(케이스 쿼리 좌표) 두 MLP 만으로
+        학습하는 순수 데이터 지도학습(PDE 잔차 없음)이라 재샘플이 없다.
+        결과 엔진은 ``varying_mesh=True`` 라 :meth:`predict` 의 기존 형상
+        가변 분기(``predict_to_mesh`` — 보고 있는 원본 케이스 메쉬 위 표시)를
+        그대로 탄다.
+        """
+        if not self.case_datasets:
+            self._fail(
+                "케이스 없음",
+                RuntimeError(
+                    "복원된 프로젝트는 케이스 1개만 담아 재학습할 수 없습니다 — "
+                    "케이스 폴더를 다시 로드하세요."
+                ),
+            )
+            return
+        fields = self._training_fields()
+        try:
+            layers = int(self.state.nt_deeponet_layers or 3)
+            result = service.build_deeponet_twin_from_cases(
+                self.case_datasets,
+                fields,
+                self.case_params,
+                param_names=self.case_param_names,
+                hidden=int(self.state.nt_deeponet_hidden or 64),
+                latent=int(self.state.nt_deeponet_latent or 32),
+                n_branch_layers=layers,
+                n_trunk_layers=layers,
+                max_epochs=int(self.state.nt_deeponet_epochs or 200),
+            )
+            self.engine = result["engine"]
+            names = result["param_names"]
+            loss = float(result.get("train_loss", float("nan")))
+            multi = f", 다중 출력 {len(fields)}개" if len(fields) > 1 else ""
+            summary = (
+                f"field(s)='{', '.join(fields)}', DeepONet (분기-줄기 연산자{multi}) · "
+                f"케이스 {result['n_cases']}개 · 입력 파라미터 {len(names)}개 "
+                f"({', '.join(names)}) · train loss {loss:.3g}"
+            )
+            with self.state:
+                self.state.nt_model_ready = True
+                self.state.nt_model_summary = summary
+                self.state.nt_physics_ready = False
+                self.state.nt_dmd_ready = False
+                self.state.nt_twin_ready = True
+                self.state.nt_twin_summary = summary
+            self._set_twin_param_ranges(names, result["param_mins"], result["param_maxs"])
+            self._log_training_run(
+                "deeponet",
+                {
+                    "fields": fields,
+                    "n_cases": result["n_cases"],
+                    "param_names": names,
+                    "hidden": int(self.state.nt_deeponet_hidden or 64),
+                    "latent": int(self.state.nt_deeponet_latent or 32),
+                    "layers": layers,
+                    "epochs": int(self.state.nt_deeponet_epochs or 200),
+                },
+                {"train_loss": loss},
+            )
+            self._set_status(
+                f"DeepONet 학습 완료 — 케이스 {result['n_cases']}개, 재샘플 없음. "
+                "③Twin 에서 예측하세요 (보고 있는 형상 위에 표시됩니다)."
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._fail("DeepONet 학습 실패", exc)
 
     def _build_mgn_twin(self) -> None:
         """②Model — 케이스 세트에서 메쉬 GNN 메시지패싱(mesh_gnn_mp) 트윈을 학습한다.
@@ -4838,6 +4933,12 @@ class NavierTwinWebApp:
                             "mdi-vector-combine",
                         ),
                         (
+                            "deeponet",
+                            "DeepONet (분기-줄기 연산자)",
+                            "branch(μ)·trunk(좌표) 두 MLP · 공통 격자 재샘플 없음 · 임의 좌표 예측",
+                            "mdi-vector-line",
+                        ),
+                        (
                             "dynamics",
                             "동역학 예보 (DMD)",
                             "시간 전이 규칙 학습 · 학습 구간 밖 외삽 가능 · PyDMD",
@@ -5195,6 +5296,48 @@ class NavierTwinWebApp:
                                         style="min-width: 120px; flex: 1 1 120px;",
                                     )
 
+                    # DeepONet (deeponet, operator 전략 3번째 backend) — 케이스
+                    # 세트 전용, 공통 격자 재샘플 없는 branch-trunk 순수 데이터
+                    # 학습(PDE 잔차 없음).
+                    with html.Div(v_show=("nt_model_method === 'deeponet'",)):
+                        with html.Div(v_show=("!nt_case_mode",)):
+                            self._tip_row(
+                                "케이스 세트 전용",
+                                "DeepONet 은 케이스 세트(정상 파라미터 스윕)에서만 "
+                                "학습할 수 있습니다 — ①Import 에서 케이스 폴더나 "
+                                "데모 케이스 세트를 로드하세요.",
+                                warn=True,
+                            )
+                        with html.Div(v_show=("nt_case_mode",)):
+                            self._tip_row(
+                                "분기-줄기(branch-trunk) — 공통 격자 재샘플 없음",
+                                "branch net 이 케이스 운전조건 μ 를, trunk net 이 "
+                                "쿼리 좌표를 각각 잠재벡터로 바꿔 내적으로 필드값을 "
+                                "냅니다. GeometryFNO(SDF 채널)와 달리 공통 격자로 "
+                                "재샘플하지 않고, mesh_gnn/GINO 처럼 점 단위 입력 "
+                                "피처도 쓰지 않아 학습 케이스와 다른 임의 좌표에서도 "
+                                "바로 예측됩니다. PDE 잔차 없는 순수 데이터 지도학습"
+                                "(PINN/PI-DeepONet 아님) — 소수 케이스는 정성적 "
+                                "데모로 보세요.",
+                                warn=True,
+                            )
+                            with html.Div(classes="d-flex flex-wrap"):
+                                for model, label in (
+                                    ("nt_deeponet_epochs", "Epochs"),
+                                    ("nt_deeponet_hidden", "Hidden width"),
+                                    ("nt_deeponet_latent", "Latent dim"),
+                                    ("nt_deeponet_layers", "Layers"),
+                                ):
+                                    v3.VTextField(
+                                        v_model=(model,),
+                                        label=label,
+                                        type="number",
+                                        density="compact",
+                                        hide_details=True,
+                                        classes="mt-1 mr-2",
+                                        style="min-width: 120px; flex: 1 1 120px;",
+                                    )
+
                     # Ⓓ 동역학 예보 (PyDMD) — 학습 구간 밖 외삽이 가능한 유일 계열.
                     with html.Div(v_show=("nt_model_method === 'dynamics'",)):
                         # DMD 는 부적합해도 조용히 학습에 "성공"한다 — 못 보면
@@ -5251,7 +5394,8 @@ class NavierTwinWebApp:
                             "nt_model_method !== 'mesh_gnn' && "
                             "nt_model_method !== 'gino' && "
                             "nt_model_method !== 'mesh_gnn_mp' && "
-                            "nt_model_method !== 'transolver') || nt_case_mode",
+                            "nt_model_method !== 'transolver' && "
+                            "nt_model_method !== 'deeponet') || nt_case_mode",
                         ),
                     ):
                         with v3.VBtn(

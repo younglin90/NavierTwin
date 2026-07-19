@@ -1652,6 +1652,270 @@ def build_mesh_gnn_twin_from_cases(
     }
 
 
+# ──────────────────────────────────────────────────────────────────────
+# DeepONet 케이스 세트 트윈 — operator 전략 3번째 백엔드 (순수 데이터, PDE 잔차 없음)
+#
+# GeometryFNO(build_geometry_fno_twin, 이 파일 앞쪽)와 mesh_gnn/gino(위쪽) 코드는
+# 건드리지 않고 이 구역에 새로 추가한다. GeometryFNO 와 달리 공통 격자 SDF
+# 텐서화가 없다 — branch=운전조건 μ, trunk=케이스 쿼리 좌표 두 MLP 만으로
+# 학습한다(PI-DeepONet/PINN/Diffusion 은 이번 범위 밖 — 절대 건드리지 않음).
+# ──────────────────────────────────────────────────────────────────────
+
+
+def build_deeponet_twin_from_cases(
+    datasets: Sequence[CFDDataset],
+    field: str | Sequence[str],
+    params: np.ndarray,
+    *,
+    param_names: Sequence[str] | None = None,
+    hidden: int = 64,
+    latent: int = 32,
+    n_branch_layers: int = 3,
+    n_trunk_layers: int = 3,
+    max_epochs: int = 200,
+    device: str = "auto",
+    group_split: bool = False,
+    group_ids: Sequence[int] | None = None,
+    val_frac: float = 0.15,
+    test_frac: float = 0.15,
+    split_seed: int = 0,
+) -> dict[str, Any]:
+    """케이스 세트에서 DeepONet(분기-줄기 연산자) 트윈을 학습한다 (operator 전략, 3번째 백엔드).
+
+    정상(steady) 파라미터 스윕 전용 — GeometryFNO(SDF 채널 공통 격자
+    텐서화)와 달리 케이스마다 **자기 쿼리 좌표를 그대로**
+    (:func:`~naviertwin.core.operator_learning.deeponet.case_set_deeponet.
+    case_to_deeponet_sample`) trunk 입력으로 쓴다 — 재샘플이 아예 없다.
+    branch net 은 케이스 운전조건 μ 만 받으므로(점 단위 입력 피처 없음) 예측
+    시 학습 케이스와 좌표가 달라도 케이스 매칭 없이 바로 동작한다(mesh_gnn 의
+    kNN 폴백도, GINO 의 케이스 매칭도 불필요). 결과 엔진은
+    ``training_metadata["varying_mesh"]=True`` 라 앱 예측이 기존 형상 가변
+    분기(:func:`predict_to_mesh` — 보고 있는 케이스 메쉬 위 표시)를 그대로
+    탄다.
+
+    Args:
+        datasets: 정상 케이스 목록 (메쉬가 서로 달라도, 같아도 된다).
+        field: 학습 대상 필드 — 문자열 하나 또는 목록(다중 출력). 벡터
+            필드는 성분 채널(U_x 등)로 전개된다.
+        params: 케이스별 운전조건 (N, k) 또는 (N,).
+        param_names: 운전조건 이름. None 이면 ``param_i``.
+        hidden: branch/trunk MLP 은닉 폭.
+        latent: 출력 잠재 차원 p (branch·trunk 내적 차원).
+        n_branch_layers / n_trunk_layers: branch/trunk MLP 깊이.
+        max_epochs: 학습 epoch 수.
+        device: 학습 디바이스 ("auto" | "cpu" | "cuda") — 테스트는 "cpu" 로
+            결정성(save/load bit-동일)을 보장한다.
+        group_split: True 면 케이스(그룹) 단위 train/val/test 분할 후 train
+            만 학습한다 — 정규화 상수도 train 케이스로만 계산한다(누수 방지).
+        group_ids: 케이스별 그룹 id. None 이면 케이스 하나 = 그룹 하나.
+        val_frac: validation 그룹 비율 (``group_split=True`` 일 때만).
+        test_frac: test 그룹 비율 (``group_split=True`` 일 때만).
+        split_seed: 그룹 셔플 시드.
+
+    Returns:
+        ``engine``, ``field``, ``fields``, ``n_cases``, ``param_names``,
+        ``param_mins``, ``param_maxs``, ``target_names``, ``train_loss``,
+        ``eval_split`` (held-out rel-L2 — ``group_split=True`` 일 때만 의미)
+        를 담은 dict.
+
+    Raises:
+        ValueError: 케이스 2개 미만, 필드 미선택, 파라미터 행 수 불일치,
+            또는 케이스 간 채널 구성이 다른 경우.
+    """
+    from naviertwin.core.digital_twin.deeponet_engine import DeepONetTwinEngine
+    from naviertwin.core.operator_learning.deeponet.case_set_deeponet import (
+        DeepONetCaseSetOperator,
+        case_to_deeponet_sample,
+        deeponet_norm_from_cases,
+    )
+    from naviertwin.core.preprocessing.group_split import (
+        classify_query_split,
+        group_train_val_test_split,
+    )
+
+    fields = [field] if isinstance(field, str) else [str(f) for f in field if str(f).strip()]
+    if not fields:
+        raise ValueError("학습할 출력 필드를 최소 1개 선택하세요.")
+    cases = list(datasets)
+    if len(cases) < 2:
+        raise ValueError(f"트윈 학습에는 케이스가 2개 이상 필요합니다. 현재: {len(cases)}")
+    params_arr = np.asarray(params, dtype=np.float64)
+    if params_arr.ndim == 1:
+        params_arr = params_arr.reshape(-1, 1)
+    if params_arr.shape[0] != len(cases):
+        raise ValueError(
+            f"파라미터 행 수({params_arr.shape[0]})와 케이스 수({len(cases)})가 다릅니다."
+        )
+    names = (
+        [str(n) for n in param_names]
+        if param_names
+        else [f"param_{i}" for i in range(params_arr.shape[1])]
+    )
+    from naviertwin.core.preprocessing import expand_unsteady_case_snapshots
+
+    cases, params_arr, names, has_time = expand_unsteady_case_snapshots(
+        cases,
+        params_arr,
+        names,
+        field_names=list(fields),
+    )
+    if has_time:
+        source_groups = [int(case.metadata["source_case_index"]) for case in cases]
+        if group_ids is not None:
+            original_groups = list(group_ids)
+            group_ids = [original_groups[index] for index in source_groups]
+        else:
+            group_ids = source_groups
+
+    # 그룹 스플릿 (검토 §6½ #2) — train 케이스로만 정규화 상수를 계산하고
+    # val/test 쿼리에 주입한다 (train-only 원칙).
+    n_cases_total = len(cases)
+    if group_split:
+        split = group_train_val_test_split(
+            n_cases_total,
+            group_ids,
+            val_frac=float(val_frac),
+            test_frac=float(test_frac),
+            seed=int(split_seed),
+        )
+        train_idx, val_idx, test_idx = split.train_idx, split.val_idx, split.test_idx
+    else:
+        train_idx = np.arange(n_cases_total, dtype=np.int64)
+        val_idx = np.zeros(0, dtype=np.int64)
+        test_idx = np.zeros(0, dtype=np.int64)
+
+    norm = deeponet_norm_from_cases(
+        [cases[i] for i in train_idx.tolist()], params_arr[train_idx]
+    )
+    samples = [
+        case_to_deeponet_sample(case, params_arr[i], fields, norm=norm)
+        for i, case in enumerate(cases)
+    ]
+    target_names = list(samples[0]["target_names"])
+    for i, sample in enumerate(samples[1:], start=1):
+        if list(sample["target_names"]) != target_names:
+            raise ValueError(
+                f"케이스 {i} 의 타깃 채널({sample['target_names']})이 첫 케이스"
+                f"({target_names})와 다릅니다."
+            )
+
+    mu_center = np.asarray(norm["mu_center"], dtype=np.float64)
+    mu_scale = np.asarray(norm["mu_scale"], dtype=np.float64)
+
+    def _mu_norm(i: int) -> np.ndarray:
+        return ((params_arr[i] - mu_center) / mu_scale).astype(np.float32)
+
+    operator = DeepONetCaseSetOperator(
+        branch_in=params_arr.shape[1],
+        n_channels=len(target_names),
+        hidden=int(hidden),
+        latent=int(latent),
+        n_branch_layers=int(n_branch_layers),
+        n_trunk_layers=int(n_trunk_layers),
+        max_epochs=int(max_epochs),
+        device=str(device),
+    )
+    operator.fit(
+        {
+            "cases": [
+                {
+                    "mu": _mu_norm(i),
+                    "coords01": samples[i]["coords01"],
+                    "y": samples[i]["y"],
+                }
+                for i in train_idx.tolist()
+            ]
+        }
+    )
+
+    # 엔진에는 train 케이스 좌표만 담는다 — predict()(대표 케이스)의
+    # output_fields 경계 기준이 학습에 쓴 형상이다. DeepONet 은 점 단위 입력
+    # 피처가 없어(순수 branch=μ, trunk=좌표) base_x 저장이 필요 없다.
+    engine_cases = [
+        {"points": samples[i]["points"], "coords01": samples[i]["coords01"]}
+        for i in train_idx.tolist()
+    ]
+    engine = DeepONetTwinEngine(
+        operator,
+        cases=engine_cases,
+        train_params=params_arr[train_idx],
+        param_names=names,
+        field_names=fields,
+        target_names=target_names,
+        norm=norm,
+        metadata={
+            "problem_type": "unsteady_sweep" if has_time else "steady_sweep"
+        },
+    )
+
+    eval_split: dict[str, Any] = {"enabled": bool(group_split)}
+    if group_split:
+        train_params_used = params_arr[train_idx]
+        geometry_ids_arr = np.asarray(group_ids) if group_ids is not None else None
+        holdout: list[dict[str, Any]] = []
+        for split_name, idx_array in (("val", val_idx), ("test", test_idx)):
+            for case_idx in idx_array.tolist():
+                sample = samples[case_idx]
+                truth = np.asarray(sample["y"], dtype=np.float64)
+                pred = np.asarray(
+                    operator.predict_case(
+                        {"mu": _mu_norm(case_idx), "coords01": sample["coords01"]}
+                    ),
+                    dtype=np.float64,
+                )
+                metrics = compute_error_field(truth.ravel(), pred.ravel())
+                query_geometry_id = (
+                    int(geometry_ids_arr[case_idx]) if geometry_ids_arr is not None else None
+                )
+                holdout.append(
+                    {
+                        "case_index": int(case_idx),
+                        "split": split_name,
+                        "query_split_class": classify_query_split(
+                            params_arr[case_idx],
+                            train_params_used,
+                            geometry_ids=(
+                                geometry_ids_arr[train_idx]
+                                if geometry_ids_arr is not None
+                                else None
+                            ),
+                            query_geometry_id=query_geometry_id,
+                        ),
+                        "rel_l2": float(metrics["rel_l2"]),
+                        "rmse": float(metrics["rmse"]),
+                        "max_error": float(metrics["max_error"]),
+                    }
+                )
+        val_scores = [h["rel_l2"] for h in holdout if h["split"] == "val"]
+        test_scores = [h["rel_l2"] for h in holdout if h["split"] == "test"]
+        eval_split.update(
+            {
+                "train_idx": train_idx.tolist(),
+                "val_idx": val_idx.tolist(),
+                "test_idx": test_idx.tolist(),
+                "holdout": holdout,
+                "val_rel_l2_mean": float(np.mean(val_scores)) if val_scores else None,
+                "test_rel_l2_mean": float(np.mean(test_scores)) if test_scores else None,
+            }
+        )
+
+    meta = engine.training_metadata
+    return {
+        "engine": engine,
+        "field": ",".join(fields),
+        "fields": list(fields),
+        "n_cases": len(cases),
+        "param_names": names,
+        "param_mins": list(meta["param_mins"]),
+        "param_maxs": list(meta["param_maxs"]),
+        "target_names": target_names,
+        "eval_split": eval_split,
+        "train_loss": (
+            float(operator.train_losses_[-1]) if operator.train_losses_ else float("nan")
+        ),
+    }
+
+
 def build_transolver_twin_from_cases(
     datasets: Sequence[CFDDataset],
     field: str | Sequence[str],

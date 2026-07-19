@@ -225,6 +225,25 @@ STRATEGIES: tuple[StrategySpec, ...] = (
         "케이스 3개 이상, 소수 케이스는 정성적.",
         tier="experimental",
     ),
+    StrategySpec(
+        key="deeponet",
+        name="DeepONet (분기-줄기 연산자)",
+        # operator 전략의 3번째 backend(builtin/neuralop GeometryFNO 다음) —
+        # SDF 채널 공통 격자 텐서화가 없다. branch=운전조건 μ, trunk=케이스
+        # 쿼리 좌표 두 MLP 만 쓰는 순수 데이터 지도학습(PDE 잔차 없음)이라
+        # 동일/균일 격자 제약이 없고, 재샘플도 없다 — mesh_gnn/gino 와 같은
+        # 판정 구조.
+        needs_identical_mesh=False,
+        needs_uniform_grid=False,
+        supports_case_sets=True,  # 정상 스윕 전용 — DeepONetCaseSetOperator
+        supports_time_in_sweep=True,
+        single_case_needs_steps=2,
+        min_snapshots=3,
+        note="분기(branch)=운전조건 μ, 줄기(trunk)=쿼리 좌표 두 MLP 로 "
+        "학습 — 공통 격자 재샘플이 아예 없고 임의 좌표에서 예측 가능. "
+        "케이스 3개 이상, 소수 케이스는 정성적.",
+        tier="experimental",
+    ),
 )
 
 
@@ -398,6 +417,16 @@ def _check(spec: StrategySpec, p: DataProfile) -> tuple[bool, str]:
                     "필요합니다."
                 )
             return True, spec.note
+        if spec.key == "deeponet":
+            # DeepONet(operator 전략 3번째 backend): branch=μ, trunk=쿼리
+            # 좌표만 쓰므로 mesh_gnn/gino 와 같은 판정 구조 — 동일/균일 격자
+            # 제약 없음.
+            if p.n_cases < 3:
+                return False, (
+                    f"케이스 {p.n_cases}개 — DeepONet 학습에는 최소 3개가 "
+                    "필요합니다."
+                )
+            return True, spec.note
         if spec.needs_identical_mesh and not p.identical_mesh:
             return False, (
                 "케이스마다 격자가 달라 불가 — 동일 격자가 필요합니다. "
@@ -440,6 +469,11 @@ def _check(spec: StrategySpec, p: DataProfile) -> tuple[bool, str]:
         if spec.key == "transolver":
             return False, (
                 "Transolver 는 케이스 세트(정상 파라미터 스윕) 전용입니다 — "
+                "케이스 폴더나 데모 케이스 세트를 로드하세요."
+            )
+        if spec.key == "deeponet":
+            return False, (
+                "DeepONet 은 케이스 세트(정상 파라미터 스윕) 전용입니다 — "
                 "케이스 폴더나 데모 케이스 세트를 로드하세요."
             )
 
