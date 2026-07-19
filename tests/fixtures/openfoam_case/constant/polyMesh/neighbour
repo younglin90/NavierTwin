@@ -1,0 +1,10 @@
+FoamFile
+{
+    format ascii;
+    class labelList;
+    location "constant/polyMesh";
+    object neighbour;
+}
+0
+(
+)

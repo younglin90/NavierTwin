@@ -414,6 +414,26 @@ def test_load_project_roundtrip(tmp_path, demo) -> None:
     assert pred.shape[0] == demo.n_points
 
 
+def test_project_bundle_roundtrips_canonical_manifest(tmp_path, demo) -> None:
+    from naviertwin.core.data_model import TwinWorkspace
+
+    workspace = TwinWorkspace()
+    project = workspace.load_single_dataset(demo, name="bundle-test")
+    snap = service.snapshot_dataset(demo, 0)
+
+    paths = service.save_project(
+        snap,
+        tmp_path / "bundle.ntwin",
+        canonical_project=project,
+    )
+    dataset, engine, restored_project = service.load_project_bundle(paths["project"])
+
+    assert dataset.n_points == demo.n_points
+    assert engine is None
+    assert restored_project == project
+    assert paths["manifest"].endswith(".manifest.json")
+
+
 def test_load_project_without_engine(tmp_path, demo) -> None:
     paths = service.save_project(service.snapshot_dataset(demo, 0), tmp_path / "p2.ntwin")
     _, engine = service.load_project(paths["project"])

@@ -1,4 +1,4 @@
-"""형상 가변 케이스 세트 → 공통 격자 텐서 변환 (GeometryFNO2D 입력 준비).
+"""형상 가변 케이스 세트 → 공통 1D/2D/3D 격자 텐서 변환.
 
 케이스마다 메쉬(형상)가 다른 정상 케이스 세트를 **하나의 공통 균일 격자** 위
 (N, H, W, C) 텐서로 바꾼다. 형상은 부호거리(SDF)·유체 마스크 채널로, 운전조건
@@ -106,7 +106,7 @@ def cases_to_grid_tensors(
     *,
     param_names: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """형상 가변 케이스들을 공통 균일 격자 위 (N, H, W, C) 텐서로 바꾼다.
+    """형상 가변 케이스들을 공통 균일 격자 위 채널-last 텐서로 바꾼다.
 
     입력 채널 순서는 ``[sdf, mask, μ_1, ..., μ_k]`` 로 고정된다:
 
@@ -127,8 +127,6 @@ def cases_to_grid_tensors(
     유효셀 지시자(유체/실데이터=1, 0-채움=0)로, :meth:`~naviertwin.core.
     operator_learning.fno.geometry_fno.GeometryFNO2D.fit` 의 ``sample_masks`` 로
     그대로 넘겨 마스킹 손실을 켜는 용도다.
-
-    현재 2D 전용이다 — 격자에 두께 0 축이 정확히 하나 있어야 한다.
 
     Args:
         datasets: 케이스 목록. ``mesh`` 속성을 가진 CFDDataset 또는 pyvista
@@ -155,7 +153,7 @@ def cases_to_grid_tensors(
 
     Raises:
         ValueError: 케이스가 없거나, 파라미터 개수가 케이스 수와 다르거나,
-            격자가 2D(두께 0 축 정확히 하나)가 아니거나, 필드가 없는 경우.
+            공간 차원이 1/2/3이 아니거나, 필드가 없는 경우.
     """
     from scipy.ndimage import distance_transform_edt
 
@@ -197,33 +195,30 @@ def cases_to_grid_tensors(
     spacing = [float(s) for s in grid.spacing]
 
     flat_axes = [i for i, d in enumerate(dims) if d == 1]
-    if len(flat_axes) != 1:
+    spatial_dimension = 3 - len(flat_axes)
+    if spatial_dimension not in (1, 2, 3):
         raise ValueError(
-            "현재 2D 케이스만 지원합니다 — 두께 0 축이 정확히 하나여야 합니다. "
-            f"격자 dims={tuple(dims)} (두께 0 축 {len(flat_axes)}개)."
+            f"공간 차원은 1/2/3 이어야 합니다: dims={tuple(dims)}"
         )
-    flat_axis = flat_axes[0]
-    # VTK point 순서는 (z, y, x) — reshape 후 두께 0 축을 squeeze 하면 (H, W).
+    # VTK point 순서는 (z, y, x). 길이 1인 축을 제거해 실제 공간 텐서를 만든다.
     reversed_dims = tuple(reversed(dims))
-    squeeze_axis = 2 - flat_axis
-    hw = tuple(d for i, d in enumerate(reversed_dims) if i != squeeze_axis)
-    height, width = int(hw[0]), int(hw[1])
+    squeeze_axes = tuple(index for index, size in enumerate(reversed_dims) if size == 1)
+    spatial_shape = tuple(int(size) for size in reversed_dims if size > 1)
 
-    def to_hw(flat: NDArray[np.float64]) -> NDArray[np.float64]:
-        return flat.reshape(reversed_dims).squeeze(axis=squeeze_axis)
+    def to_spatial(flat: NDArray[np.float64]) -> NDArray[np.float64]:
+        shaped = flat.reshape(reversed_dims)
+        return shaped.squeeze(axis=squeeze_axes) if squeeze_axes else shaped
 
     # EDT 는 격자 인덱스 공간에서 계산 → 축별 물리 간격으로 환산.
     # 배열이 (z, y, x) 순서이므로 spacing 도 뒤집는다 (web/service 와 동일).
     edt_sampling = list(reversed(spacing))
 
-    inputs = np.zeros(
-        (n_cases, height, width, 2 + n_params), dtype=np.float32
-    )
+    inputs = np.zeros((n_cases, *spatial_shape, 2 + n_params), dtype=np.float32)
     target_names: list[str] | None = None
     targets_list: list[NDArray[np.float32]] = []
     # 유효셀 마스크 (N, H, W) — mask 입력 채널과 같은 vtkValidPointMask 파생.
     # 손실에서 0-채움 영역을 제외하는 sample_masks 용도로 함께 반환한다.
-    valid_masks = np.zeros((n_cases, height, width), dtype=np.float32)
+    valid_masks = np.zeros((n_cases, *spatial_shape), dtype=np.float32)
 
     for i, mesh in enumerate(meshes):
         sampled = grid.sample(mesh)
@@ -237,13 +232,13 @@ def cases_to_grid_tensors(
         d_solid = distance_transform_edt(1.0 - shaped, sampling=edt_sampling)
         sdf = (np.asarray(d_fluid) - np.asarray(d_solid)).reshape(-1)
 
-        inputs[i, :, :, 0] = to_hw(sdf).astype(np.float32)
-        mask_hw = to_hw(mask).astype(np.float32)
-        inputs[i, :, :, 1] = mask_hw
+        inputs[i, ..., 0] = to_spatial(sdf).astype(np.float32)
+        mask_spatial = to_spatial(mask).astype(np.float32)
+        inputs[i, ..., 1] = mask_spatial
         # valid_mask 는 mask 입력 채널과 정확히 같은 배열 — 손실 마스킹 재사용.
-        valid_masks[i] = mask_hw
+        valid_masks[i] = mask_spatial
         for j in range(n_params):
-            inputs[i, :, :, 2 + j] = np.float32(mu[i, j])
+            inputs[i, ..., 2 + j] = np.float32(mu[i, j])
 
         case_channels: list[NDArray[np.float32]] = []
         case_names: list[str] = []
@@ -251,7 +246,7 @@ def cases_to_grid_tensors(
             for channel_name, flat_values in _field_channels(sampled, name):
                 # 고체 내부는 0 — sample 기본값이지만 마스크로 확정한다.
                 zeroed = flat_values * mask
-                case_channels.append(to_hw(zeroed).astype(np.float32))
+                case_channels.append(to_spatial(zeroed).astype(np.float32))
                 case_names.append(channel_name)
         if target_names is None:
             target_names = case_names
@@ -280,8 +275,11 @@ def cases_to_grid_tensors(
             "dims": tuple(dims),
             "spacing": tuple(spacing),
             "origin": tuple(float(o) for o in grid.origin),
-            "flat_axis": int(flat_axis),
-            "hw": (height, width),
+            "flat_axes": tuple(int(axis) for axis in flat_axes),
+            "flat_axis": int(flat_axes[0]) if len(flat_axes) == 1 else None,
+            "spatial_dimension": int(spatial_dimension),
+            "spatial_shape": spatial_shape,
+            "hw": spatial_shape if spatial_dimension == 2 else None,
             "resolution": int(resolution),
             "n_cases": int(n_cases),
             "grid_summary": summary,

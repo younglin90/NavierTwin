@@ -1,19 +1,18 @@
 // NavierTwin 데스크톱 셸 (Electron).
 //
-// WSL(Linux) 안에서 실행되어 WSLg 로 Windows 데스크톱에 창을 띄운다. trame 웹
-// 서버(python -m naviertwin.main web)를 자식 프로세스로 기동하고, 준비되면
-// 메인 창에 로드한다. 종료 시 서버를 정리한다.
-//
-// 미래 Windows-native 빌드를 위해 서버 기동은 launchServer(mode) 로 분리했다:
-//   - 'local'(현재): electron 이 WSL 안 → python3 직접 spawn
-//   - 'wsl'(스텁): electron 이 Windows → wsl.exe 경유 spawn (주석 참고)
+// Linux 에서는 Python 서버를 직접 실행한다. Windows 에서는 wsl.exe 로 같은
+// Linux 서버를 실행한다. 준비되면 메인 창에 로드하고 종료 시 자식을 정리한다.
 
 const { app, BrowserWindow, dialog } = require("electron");
 const { spawn } = require("child_process");
-const http = require("http");
-const net = require("net");
 const path = require("path");
 const fs = require("fs");
+const {
+  findFreePort,
+  stopChildProcess,
+  waitForServer,
+} = require("./server-process");
+const { resolveServerLaunch } = require("./server-launch");
 
 const REPO_ROOT = path.resolve(__dirname, "..");
 const DEFAULT_PORT = 8877;
@@ -40,79 +39,15 @@ let serverPort = DEFAULT_PORT;
 let mainWindow = null;
 let splashWindow = null;
 
-// ── 포트 ────────────────────────────────────────────────────────────
-function isPortFree(port) {
-  return new Promise((resolve) => {
-    const srv = net.createServer();
-    srv.once("error", () => resolve(false));
-    srv.once("listening", () => srv.close(() => resolve(true)));
-    srv.listen(port, "127.0.0.1");
-  });
-}
-
-async function findFreePort(start) {
-  for (let p = start; p < start + 100; p += 1) {
-    // eslint-disable-next-line no-await-in-loop
-    if (await isPortFree(p)) return p;
-  }
-  throw new Error("사용 가능한 포트를 찾지 못했습니다.");
-}
-
 // ── 서버 기동 ───────────────────────────────────────────────────────
-function launchServer(mode, port) {
-  const args = [
-    "-m",
-    "naviertwin.main",
-    "web",
-    "--host",
-    "127.0.0.1",
-    "--port",
-    String(port),
-    "--no-browser",
-  ];
-  const env = {
-    ...process.env,
-    QT_QPA_PLATFORM: "offscreen",
-    PYVISTA_OFF_SCREEN: "true",
-    PYTHONPATH: "src",
-  };
-  if (mode === "wsl") {
-    // Windows-native 빌드용 스텁: electron 이 Windows 에서 돌 때.
-    //   return spawn("wsl", ["-d", "ubuntu", "--", "bash", "-lc",
-    //     `cd ~/work/claude_code/NavierTwin && QT_QPA_PLATFORM=offscreen ` +
-    //     `PYVISTA_OFF_SCREEN=true PYTHONPATH=src python3 ${args.join(" ")}`]);
-    throw new Error("wsl 모드는 아직 구현되지 않았습니다 (현재 local 전용).");
-  }
-  return spawn("python3", args, { cwd: REPO_ROOT, env });
-}
-
-// ── 헬스 체크 ───────────────────────────────────────────────────────
-function checkHealth(port) {
-  return new Promise((resolve) => {
-    const req = http.get(
-      { host: "127.0.0.1", port, path: "/index.html", timeout: 800 },
-      (res) => {
-        res.resume();
-        resolve(res.statusCode === 200);
-      }
-    );
-    req.on("error", () => resolve(false));
-    req.on("timeout", () => {
-      req.destroy();
-      resolve(false);
-    });
+function launchServer(port) {
+  const launch = resolveServerLaunch({
+    platform: process.platform,
+    repoRoot: REPO_ROOT,
+    port,
+    env: process.env,
   });
-}
-
-async function waitForServer(port, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    // eslint-disable-next-line no-await-in-loop
-    if (await checkHealth(port)) return true;
-    // eslint-disable-next-line no-await-in-loop
-    await new Promise((r) => setTimeout(r, 500));
-  }
-  return false;
+  return spawn(launch.command, launch.args, launch.options);
 }
 
 // ── 창 ──────────────────────────────────────────────────────────────
@@ -193,26 +128,7 @@ function runSmoke(port) {
 
 // ── 정리 ────────────────────────────────────────────────────────────
 function stopServer() {
-  if (serverProc && !serverProc.killed) {
-    try {
-      serverProc.kill("SIGTERM");
-    } catch (e) {
-      /* ignore */
-    }
-    // 2초 후에도 살아있으면 강제 종료 + 안전망(pkill).
-    setTimeout(() => {
-      try {
-        if (serverProc && !serverProc.killed) serverProc.kill("SIGKILL");
-      } catch (e) {
-        /* ignore */
-      }
-      try {
-        spawn("pkill", ["-f", "naviertwin.main web"]);
-      } catch (e) {
-        /* ignore */
-      }
-    }, 2000);
-  }
+  stopChildProcess(serverProc, { timeoutMs: 2000 });
 }
 
 // ── 부트스트랩 ──────────────────────────────────────────────────────
@@ -230,7 +146,14 @@ async function bootstrap() {
 
   if (!SMOKE) createSplash();
 
-  serverProc = launchServer("local", serverPort);
+  try {
+    serverProc = launchServer(serverPort);
+  } catch (error) {
+    if (splashWindow) splashWindow.close();
+    dialog.showErrorBox("서버 설정 오류", error.message);
+    app.quit();
+    return;
+  }
   const logPath = path.join(__dirname, "server.log");
   const logStream = fs.createWriteStream(logPath, { flags: "w" });
   if (serverProc.stdout) serverProc.stdout.pipe(logStream);

@@ -47,6 +47,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from naviertwin.utils.json_safe import safe_dumps
 from naviertwin.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -162,6 +163,7 @@ class NTwinWriter:
 
         # 필드 데이터 저장
         point_data_grp = self._h5["VTKHDF/PointData"]
+        cell_data_grp = self._h5["VTKHDF/CellData"]
         compression_kwargs: dict[str, Any] = {}
         if compression:
             compression_kwargs["compression"] = compression
@@ -171,10 +173,12 @@ class NTwinWriter:
             arr: Any = None
             if hasattr(mesh, "point_data") and name in mesh.point_data:
                 arr = np.asarray(mesh.point_data[name], dtype=np.float32)
+                target_group = point_data_grp
             elif hasattr(mesh, "cell_data") and name in mesh.cell_data:
                 arr = np.asarray(mesh.cell_data[name], dtype=np.float32)
+                target_group = cell_data_grp
             if arr is not None:
-                point_data_grp.create_dataset(name, data=arr, **compression_kwargs)
+                target_group.create_dataset(name, data=arr, **compression_kwargs)
             field_idx += 1
 
         # NumberOfPoints/Cells
@@ -216,6 +220,7 @@ class NTwinWriter:
 
         vtk_grp = self._h5["VTKHDF"]
         point_data_grp = self._h5["VTKHDF/PointData"]
+        cell_data_grp = self._h5["VTKHDF/CellData"]
 
         n_pts = int(mesh.n_points) if hasattr(mesh, "n_points") else 0
         n_cls = int(mesh.n_cells) if hasattr(mesh, "n_cells") else 0
@@ -260,6 +265,22 @@ class NTwinWriter:
                     )
                 point_idx += 1
 
+        if hasattr(mesh, "cell_data"):
+            cell_items = list(mesh.cell_data.items())
+            cell_idx = 0
+            while cell_idx < len(cell_items):
+                name, arr_raw = cell_items[cell_idx]
+                arr = np.asarray(arr_raw, dtype=np.float32)
+                if name in cell_data_grp:
+                    ds = cell_data_grp[name]
+                    old_len = ds.shape[0]
+                    ds.resize(old_len + arr.shape[0], axis=0)
+                    ds[old_len:] = arr
+                else:
+                    maxshape = (None,) + arr.shape[1:]
+                    cell_data_grp.create_dataset(name, data=arr, maxshape=maxshape)
+                cell_idx += 1
+
         # NavierTwin 메타데이터 업데이트
         nt_grp = self._h5.require_group("NavierTwin")
         if "time_steps" in nt_grp:
@@ -275,6 +296,21 @@ class NTwinWriter:
             )
 
         logger.debug("append_snapshot: t=%.6f, n_pts=%d", time_value, n_pts)
+
+    def write_project_manifest(self, project: Any) -> None:
+        """Embed a validated canonical project manifest in this container."""
+
+        from naviertwin.core.data_model import TwinProject, project_from_dict
+
+        if not isinstance(project, TwinProject):
+            raise TypeError("project must be a TwinProject")
+        payload = project.to_dict()
+        project_from_dict(payload)
+        encoded = safe_dumps(payload, sort_keys=True)
+        group = self._h5.require_group("NavierTwin")
+        if "project_manifest" in group:
+            del group["project_manifest"]
+        group.create_dataset("project_manifest", data=encoded)
 
     def close(self) -> None:
         """HDF5 파일을 닫는다."""
@@ -306,6 +342,7 @@ class NTwinWriter:
         vtk_grp.attrs["Version"] = list(_VTKHDF_VERSION)
         vtk_grp.attrs["Type"] = "UnstructuredGrid"
         vtk_grp.require_group("PointData")
+        vtk_grp.require_group("CellData")
         self._initialized = True
 
     def _write_topology(self, mesh: Any) -> None:
@@ -438,9 +475,25 @@ class NTwinReader:
             "source_file": str(self._path),
             "reader": "NTwinReader",
         }
-        time_series_fields = self._read_time_series_point_data(ts, fn)
+        time_series_fields = self._read_time_series_data(
+            ts,
+            fn,
+            group_name="PointData",
+            count_name="NumberOfPoints",
+        )
+        cell_series = self._read_time_series_data(
+            ts,
+            fn,
+            group_name="CellData",
+            count_name="NumberOfCells",
+        )
+        time_series_fields.update(cell_series)
         if time_series_fields:
             metadata["time_series_fields"] = time_series_fields
+            metadata["time_series_locations"] = {
+                name: "cell" if name in cell_series else "point"
+                for name in time_series_fields
+            }
 
         logger.info(
             "read 완료: %d 타임스텝, 필드=%s", len(ts), fn
@@ -451,6 +504,21 @@ class NTwinReader:
             field_names=fn,
             metadata=metadata,
         )
+
+    def read_project_manifest(self) -> Any | None:
+        """Return the embedded canonical project, if this file contains one."""
+
+        if "NavierTwin/project_manifest" not in self._h5:
+            return None
+        raw = self._h5["NavierTwin/project_manifest"][()]
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8")
+        payload = json.loads(str(raw))
+        if not isinstance(payload, dict):
+            raise ValueError("embedded project manifest root must be an object")
+        from naviertwin.core.data_model import project_from_dict
+
+        return project_from_dict(payload)
 
     def read_timestep(self, t_idx: int) -> Any:
         """특정 타임스텝 인덱스의 메쉬를 로드한다.
@@ -477,6 +545,9 @@ class NTwinReader:
 
         vtk_grp = self._h5["VTKHDF"]
         offset, count = self._resolve_timestep_slice(vtk_grp, t_idx, len(ts))
+        cell_offset, cell_count = self._resolve_count_slice(
+            vtk_grp, "NumberOfCells", t_idx, len(ts)
+        )
 
         # Points
         if "Points" in vtk_grp:
@@ -522,47 +593,69 @@ class NTwinReader:
                     mesh.point_data[name] = arr[offset : offset + count]
                 field_idx += 1
 
+        if "CellData" in vtk_grp:
+            cd_grp = vtk_grp["CellData"]
+            for name in self.field_names:
+                if name not in cd_grp:
+                    continue
+                arr = np.asarray(cd_grp[name])
+                if arr.ndim == 0:
+                    mesh.cell_data[name] = arr
+                    continue
+                if arr.shape[0] < cell_offset + cell_count:
+                    raise ValueError(
+                        "CellData 길이가 타임스텝 슬라이스 범위를 충족하지 않습니다: "
+                        f"field={name}, len={arr.shape[0]}, "
+                        f"need={cell_offset + cell_count}"
+                    )
+                mesh.cell_data[name] = arr[cell_offset : cell_offset + cell_count]
+
         logger.debug("read_timestep t_idx=%d 완료", t_idx)
         return mesh
 
-    def _read_time_series_point_data(
-        self, time_steps: list[float], field_names: list[str]
+    def _read_time_series_data(
+        self,
+        time_steps: list[float],
+        field_names: list[str],
+        *,
+        group_name: str,
+        count_name: str,
     ) -> dict[str, Any]:
-        """read() 시 사용할 multi-timestep PointData 배열을 읽는다."""
+        """Read concatenated point or cell arrays from appended snapshots."""
         np = _require_numpy()
 
         if "VTKHDF" not in self._h5:
             return {}
         vtk_grp = self._h5["VTKHDF"]
-        if "PointData" not in vtk_grp or "NumberOfPoints" not in vtk_grp:
+        if group_name not in vtk_grp or count_name not in vtk_grp:
             return {}
 
-        counts = np.asarray(vtk_grp["NumberOfPoints"], dtype=np.int64).reshape(-1)
+        counts = np.asarray(vtk_grp[count_name], dtype=np.int64).reshape(-1)
         if counts.size != len(time_steps) or counts.size <= 1:
             return {}
 
-        total_points = int(counts.sum())
-        if total_points <= 0:
+        total_count = int(counts.sum())
+        if total_count <= 0:
             return {}
 
         result: dict[str, Any] = {}
-        pd_grp = vtk_grp["PointData"]
+        data_group = vtk_grp[group_name]
         field_idx = 0
         while field_idx < len(field_names):
             name = field_names[field_idx]
-            if name not in pd_grp:
+            if name not in data_group:
                 field_idx += 1
                 continue
-            arr = np.asarray(pd_grp[name])
+            arr = np.asarray(data_group[name])
             if arr.ndim == 0:
                 field_idx += 1
                 continue
-            if arr.shape[0] < total_points:
+            if arr.shape[0] < total_count:
                 raise ValueError(
-                    "PointData 길이가 multi-timestep 전체 길이를 충족하지 않습니다: "
-                    f"field={name}, len={arr.shape[0]}, need={total_points}"
+                    f"{group_name} 길이가 multi-timestep 전체 길이를 충족하지 않습니다: "
+                    f"field={name}, len={arr.shape[0]}, need={total_count}"
                 )
-            result[name] = arr[:total_points]
+            result[name] = arr[:total_count]
             field_idx += 1
         return result
 
@@ -570,21 +663,33 @@ class NTwinReader:
         self, vtk_grp: Any, t_idx: int, n_time_steps: int
     ) -> tuple[int, int]:
         """타임스텝별 PointData 슬라이스(offset, count)를 계산한다."""
+        return self._resolve_count_slice(
+            vtk_grp, "NumberOfPoints", t_idx, n_time_steps
+        )
+
+    def _resolve_count_slice(
+        self,
+        vtk_grp: Any,
+        count_name: str,
+        t_idx: int,
+        n_time_steps: int,
+    ) -> tuple[int, int]:
+        """Resolve one appended array slice from its per-step counts."""
         np = _require_numpy()
 
-        if "NumberOfPoints" not in vtk_grp:
-            raise ValueError("NumberOfPoints 메타데이터가 없습니다.")
+        if count_name not in vtk_grp:
+            raise ValueError(f"{count_name} 메타데이터가 없습니다.")
 
-        counts = np.asarray(vtk_grp["NumberOfPoints"], dtype=np.int64).reshape(-1)
+        counts = np.asarray(vtk_grp[count_name], dtype=np.int64).reshape(-1)
         if counts.size == 0:
-            raise ValueError("NumberOfPoints 메타데이터가 비어 있습니다.")
+            raise ValueError(f"{count_name} 메타데이터가 비어 있습니다.")
 
         if counts.size == 1:
             return 0, int(counts[0])
 
         if counts.size != n_time_steps:
             raise ValueError(
-                "NumberOfPoints 길이와 time_steps 길이가 일치하지 않습니다: "
+                f"{count_name} 길이와 time_steps 길이가 일치하지 않습니다: "
                 f"{counts.size} != {n_time_steps}"
             )
 
@@ -625,14 +730,16 @@ class NTwinReader:
                 return parsed
             raise TypeError("field_names must be list[str]")
         except (KeyError, json.JSONDecodeError, AttributeError):
-            # PointData 그룹에서 직접 수집
-            if "VTKHDF/PointData" in self._h5:
-                return sorted(self._h5["VTKHDF/PointData"].keys())
-            return []
+            return self._stored_field_names()
         except TypeError:
-            if "VTKHDF/PointData" in self._h5:
-                return sorted(self._h5["VTKHDF/PointData"].keys())
-            return []
+            return self._stored_field_names()
+
+    def _stored_field_names(self) -> list[str]:
+        names: set[str] = set()
+        for group_name in ("VTKHDF/PointData", "VTKHDF/CellData"):
+            if group_name in self._h5:
+                names.update(str(name) for name in self._h5[group_name].keys())
+        return sorted(names)
 
     def close(self) -> None:
         """HDF5 파일을 닫는다."""
@@ -655,7 +762,11 @@ class NTwinReader:
 
 
 def save_dataset(
-    dataset: Any, path: Path, compression: str | None = None
+    dataset: Any,
+    path: Path,
+    compression: str | None = None,
+    *,
+    canonical_project: Any = None,
 ) -> None:
     """CFDDataset 을 .ntwin 파일로 저장하는 편의 함수.
 
@@ -669,6 +780,8 @@ def save_dataset(
     """
     with NTwinWriter(Path(path)) as writer:
         writer.write_dataset(dataset, compression=compression)
+        if canonical_project is not None:
+            writer.write_project_manifest(canonical_project)
     logger.info("save_dataset 완료: %s", path)
 
 
@@ -689,6 +802,13 @@ def load_dataset(path: Path) -> Any:
         dataset = reader.read()
     logger.info("load_dataset 완료: %s", path)
     return dataset
+
+
+def load_embedded_project_manifest(path: Path) -> Any | None:
+    """Load a canonical project stored inside a ``.ntwin`` container."""
+
+    with NTwinReader(Path(path)) as reader:
+        return reader.read_project_manifest()
 
 
 # ---------------------------------------------------------------------------

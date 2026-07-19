@@ -35,6 +35,8 @@ def test_state_and_controller_wired() -> None:
         "nt_method",
         "nt_twin_param",
         "nt_has_dataset",
+        "nt_scale_summary",
+        "nt_sensor_summary",
     ]:
         assert hasattr(st, key), f"missing state key: {key}"
     for cb in [
@@ -45,8 +47,29 @@ def test_state_and_controller_wired() -> None:
         "nt_build_twin",
         "nt_predict",
         "nt_reset_view",
+        "nt_plan_scale",
+        "nt_sensor_push",
+        "nt_sensor_align",
     ]:
         assert callable(getattr(app.ctrl, cb, None)), f"missing controller: {cb}"
+
+
+def test_operation_scale_plan_and_sensor_alignment() -> None:
+    app = _make_app("nt-test-operation")
+    st = app.server.state
+
+    app.plan_large_workload()
+    assert "point chunk" in st.nt_scale_summary
+    assert st.nt_error == ""
+
+    st.nt_sensor_id = "p1"
+    st.nt_sensor_ids = "p1"
+    st.nt_sensor_timestamp = 2.5
+    st.nt_sensor_values = "101325.0"
+    app.push_sensor_sample()
+    app.align_sensor_samples()
+    assert st.nt_sensor_summary.startswith("READY")
+    assert "101325" in st.nt_sensor_summary
 
 
 def test_load_demo_populates_state() -> None:
@@ -163,6 +186,33 @@ def test_build_twin_dispatches_by_model_method() -> None:
     st.nt_model_method = "operator"
     app.build_twin()
     assert "연산자 랩" in st.nt_error
+
+
+@pytest.mark.asyncio
+async def test_managed_training_job_writes_and_restores_checkpoint() -> None:
+    from pathlib import Path
+
+    app = _make_app("nt-test-managed-training")
+    st = app.server.state
+    app.load_demo()
+    st.nt_model_method = "rom"
+    st.nt_n_modes = 3
+
+    await app._train_job_async()
+
+    assert st.nt_training_state == "completed"
+    assert st.nt_training_cancelable is False
+    assert st.nt_training_preflight
+    assert Path(st.nt_training_checkpoint).exists()
+    assert app.engine is not None
+
+    app.engine = None
+    st.nt_model_ready = False
+    app.restore_training_checkpoint()
+    assert st.nt_error == ""
+    assert app.engine is not None
+    assert st.nt_model_ready is True
+    app._training_jobs.shutdown()
 
 
 def test_physics_multi_output_train_and_predict() -> None:
@@ -347,9 +397,11 @@ def test_load_project_via_callback(tmp_path) -> None:
     st = app.server.state
     app.load_demo()
     app.build_twin()
+    original_project_id = app.workspace.project.project_id
     st.nt_export_dir = str(tmp_path)
     app.export_project()
     ntwin = next(f for f in os.listdir(tmp_path) if f.endswith(".ntwin"))
+    assert list(tmp_path.glob("*.manifest.json"))
 
     # 엔진/트윈 상태를 비우고 프로젝트 열기로 복원.
     app.engine = None
@@ -361,6 +413,8 @@ def test_load_project_via_callback(tmp_path) -> None:
     assert st.nt_twin_ready is True
     assert st.nt_model_ready is True
     assert app.engine is not None
+    assert app.workspace.project.project_id == original_project_id
+    assert st.nt_project_id == original_project_id
     # 예측 슬라이더 범위는 metadata 의 학습 범위 — 단일 스냅샷 fallback([t, t+1])
     # 으로 외삽 범위가 되면 안 된다. 데모 학습 범위는 t∈[0, 2].
     assert st.nt_twin_min == pytest.approx(0.0)

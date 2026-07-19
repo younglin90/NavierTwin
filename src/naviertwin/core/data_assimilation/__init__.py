@@ -21,6 +21,13 @@ _EXPORT_MODULES = {
     "run_filter": "naviertwin.core.data_assimilation.kalman",
     "smooth_particles": "naviertwin.core.data_assimilation.particle_smoother",
     "ukf_step": "naviertwin.core.data_assimilation.ukf",
+    "AlignedObservation": "naviertwin.core.data_assimilation.streaming",
+    "OnlineAssimilationScheduler": "naviertwin.core.data_assimilation.streaming",
+    "SensorBuffer": "naviertwin.core.data_assimilation.streaming",
+    "SensorQuality": "naviertwin.core.data_assimilation.streaming",
+    "SensorSample": "naviertwin.core.data_assimilation.streaming",
+    "TimeAlignmentPolicy": "naviertwin.core.data_assimilation.streaming",
+    "align_observations": "naviertwin.core.data_assimilation.streaming",
 }
 
 __all__ = list(_EXPORT_MODULES)

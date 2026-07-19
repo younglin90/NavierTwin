@@ -323,7 +323,7 @@ def test_neuralop_wrapper_validates_shapes() -> None:
     from naviertwin.core.operator_learning.fno.neuralop_fno import NeuralOpFNO
 
     with pytest.raises(ValueError, match="n_dim"):
-        NeuralOpFNO(n_dim=3)
+        NeuralOpFNO(n_dim=4)
     op = NeuralOpFNO(in_channels=1, out_channels=1, modes=4, width=8, n_dim=1,
                      max_epochs=1)
     with pytest.raises(ValueError, match="3D"):

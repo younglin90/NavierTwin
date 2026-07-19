@@ -94,6 +94,8 @@ def test_main_window_open_selected_ntwin_routes_to_project_loader(
     assert win._open_selected_path(path) is True
 
     assert win._latest_dataset is not None
+    assert win.workspace.project is not None
+    assert win.workspace.view_dataset is win._latest_dataset
     assert win._export_panel._dataset is not None
     assert win._export_panel._path_edit.text() == str(path)
     assert win._import_panel._path_edit.text() == ""

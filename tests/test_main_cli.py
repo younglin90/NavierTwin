@@ -371,6 +371,63 @@ class TestRunServer:
         code = _run_server("127.0.0.1", 8000)
         assert code == 1
 
+    def test_run_server_rejects_partial_tls_configuration(self, tmp_path) -> None:
+        from naviertwin.main import _run_server
+
+        certificate = tmp_path / "server.crt"
+        certificate.write_text("certificate", encoding="utf-8")
+        assert _run_server(
+            "127.0.0.1", 8000, ssl_certfile=str(certificate)
+        ) == 2
+
+    def test_run_server_passes_tls_worker_and_proxy_contract(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        import builtins
+        from types import SimpleNamespace
+
+        from naviertwin.main import _run_server
+
+        certificate = tmp_path / "server.crt"
+        private_key = tmp_path / "server.key"
+        certificate.write_text("certificate", encoding="utf-8")
+        private_key.write_text("private-key", encoding="utf-8")
+        calls = []
+        fake_app = object()
+        fake_uvicorn = SimpleNamespace(
+            run=lambda application, **kwargs: calls.append((application, kwargs))
+        )
+        fake_server = SimpleNamespace(app=fake_app)
+        real_import = builtins.__import__
+
+        def controlled_import(name, *args, **kwargs):
+            if name == "uvicorn":
+                return fake_uvicorn
+            if name == "naviertwin.api.server":
+                return fake_server
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", controlled_import)
+
+        code = _run_server(
+            "0.0.0.0",
+            8443,
+            workers=3,
+            ssl_certfile=str(certificate),
+            ssl_keyfile=str(private_key),
+            proxy_headers=True,
+            forwarded_allow_ips="10.0.0.1",
+        )
+
+        assert code == 0
+        application, kwargs = calls[0]
+        assert application == "naviertwin.api.server:app"
+        assert kwargs["workers"] == 3
+        assert kwargs["ssl_certfile"] == str(certificate)
+        assert kwargs["ssl_keyfile"] == str(private_key)
+        assert kwargs["proxy_headers"] is True
+        assert kwargs["forwarded_allow_ips"] == "10.0.0.1"
+
 
 class TestRunPipeline:
     def test_run_pipeline_pod_kriging(self) -> None:

@@ -19,6 +19,7 @@ from naviertwin.core.operator_learning.fno.case_tensorizer import (  # noqa: E40
 )
 from naviertwin.core.operator_learning.fno.geometry_fno import (  # noqa: E402
     GeometryFNO2D,
+    GeometryFNONd,
 )
 
 _CENTER = (0.5, 0.5)
@@ -146,13 +147,32 @@ def test_tensorizer_sdf_mask_structure(tensorized) -> None:
         assert np.all(p[mask == 0.0] == 0.0)
 
 
-def test_tensorizer_rejects_3d_cases() -> None:
+def test_tensorizer_accepts_3d_cases() -> None:
     import pyvista as pv
 
     cube = pv.ImageData(dimensions=(6, 6, 6), spacing=(0.2, 0.2, 0.2))
     cube.point_data["p"] = np.zeros(cube.n_points)
-    with pytest.raises(ValueError, match="2D"):
-        cases_to_grid_tensors([cube], np.zeros((1, 1)), field_names=["p"])
+    result = cases_to_grid_tensors(
+        [cube], np.zeros((1, 1)), field_names=["p"], resolution=5
+    )
+
+    assert result["meta"]["spatial_dimension"] == 3
+    assert result["inputs"].ndim == 5
+    assert result["targets"].shape == (*result["inputs"].shape[:-1], 1)
+
+
+def test_tensorizer_accepts_1d_cases() -> None:
+    import pyvista as pv
+
+    line = pv.Line(pointa=(0.0, 0.0, 0.0), pointb=(1.0, 0.0, 0.0), resolution=8)
+    line.point_data["p"] = np.linspace(0.0, 1.0, line.n_points)
+    result = cases_to_grid_tensors(
+        [line], np.zeros((1, 0)), field_names=["p"], resolution=8
+    )
+
+    assert result["meta"]["spatial_dimension"] == 1
+    assert result["inputs"].ndim == 3
+    assert result["inputs"].shape[-1] == 2
 
 
 def test_tensorizer_rejects_missing_field_and_bad_params(tensorized) -> None:
@@ -255,6 +275,34 @@ def test_geometry_fno_validates_contract(tensorized) -> None:
     fitted.fit(inputs[_TRAIN_IDX], targets[_TRAIN_IDX])
     with pytest.raises(ValueError, match="채널"):
         fitted.predict(inputs[:, :, :, :2])
+
+
+@pytest.mark.parametrize(
+    ("dimension", "spatial_shape"),
+    [(1, (8,)), (3, (4, 4, 4))],
+)
+def test_geometry_fno_nd_neuralop_smoke(dimension: int, spatial_shape: tuple[int, ...]) -> None:
+    pytest.importorskip("neuralop")
+    rng = np.random.default_rng(dimension)
+    inputs = rng.random((2, *spatial_shape, 3), dtype=np.float32)
+    targets = rng.random((2, *spatial_shape, 1), dtype=np.float32)
+    masks = np.ones((2, *spatial_shape), dtype=np.float32)
+    model = GeometryFNONd(
+        dimension,
+        n_params=1,
+        out_channels=1,
+        modes=2,
+        width=4,
+        n_layers=1,
+        epochs=1,
+        batch_size=1,
+    )
+
+    model.fit(inputs, targets, sample_masks=masks)
+    predicted = model.predict(inputs[0])
+
+    assert predicted.shape == (*spatial_shape, 1)
+    assert np.isfinite(predicted).all()
 
 
 def test_geometry_fno_neuralop_backend(tensorized) -> None:

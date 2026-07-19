@@ -311,6 +311,28 @@ def test_ntwin_write_read_roundtrip_fields(tmp_path: Path) -> None:
     np.testing.assert_allclose(loaded_p, original_p, rtol=1e-4)
 
 
+def test_ntwin_write_read_roundtrip_cell_fields(tmp_path: Path) -> None:
+    """Cell fields keep their association and values through .ntwin."""
+    from naviertwin.core.cfd_reader.base import CFDDataset
+    from naviertwin.core.export.ntwin_format import load_dataset, save_dataset
+
+    mesh = _make_simple_ug()
+    original = np.arange(mesh.n_cells, dtype=np.float32) + 7.0
+    mesh.cell_data["cell_pressure"] = original
+    dataset = CFDDataset(
+        mesh=mesh,
+        time_steps=[0.0],
+        field_names=["cell_pressure"],
+    )
+    path = tmp_path / "cell-fields.ntwin"
+
+    save_dataset(dataset, path)
+    loaded = load_dataset(path)
+
+    assert "cell_pressure" not in loaded.mesh.point_data
+    np.testing.assert_allclose(loaded.mesh.cell_data["cell_pressure"], original)
+
+
 def test_ntwin_reader_file_not_found() -> None:
     """존재하지 않는 파일에 대해 FileNotFoundError 가 발생해야 한다."""
     from naviertwin.core.export.ntwin_format import NTwinReader

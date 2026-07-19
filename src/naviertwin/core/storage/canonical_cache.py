@@ -104,9 +104,33 @@ class CanonicalCache:
         digest.update(b"|")
         digest.update(str(resolved).encode("utf-8", errors="surrogateescape"))
         digest.update(b"|")
-        digest.update(str(stat.st_size).encode())
-        digest.update(b"|")
-        digest.update(str(stat.st_mtime_ns).encode())
+        if resolved.is_dir():
+            # A directory's own mtime does not change when existing nested CFD
+            # field files are overwritten. Fingerprint child metadata so an
+            # OpenFOAM case cannot return stale canonical data. File contents
+            # are still not read; cost is one metadata scan.
+            files = sorted(path for path in resolved.rglob("*") if path.is_file())
+            for child in files:
+                try:
+                    child_stat = child.stat()
+                except FileNotFoundError:
+                    # Transient solver output may be rotated during the scan.
+                    # The next lookup will fingerprint the settled directory.
+                    continue
+                if child.suffix.lower() in {".foam", ".openfoam"} and child_stat.st_size == 0:
+                    # PyVista marker files are generated lazily by the reader.
+                    # Ignoring empty markers keeps the first post-read lookup a hit.
+                    continue
+                digest.update(b"|")
+                digest.update(str(child.relative_to(resolved)).encode("utf-8", errors="surrogateescape"))
+                digest.update(b":")
+                digest.update(str(child_stat.st_size).encode())
+                digest.update(b":")
+                digest.update(str(child_stat.st_mtime_ns).encode())
+        else:
+            digest.update(str(stat.st_size).encode())
+            digest.update(b"|")
+            digest.update(str(stat.st_mtime_ns).encode())
         return digest.hexdigest()[:_KEY_HEX_LEN]
 
     # ── 조회/변환 ────────────────────────────────────────────────────

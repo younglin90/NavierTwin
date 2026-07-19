@@ -94,9 +94,9 @@ class GeometryFNOTwinEngine:
         params = np.asarray(train_params, dtype=np.float64)
         if params.ndim == 1:
             params = params.reshape(-1, 1)
-        if inputs.ndim != 4 or inputs.shape[0] != params.shape[0]:
+        if inputs.ndim not in (3, 4, 5) or inputs.shape[0] != params.shape[0]:
             raise ValueError(
-                f"train_inputs (N,H,W,C)={inputs.shape} 와 train_params "
+                f"train_inputs (N,*spatial,C)={inputs.shape} 와 train_params "
                 f"{params.shape} 의 케이스 수가 다릅니다."
             )
         if int(getattr(operator, "n_params", -1)) != params.shape[1]:
@@ -112,6 +112,7 @@ class GeometryFNOTwinEngine:
         self.field_names = [str(f) for f in field_names]
         self.target_names = [str(t) for t in target_names]
         self.backend = str(backend)
+        self.spatial_dimension = inputs.ndim - 2
 
         # 최근접 케이스 탐색용 정규화 스케일 (상수 파라미터는 1로 보호).
         span = params.max(axis=0) - params.min(axis=0)
@@ -127,7 +128,7 @@ class GeometryFNOTwinEngine:
         # TwinEngine 덕타이핑 (save_engine/_restore_engine 경로 호환).
         self.reducer_type = "geometry_fno"
         self.surrogate_type = f"fno_sdf({self.backend})"
-        self.model_type = "geometry_fno2d"
+        self.model_type = f"geometry_fno{self.spatial_dimension}d"
         self.n_modes = int(getattr(operator, "modes", 0))
 
         mins = [float(v) for v in params.min(axis=0)]
@@ -139,6 +140,7 @@ class GeometryFNOTwinEngine:
             "reducer": "geometry_fno",
             "surrogate": f"fno_sdf({self.backend})",
             "problem_type": "steady_sweep_operator",
+            "spatial_dimension": self.spatial_dimension,
             "param_names": list(self.param_names),
             "param_mins": mins,
             "param_maxs": maxs,
@@ -188,10 +190,10 @@ class GeometryFNOTwinEngine:
 
         mesh = grid.copy(deep=True)
         mesh.point_data["sdf"] = np.asarray(
-            inputs[0, :, :, 0], dtype=np.float64
+            inputs[0, ..., 0], dtype=np.float64
         ).ravel()
         mesh.point_data["mask"] = np.asarray(
-            inputs[0, :, :, 1], dtype=np.float64
+            inputs[0, ..., 1], dtype=np.float64
         ).ravel()
         return CFDDataset(
             mesh=mesh,
@@ -224,11 +226,11 @@ class GeometryFNOTwinEngine:
         nearest = self.nearest_case_index(mu)
         x = self._train_inputs[nearest].copy()  # sdf/mask 는 최근접 케이스 것
         for j in range(mu.size):
-            x[:, :, 2 + j] = np.float32(mu[j])
-        pred = np.asarray(self.operator.predict(x), dtype=np.float64)  # (H, W, C)
-        # 채널별 (H, W).ravel() = 공통 격자 점 순서 → field-major 로 이어붙인다.
+            x[..., 2 + j] = np.float32(mu[j])
+        pred = np.asarray(self.operator.predict(x), dtype=np.float64)
+        # 채널별 spatial.ravel() = 공통 격자 점 순서.
         return np.concatenate(
-            [pred[:, :, c].ravel() for c in range(pred.shape[-1])]
+            [pred[..., c].ravel() for c in range(pred.shape[-1])]
         )
 
     def predict(self, params: NDArray[np.float64]) -> NDArray[np.float64]:

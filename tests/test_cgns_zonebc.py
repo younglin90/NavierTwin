@@ -221,8 +221,8 @@ class TestPyCGNSTreeConnectivity:
         top = dataset.metadata["boundary_patches"]["top"]
         assert top["n_points"] == 3  # 점 7..9 (1-based)
 
-    def test_mixed_section_skipped(self) -> None:
-        """MIXED(20) 섹션은 경고 후 건너뛰고 나머지는 정상 변환되어야 한다."""
+    def test_mixed_section_loaded(self) -> None:
+        """MIXED(20) 안의 TRI_3 요소도 정상 변환되어야 한다."""
         from naviertwin.core.cfd_reader.cgns_reader import _cgns_tree_to_cfd_dataset
 
         mixed = [
@@ -242,8 +242,8 @@ class TestPyCGNSTreeConnectivity:
         dataset = _cgns_tree_to_cfd_dataset(
             _make_pycgns_tree(extra_sections=[mixed])
         )
-        # MIXED 는 무시되고 QUAD 4개만 남는다
-        assert dataset.n_cells == 4
+        assert dataset.n_cells == 6
+        assert set(np.unique(dataset.mesh.celltypes)) == {5, VTK_QUAD}
 
     def test_point_cloud_fallback_without_elements(self) -> None:
         """Elements_t 가 없으면 기존 점 구름 폴백을 유지해야 한다 (하위 호환)."""

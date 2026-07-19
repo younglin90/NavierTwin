@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (
 )
 
 from naviertwin import __version__
+from naviertwin.core.data_model import TwinWorkspace
 from naviertwin.gui.panels.analyze_panel import AnalyzePanel, analysis_result_field
 from naviertwin.gui.panels.explainability_panel import ExplainabilityPanel
 from naviertwin.gui.panels.export_panel import ExportPanel
@@ -146,6 +147,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1280, 800)
         self.resize(1440, 900)
         self._latest_dataset: object | None = None
+        self.workspace = TwinWorkspace()
         self._latest_reducer: object | None = None
         self._latest_surrogate: object | None = None
         self._latest_operator: object | None = None
@@ -882,6 +884,18 @@ class MainWindow(QMainWindow):
         self._latest_surrogate = None
         self._latest_operator = None
         self._latest_engine = None
+        metadata = getattr(dataset, "metadata", {}) or {}
+        source = str(metadata.get("source") or metadata.get("source_file") or "")
+        try:
+            self.workspace.load_single_dataset(
+                dataset,
+                name="NavierTwin desktop project",
+                source=source,
+            )
+        except Exception:  # noqa: BLE001 - legacy/third-party dataset duck types
+            # Canonical state enriches the legacy Qt path; it must not block
+            # existing panel consumers that accept lighter dataset protocols.
+            pass
         self._set_status(
             f"데이터셋 로드 완료 — {dataset.n_points} pts, "  # type: ignore[union-attr]
             f"{dataset.n_cells} cells, {dataset.n_time_steps} steps"
@@ -891,6 +905,7 @@ class MainWindow(QMainWindow):
         self._reduce_panel.set_dataset(dataset)    # type: ignore[arg-type]
         self._model_panel.set_dataset(dataset)     # type: ignore[arg-type]
         self._export_panel.set_dataset(dataset)    # type: ignore[arg-type]
+        self._export_panel.set_canonical_project(self.workspace.project)
         if self._explain_panel is not None:
             self._explain_panel.set_dataset(dataset)
         if self._postproc_panel is not None:
@@ -1078,6 +1093,7 @@ class MainWindow(QMainWindow):
                 engine = self._build_physics_ai_engine(model_type, surrogate)
                 self._latest_surrogate = surrogate
                 self._latest_engine = engine
+                self.workspace.set_engine(engine)
                 self._twin_panel.set_engine(engine)
                 self._export_panel.set_engine(engine)
                 if self._explain_panel is not None:
@@ -1098,6 +1114,7 @@ class MainWindow(QMainWindow):
                 engine = self._build_physics_ai_engine(model_type, surrogate)
                 self._latest_surrogate = surrogate
                 self._latest_engine = engine
+                self.workspace.set_engine(engine)
                 self._twin_panel.set_engine(engine)
                 self._export_panel.set_engine(engine)
                 if self._explain_panel is not None:
@@ -1130,6 +1147,7 @@ class MainWindow(QMainWindow):
             try:
                 engine = self._build_engine(self._latest_reducer, surrogate)
                 self._latest_engine = engine
+                self.workspace.set_engine(engine)
                 self._twin_panel.set_engine(engine)
                 self._export_panel.set_engine(engine)
                 self._set_status(f"모델 학습 완료 ({model_type}) — TwinEngine 연결 완료")
@@ -1161,8 +1179,33 @@ class MainWindow(QMainWindow):
         """Export 패널에서 로드한 프로젝트를 전체 워크플로우 상태로 복원한다."""
         self._on_dataset_loaded(dataset)
         load_warning = self._export_panel.last_project_load_warning()
+        project_path = self._current_project_path()
+        manifest_path = (
+            project_path.with_suffix(".manifest.json")
+            if project_path is not None
+            else None
+        )
+        if manifest_path is not None and manifest_path.exists():
+            try:
+                from naviertwin.core.data_model import load_project_manifest
+
+                canonical_project = load_project_manifest(manifest_path)
+                runtime_complete = (
+                    len(canonical_project.case_sets) == 1
+                    and len(canonical_project.case_sets[0].cases) == 1
+                )
+                self.workspace.adopt_project(
+                    canonical_project,
+                    view_dataset=dataset,
+                    engine=engine,
+                    runtime_complete=runtime_complete,
+                )
+                self._export_panel.set_canonical_project(canonical_project)
+            except Exception as exc:  # noqa: BLE001
+                load_warning = f"canonical manifest 로드 실패: {exc}"
         if engine is not None:
             self._latest_engine = engine
+            self.workspace.set_engine(engine)
             self._latest_reducer = getattr(engine, "reducer", self._latest_reducer)
             self._latest_surrogate = getattr(engine, "surrogate", self._latest_surrogate)
             if self._latest_reducer is not None:
@@ -1174,13 +1217,14 @@ class MainWindow(QMainWindow):
             self._set_status("프로젝트 로드 완료 (dataset + TwinEngine)")
         elif load_warning:
             self._latest_engine = None
+            self.workspace.set_engine(None)
             self._set_status(f"프로젝트 부분 로드 완료 (dataset) — {load_warning}")
         else:
             self._latest_engine = None
+            self.workspace.set_engine(None)
             self._set_status("프로젝트 로드 완료 (dataset)")
         loaded_meta = self._extract_project_metadata(dataset, engine)
         self._model_panel.set_loaded_metadata(loaded_meta)
-        project_path = self._current_project_path()
         if project_path is not None:
             self._remember_recent_project(project_path)
 
@@ -2530,6 +2574,7 @@ class MainWindow(QMainWindow):
             return False
 
         self._latest_engine = engine
+        self.workspace.set_engine(engine)
         self._latest_reducer = getattr(engine, "reducer", self._latest_reducer)
         self._latest_surrogate = getattr(engine, "surrogate", self._latest_surrogate)
         self._twin_panel.set_engine(engine)

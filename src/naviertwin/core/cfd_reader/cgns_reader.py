@@ -8,14 +8,14 @@ CGNS (CFD General Notation System) HDF5 파일을 읽는다.
     3. h5py — HDF5 직접 파싱
     4. meshio
 
-v5.1 확장:
+확장:
     - pyCGNS/h5py 폴백 경로에서 ``Elements_t`` 셀 연결성을 파싱해
       점 구름이 아닌 진짜 UnstructuredGrid 를 구성한다.
     - ``ZoneBC_t`` 를 파싱해 OpenFOAM 리더와 동일한 계약으로
       ``metadata["boundary_patches"]`` / ``metadata["boundary_patch_meshes"]``
       를 채우고, BCWall* 계열 patch 는 ``metadata["auto_wall_patches"]`` 에
       자동 분류한다.
-    - MIXED / NGON_n / NFACE_n 섹션은 이번 범위 밖 — 경고 후 건너뛴다.
+    - MIXED / NGON_n / NFACE_n 과 다중 존 연결성을 지원한다.
 
 Examples:
     직접 사용::
@@ -57,12 +57,7 @@ _CGNS_ELEM_TO_VTK: dict[int, tuple[int, int]] = {
     17: (12, 8),  # HEXA_8 → VTK_HEXAHEDRON
 }
 
-#: 이번 범위 밖인 CGNS ElementType (경고 후 건너뜀)
-_CGNS_UNSUPPORTED_ELEM: dict[int, str] = {
-    20: "MIXED",
-    22: "NGON_n",
-    23: "NFACE_n",
-}
+_CGNS_VARIABLE_ELEM = {20: "MIXED", 22: "NGON_n", 23: "NFACE_n"}
 
 #: BC 타입 문자열이 이 접두사로 시작하면 wall 로 분류한다
 #: (BCWall, BCWallViscous, BCWallViscousHeatFlux, BCWallViscousIsothermal,
@@ -300,8 +295,8 @@ def _sections_to_vtk_cells(
     """
     import numpy as np
 
-    cells_blocks: list[Any] = []
-    type_blocks: list[Any] = []
+    cell_records: list[Any] = []
+    cell_types: list[int] = []
 
     def _sort_key(sec: dict[str, Any]) -> int:
         rng = sec.get("range")
@@ -310,16 +305,104 @@ def _sections_to_vtk_cells(
         flat = np.asarray(rng).ravel()
         return int(flat[0]) if flat.size else 0
 
-    for sec in sorted(sections, key=_sort_key):
+    ordered = sorted(sections, key=lambda sec: (str(sec.get("zone", "")), _sort_key(sec)))
+
+    def add_cell(nodes: Any, vtk_type: int) -> bool:
+        node_ids = np.asarray(nodes, dtype=np.int64).ravel()
+        if node_ids.size == 0 or node_ids.min() < 0 or node_ids.max() >= n_points:
+            return False
+        cell_records.append(np.concatenate(([node_ids.size], node_ids)))
+        cell_types.append(vtk_type)
+        return True
+
+    def split_variable(sec: dict[str, Any]) -> list[Any]:
+        conn = np.asarray(sec["conn"]).ravel().astype(np.int64)
+        offsets = np.asarray(sec.get("offsets", ())).ravel().astype(np.int64)
+        if offsets.size < 2:
+            logger.warning(
+                "CGNS Elements_t '%s': ElementStartOffset 누락 — 건너뜁니다.",
+                sec.get("name", "?"),
+            )
+            return []
+        if offsets[0] == 1 and offsets[-1] == conn.size + 1:
+            offsets = offsets - 1
+        if offsets[0] != 0 or offsets[-1] != conn.size or np.any(np.diff(offsets) < 0):
+            logger.warning(
+                "CGNS Elements_t '%s': 잘못된 ElementStartOffset — 건너뜁니다.",
+                sec.get("name", "?"),
+            )
+            return []
+        return [conn[start:end] for start, end in zip(offsets[:-1], offsets[1:], strict=True)]
+
+    # NGON faces are indexed by ElementRange and referenced by signed NFACE ids.
+    face_maps: dict[tuple[str, int], Any] = {}
+    zones_with_nface = {
+        str(sec.get("zone", "")) for sec in ordered if int(sec["etype"]) == 23
+    }
+    for sec in ordered:
+        if int(sec["etype"]) != 22:
+            continue
+        zone = str(sec.get("zone", ""))
+        point_offset = int(sec.get("point_offset", 0))
+        one_based = bool(sec.get("one_based", False))
+        chunks = split_variable(sec)
+        element_range = np.asarray(sec.get("range", ())).ravel()
+        first_id = int(element_range[0]) if element_range.size else 1
+        for index, chunk in enumerate(chunks):
+            nodes = chunk - 1 if one_based else chunk
+            nodes = nodes + point_offset
+            if nodes.size < 3 or nodes.min() < 0 or nodes.max() >= n_points:
+                logger.warning("CGNS NGON '%s': 잘못된 face %d", sec.get("name", "?"), index)
+                continue
+            face_maps[(zone, first_id + index)] = nodes
+            if zone not in zones_with_nface:
+                add_cell(nodes, 7)  # VTK_POLYGON
+
+    for sec in ordered:
         name = sec.get("name", "?")
         etype = int(sec["etype"])
-        if etype in _CGNS_UNSUPPORTED_ELEM:
-            logger.warning(
-                "CGNS Elements_t '%s': %s(코드 %d) 는 미지원 — 섹션을 건너뜁니다.",
-                name,
-                _CGNS_UNSUPPORTED_ELEM[etype],
-                etype,
-            )
+        if etype == 22:
+            continue
+        point_offset = int(sec.get("point_offset", 0))
+        one_based = bool(sec.get("one_based", False))
+        if etype == 20:
+            conn = np.asarray(sec["conn"]).ravel().astype(np.int64)
+            cursor = 0
+            while cursor < conn.size:
+                mixed_type = int(conn[cursor])
+                cursor += 1
+                mapping = _CGNS_ELEM_TO_VTK.get(mixed_type)
+                if mapping is None:
+                    logger.warning(
+                        "CGNS MIXED '%s': ElementType %d 미지원 — 나머지 섹션 중단",
+                        name,
+                        mixed_type,
+                    )
+                    break
+                vtk_type, node_count = mapping
+                if cursor + node_count > conn.size:
+                    logger.warning("CGNS MIXED '%s': 잘린 연결성", name)
+                    break
+                nodes = conn[cursor : cursor + node_count]
+                cursor += node_count
+                nodes = (nodes - 1 if one_based else nodes) + point_offset
+                if not add_cell(nodes, vtk_type):
+                    logger.warning("CGNS MIXED '%s': 범위 밖 연결성", name)
+            continue
+        if etype == 23:
+            zone = str(sec.get("zone", ""))
+            for references in split_variable(sec):
+                faces = [face_maps.get((zone, abs(int(ref)))) for ref in references]
+                if not faces or any(face is None for face in faces):
+                    logger.warning("CGNS NFACE '%s': 참조 NGON 누락", name)
+                    continue
+                face_stream = [len(faces)]
+                for face in faces:
+                    face_stream.extend([len(face), *face.tolist()])
+                cell_records.append(
+                    np.asarray([len(face_stream), *face_stream], dtype=np.int64)
+                )
+                cell_types.append(42)  # VTK_POLYHEDRON
             continue
         mapping = _CGNS_ELEM_TO_VTK.get(etype)
         if mapping is None:
@@ -331,6 +414,9 @@ def _sections_to_vtk_cells(
             continue
         vtk_type, nodes_per_elem = mapping
         conn = np.asarray(sec["conn"]).ravel().astype(np.int64)
+        if one_based:
+            conn = conn - 1
+        conn = conn + point_offset
         if conn.size == 0 or conn.size % nodes_per_elem != 0:
             logger.warning(
                 "CGNS Elements_t '%s': 연결성 길이 %d 가 요소당 노드 수 %d 와 "
@@ -348,17 +434,12 @@ def _sections_to_vtk_cells(
                 n_points,
             )
             continue
-        n_elem = conn.size // nodes_per_elem
-        conn2 = conn.reshape(n_elem, nodes_per_elem)
-        block = np.hstack(
-            [np.full((n_elem, 1), nodes_per_elem, dtype=np.int64), conn2]
-        )
-        cells_blocks.append(block.ravel())
-        type_blocks.append(np.full(n_elem, vtk_type, dtype=np.uint8))
+        for nodes in conn.reshape(-1, nodes_per_elem):
+            add_cell(nodes, vtk_type)
 
-    if not cells_blocks:
+    if not cell_records:
         return None
-    return np.concatenate(cells_blocks), np.concatenate(type_blocks)
+    return np.concatenate(cell_records), np.asarray(cell_types, dtype=np.uint8)
 
 
 def _build_mesh_from_parts(
@@ -520,12 +601,98 @@ def _extract_patch_surface(mesh: Any, indices: Any, name: str) -> Any | None:
                 surf = sub.extract_surface()
                 if surf.n_points > 0:
                     return surf
-        # 포함되는 셀이 없으면(또는 점 구름 메쉬면) 점 구름 표면으로 폴백
         return pv.PolyData(np.asarray(mesh.points)[valid])
     except Exception as e:  # noqa: BLE001 — patch 하나 실패가 전체를 막지 않게
         logger.debug("CGNS patch '%s' 표면 추출 실패: %s", name, e)
         return None
 
+
+def _pycgns_zone_nodes(tree: Any) -> list[Any]:
+    """Return every Zone_t node without descending into a matched zone."""
+    zones: list[Any] = []
+
+    def visit(node: Any) -> None:
+        if not isinstance(node, (list, tuple)) or len(node) < 4:
+            return
+        if node[3] == "Zone_t":
+            zones.append(node)
+            return
+        for child in node[2]:
+            visit(child)
+
+    visit(tree)
+    return zones
+
+
+def _h5py_zone_groups(root: Any) -> list[tuple[str, Any]]:
+    """Return named Zone_t groups below an HDF5 root."""
+    zones: list[tuple[str, Any]] = []
+
+    def visit(group: Any) -> None:
+        for key in group.keys():
+            item = group[key]
+            if not hasattr(item, "keys"):
+                continue
+            if _h5py_label(item) == "Zone_t":
+                zones.append((str(key), item))
+            else:
+                visit(item)
+
+    visit(root)
+    return zones
+
+
+def _combine_zone_datasets(
+    zone_names: list[str],
+    datasets: list[CFDDataset],
+    *,
+    reader: str,
+    source_file: str,
+) -> CFDDataset:
+    """Merge independently parsed zones while preserving local connectivity."""
+    import pyvista as pv
+
+    blocks = pv.MultiBlock([dataset.mesh for dataset in datasets])
+    mesh = blocks.combine(merge_points=False)
+    boundary_patches: dict[str, Any] = {}
+    patch_meshes: dict[str, Any] = {}
+    wall_names: list[str] = []
+    for zone_name, dataset in zip(zone_names, datasets, strict=True):
+        metadata = dataset.metadata
+        for patch_name, patch in metadata.get("boundary_patches", {}).items():
+            qualified = f"{zone_name}/{patch_name}"
+            boundary_patches[qualified] = patch
+            if patch.get("is_wall"):
+                wall_names.append(qualified)
+        for patch_name, patch_mesh in metadata.get(
+            "boundary_patch_meshes", {}
+        ).items():
+            patch_meshes[f"{zone_name}/{patch_name}"] = patch_mesh
+
+    metadata: dict[str, Any] = {
+        "reader": reader,
+        "source_file": source_file,
+        "zone_count": len(zone_names),
+        "zone_names": list(zone_names),
+    }
+    if boundary_patches:
+        metadata["boundary_patches"] = boundary_patches
+        metadata["auto_wall_patches"] = sorted(wall_names)
+    if patch_meshes:
+        metadata["boundary_patch_meshes"] = patch_meshes
+    field_names = sorted({*mesh.point_data.keys(), *mesh.cell_data.keys()})
+    logger.info(
+        "CGNS 다중 존 병합: zones=%d, points=%d, cells=%d",
+        len(zone_names),
+        mesh.n_points,
+        mesh.n_cells,
+    )
+    return CFDDataset(
+        mesh=mesh,
+        time_steps=[0.0],
+        field_names=field_names,
+        metadata=metadata,
+    )
 
 # ---------------------------------------------------------------------------
 # pyCGNS tree → CFDDataset
@@ -553,6 +720,19 @@ def _cgns_tree_to_cfd_dataset(tree: Any, source_file: str = "") -> CFDDataset:
         import pyvista  # noqa: F401  (availability probe)
     except ImportError as exc:
         raise ImportError("pyvista 가 필요합니다") from exc
+
+    zone_nodes = _pycgns_zone_nodes(tree)
+    if len(zone_nodes) > 1:
+        zone_names = [str(zone[0]) for zone in zone_nodes]
+        zone_datasets = [
+            _cgns_tree_to_cfd_dataset(zone, source_file) for zone in zone_nodes
+        ]
+        return _combine_zone_datasets(
+            zone_names,
+            zone_datasets,
+            reader="pyCGNS (CGNS.MAP)",
+            source_file=source_file,
+        )
 
     nodes_x: list[Any] = []
     nodes_y: list[Any] = []
@@ -606,13 +786,17 @@ def _cgns_tree_to_cfd_dataset(tree: Any, source_file: str = "") -> CFDDataset:
                     etype = int(vals[0])
             conn_node = _child_by_name(children, "ElementConnectivity")
             range_node = _child_by_name(children, "ElementRange")
+            offsets_node = _child_by_name(children, "ElementStartOffset")
             if etype is not None and conn_node is not None and conn_node[1] is not None:
                 sections.append(
                     {
                         "name": name,
                         "etype": etype,
-                        # CGNS 는 1-based → 0-based
-                        "conn": np.asarray(conn_node[1]).ravel().astype(np.int64) - 1,
+                        "conn": np.asarray(conn_node[1]).ravel().astype(np.int64),
+                        "one_based": True,
+                        "offsets": (
+                            offsets_node[1] if offsets_node is not None else None
+                        ),
                         "range": (
                             range_node[1] if range_node is not None else None
                         ),
@@ -653,17 +837,6 @@ def _cgns_tree_to_cfd_dataset(tree: Any, source_file: str = "") -> CFDDataset:
 
     if not nodes_x:
         raise ValueError("CGNS 트리에서 GridCoordinates 를 찾을 수 없습니다.")
-
-    multi_zone = len(nodes_x) > 1
-    if multi_zone and (sections or bc_patches):
-        # 존별 점 번호(zone-local)를 전역 번호로 재매핑하는 것은 이번 범위 밖.
-        logger.warning(
-            "CGNS: 다중 존(%d개) 파일 — 셀 연결성/ZoneBC 파싱을 생략하고 "
-            "점 구름으로 폴백합니다.",
-            len(nodes_x),
-        )
-        sections = []
-        bc_patches = []
 
     x = np.concatenate(nodes_x)
     y = np.concatenate(nodes_y) if nodes_y else np.zeros_like(x)
@@ -739,11 +912,16 @@ def _h5py_parse_elements(item: Any, name: str) -> dict[str, Any] | None:
     erange = None
     if "ElementRange" in item:
         erange = _h5py_read_value(item["ElementRange"])
+    offsets = None
+    if "ElementStartOffset" in item:
+        offsets = _h5py_read_value(item["ElementStartOffset"])
 
     return {
         "name": name,
         "etype": etype,
-        "conn": np.asarray(conn).ravel().astype(np.int64) - 1,  # 1-based → 0-based
+        "conn": np.asarray(conn).ravel().astype(np.int64),
+        "one_based": True,
+        "offsets": offsets,
         "range": erange,
     }
 
@@ -837,6 +1015,20 @@ def _h5py_cgns_to_cfd_dataset(f: Any, source_file: str = "") -> CFDDataset:
     except ImportError as exc:
         raise ImportError("pyvista 가 필요합니다") from exc
 
+    zone_groups = _h5py_zone_groups(f)
+    if len(zone_groups) > 1:
+        zone_names = [name for name, _group in zone_groups]
+        zone_datasets = [
+            _h5py_cgns_to_cfd_dataset(group, source_file)
+            for _name, group in zone_groups
+        ]
+        return _combine_zone_datasets(
+            zone_names,
+            zone_datasets,
+            reader="h5py/CGNS",
+            source_file=source_file,
+        )
+
     coords_x: list[Any] = []
     coords_y: list[Any] = []
     coords_z: list[Any] = []
@@ -893,16 +1085,6 @@ def _h5py_cgns_to_cfd_dataset(f: Any, source_file: str = "") -> CFDDataset:
     if not coords_x:
         # 단순 폴백: 최상위 데이터셋에서 좌표 추출 시도
         raise ValueError("h5py CGNS 파싱: GridCoordinates 를 찾을 수 없습니다.")
-
-    multi_zone = len(coords_x) > 1
-    if multi_zone and (sections or bc_patches):
-        logger.warning(
-            "CGNS: 다중 존(%d개) 파일 — 셀 연결성/ZoneBC 파싱을 생략하고 "
-            "점 구름으로 폴백합니다.",
-            len(coords_x),
-        )
-        sections = []
-        bc_patches = []
 
     x = np.concatenate(coords_x)
     y = np.concatenate(coords_y) if coords_y else np.zeros_like(x)

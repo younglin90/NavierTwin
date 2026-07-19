@@ -73,6 +73,11 @@ web = [
     "vtk>=9.3",
     "matplotlib>=3.8",
 ]
+operations = [
+    "paho-mqtt>=2.1",
+    "asyncua>=1.1",
+    "confluent-kafka>=2.4",
+]
 full = [
     "naviertwin[core]",
     "naviertwin[web]",

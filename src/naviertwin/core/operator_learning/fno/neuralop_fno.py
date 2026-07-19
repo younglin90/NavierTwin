@@ -38,11 +38,11 @@ def neuralop_available() -> bool:
 class NeuralOpFNO(BaseOperator):
     """neuraloperator 의 FNO 를 앱의 연산자 계약으로 감싼 래퍼.
 
-    1D/2D 를 ``n_dim`` 으로 함께 지원한다 — neuralop 의 ``FNO`` 는 ``n_modes``
+    1D/2D/3D 를 ``n_dim`` 으로 함께 지원한다 — neuralop 의 ``FNO`` 는 ``n_modes``
     튜플 길이로 차원이 정해지기 때문에 클래스를 나눌 필요가 없다.
 
     Attributes:
-        n_dim: 공간 차원 (1 또는 2).
+        n_dim: 공간 차원 (1, 2 또는 3).
         train_losses_: epoch 별 평균 손실 (자체 FNO 와 동일한 계약).
 
     Examples:
@@ -77,7 +77,7 @@ class NeuralOpFNO(BaseOperator):
             out_channels: 출력 채널 수.
             modes: 유지할 푸리에 모드 수. 정수면 전 축에 동일 적용.
             width: 은닉 채널 폭 (neuralop 의 ``hidden_channels``).
-            n_dim: 공간 차원 (1 | 2).
+            n_dim: 공간 차원 (1 | 2 | 3).
             n_layers: 푸리에 층 수.
             max_epochs: 학습 epoch 수.
             batch_size: 미니배치 크기.
@@ -86,11 +86,11 @@ class NeuralOpFNO(BaseOperator):
             epoch_callback: ``(epoch_idx, epoch_loss)`` 라이브 진행 콜백.
 
         Raises:
-            ValueError: ``n_dim`` 이 1/2 가 아닌 경우.
+            ValueError: ``n_dim`` 이 1/2/3 이 아닌 경우.
         """
         super().__init__()
-        if n_dim not in (1, 2):
-            raise ValueError(f"n_dim 은 1 또는 2 여야 합니다. 현재: {n_dim}")
+        if n_dim not in (1, 2, 3):
+            raise ValueError(f"n_dim 은 1, 2 또는 3 이어야 합니다. 현재: {n_dim}")
         self.in_channels = int(in_channels)
         self.out_channels = int(out_channels)
         self.n_dim = int(n_dim)
@@ -190,6 +190,16 @@ class NeuralOpFNO(BaseOperator):
 
         tx = torch.tensor(self._to_channel_first(X), device=self._device)
         ty = torch.tensor(self._to_channel_first(Y), device=self._device)
+        mask_raw = dataset.get("sample_masks")
+        tm = None
+        if mask_raw is not None:
+            mask = np.asarray(mask_raw, dtype=np.float32)
+            expected_mask_shape = X.shape[:-1]
+            if mask.shape != expected_mask_shape:
+                raise ValueError(
+                    f"sample_masks shape={mask.shape} must match {expected_mask_shape}"
+                )
+            tm = torch.tensor(mask[:, None, ...], device=self._device)
         optim = torch.optim.Adam(self._model.parameters(), lr=self.lr)
         loss_fn = torch.nn.MSELoss()
         n_samples = tx.shape[0]
@@ -204,7 +214,11 @@ class NeuralOpFNO(BaseOperator):
                 idx = perm[start : start + batch]
                 optim.zero_grad()
                 pred = self._model(tx[idx])
-                loss = loss_fn(pred, ty[idx])
+                if tm is None:
+                    loss = loss_fn(pred, ty[idx])
+                else:
+                    weights = tm[idx].expand_as(pred)
+                    loss = (weights * (pred - ty[idx]) ** 2).sum() / weights.sum().clamp_min(1e-8)
                 loss.backward()
                 optim.step()
                 total += float(loss.item()) * int(idx.numel())

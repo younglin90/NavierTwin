@@ -67,7 +67,7 @@ class StrategySpec:
 
     Attributes:
         key: 앱의 ``nt_model_method`` 값 ("rom" | "physics" | "dynamics" |
-            "operator" | "mesh_gnn" | "gino" | "mesh_gnn_mp").
+            "operator" | "mesh_gnn" | "gino" | "mesh_gnn_mp" | "transolver").
         name: 표시 이름.
         needs_identical_mesh: 케이스 간 동일 격자가 필수인가 (POD 스냅샷 쌓기).
         needs_uniform_grid: 균일 격자(ImageData)가 필수인가 (FFT 등).
@@ -151,7 +151,7 @@ STRATEGIES: tuple[StrategySpec, ...] = (
         needs_identical_mesh=False,
         needs_uniform_grid=False,
         supports_case_sets=True,  # 정상 스윕 전용 — GeometryFNO(FNO+SDF, v5.2)
-        supports_time_in_sweep=False,
+        supports_time_in_sweep=True,
         single_case_needs_steps=2,
         min_snapshots=100,  # 문헌 기준 규모 — 케이스 세트 분기는 별도 판정
         note="함수→함수 연산자 — 정상 케이스 세트는 SDF 채널(GeometryFNO)로 "
@@ -169,7 +169,7 @@ STRATEGIES: tuple[StrategySpec, ...] = (
         needs_identical_mesh=False,
         needs_uniform_grid=False,
         supports_case_sets=True,  # 정상 스윕 전용 — CaseSetGNN (v5.7)
-        supports_time_in_sweep=False,
+        supports_time_in_sweep=True,
         single_case_needs_steps=2,
         min_snapshots=3,
         note="메쉬를 그래프로 직접 학습 — 재샘플 없이 원본 격자(진짜 구멍 포함) "
@@ -185,7 +185,7 @@ STRATEGIES: tuple[StrategySpec, ...] = (
         needs_identical_mesh=False,
         needs_uniform_grid=False,
         supports_case_sets=True,  # 정상 스윕 전용 — GINOCaseSetOperator
-        supports_time_in_sweep=False,
+        supports_time_in_sweep=True,
         single_case_needs_steps=2,
         min_snapshots=3,
         note="점군을 그대로 신경 연산자로 학습(GNO+잠재 FNO) — 재샘플 없이 "
@@ -203,12 +203,26 @@ STRATEGIES: tuple[StrategySpec, ...] = (
         needs_identical_mesh=False,
         needs_uniform_grid=False,
         supports_case_sets=True,  # 정상 스윕 전용 — CaseSetMGN
-        supports_time_in_sweep=False,
+        supports_time_in_sweep=True,
         single_case_needs_steps=2,
         min_snapshots=3,
         note="메쉬를 그래프로 학습하되 에지 특징(Δ좌표)까지 메시지패싱에 쓰는 "
         "MeshGraphNets — 재샘플 없이 원본 격자(진짜 구멍 포함) 위 예측. 케이스 "
         "3개 이상, 소수 케이스는 정성적.",
+        tier="experimental",
+    ),
+    StrategySpec(
+        key="transolver",
+        name="Transolver (Physics-Attention)",
+        needs_identical_mesh=False,
+        needs_uniform_grid=False,
+        supports_case_sets=True,
+        supports_time_in_sweep=True,
+        single_case_needs_steps=2,
+        min_snapshots=3,
+        note="학습된 physics slice 위에서 attention 을 계산하는 메쉬 네이티브 "
+        "연산자 — 원본 격자와 형상 가변을 보존하며 점 수에 선형으로 확장. "
+        "케이스 3개 이상, 소수 케이스는 정성적.",
         tier="experimental",
     ),
 )
@@ -343,11 +357,6 @@ def _check(spec: StrategySpec, p: DataProfile) -> tuple[bool, str]:
             # 동일/균일 격자 제약이 없다. min_snapshots(문헌 규모)도 여기서는
             # 적용하지 않는다 — 소수 케이스 동작을 허용하되 note 의 few-shot
             # 경고("소수 케이스는 정성적")가 그 한계를 알린다.
-            if p.n_time_steps > 1:
-                return False, (
-                    "비정상(시간축) 케이스 세트의 GeometryFNO 는 아직 "
-                    "미지원입니다 — ROM/Physics AI/ParametricDMD 를 쓰세요."
-                )
             if p.n_cases < 3:
                 return False, (
                     f"케이스 {p.n_cases}개 — GeometryFNO 학습에는 최소 3개가 "
@@ -358,11 +367,6 @@ def _check(spec: StrategySpec, p: DataProfile) -> tuple[bool, str]:
             # 메쉬 네이티브 GNN(Route 2): 케이스마다 자기 그래프로 학습하므로
             # 동일/균일 격자 제약과 min_snapshots(시계열 기준)를 적용하지
             # 않는다 — operator(GeometryFNO) 분기와 같은 판정 구조.
-            if p.n_time_steps > 1:
-                return False, (
-                    "비정상(시간축) 케이스 세트의 메쉬 GNN 은 아직 "
-                    "미지원입니다 — ROM/Physics AI/ParametricDMD 를 쓰세요."
-                )
             if p.n_cases < 3:
                 return False, (
                     f"케이스 {p.n_cases}개 — 메쉬 GNN 학습에는 최소 3개가 "
@@ -372,11 +376,6 @@ def _check(spec: StrategySpec, p: DataProfile) -> tuple[bool, str]:
         if spec.key == "gino":
             # GINO(Route 2, 2번째 배선): 케이스마다 자기 점군으로 학습하므로
             # mesh_gnn 과 같은 판정 구조 — 동일/균일 격자 제약 없음.
-            if p.n_time_steps > 1:
-                return False, (
-                    "비정상(시간축) 케이스 세트의 GINO 는 아직 "
-                    "미지원입니다 — ROM/Physics AI/ParametricDMD 를 쓰세요."
-                )
             if p.n_cases < 3:
                 return False, (
                     f"케이스 {p.n_cases}개 — GINO 학습에는 최소 3개가 "
@@ -386,15 +385,17 @@ def _check(spec: StrategySpec, p: DataProfile) -> tuple[bool, str]:
         if spec.key == "mesh_gnn_mp":
             # MeshGraphNets 메시지패싱(Route 2, 3번째 배선): mesh_gnn/gino 와
             # 같은 판정 구조 — 동일/균일 격자 제약 없음.
-            if p.n_time_steps > 1:
-                return False, (
-                    "비정상(시간축) 케이스 세트의 메쉬 GNN(메시지패싱) 은 아직 "
-                    "미지원입니다 — ROM/Physics AI/ParametricDMD 를 쓰세요."
-                )
             if p.n_cases < 3:
                 return False, (
                     f"케이스 {p.n_cases}개 — 메쉬 GNN(메시지패싱) 학습에는 "
                     "최소 3개가 필요합니다."
+                )
+            return True, spec.note
+        if spec.key == "transolver":
+            if p.n_cases < 3:
+                return False, (
+                    f"케이스 {p.n_cases}개 — Transolver 학습에는 최소 3개가 "
+                    "필요합니다."
                 )
             return True, spec.note
         if spec.needs_identical_mesh and not p.identical_mesh:
@@ -454,17 +455,11 @@ def strategy_report(profile: DataProfile) -> dict[str, dict[str, Any]]:
         "tier_label": str}}`` — tier 는 모델 등급(리뷰 #8), tier_label 은
         한국어 뱃지 텍스트.
     """
-    report: dict[str, dict[str, Any]] = {}
-    for spec in STRATEGIES:
-        ok, reason = _check(spec, profile)
-        report[spec.key] = {
-            "ok": ok,
-            "reason": reason,
-            "name": spec.name,
-            "tier": spec.tier,
-            "tier_label": TIER_LABELS.get(spec.tier, spec.tier),
-        }
-    return report
+    from naviertwin.core.digital_twin.strategy_plugins import (
+        default_strategy_registry,
+    )
+
+    return default_strategy_registry().report(profile)
 
 
 def recommend(profile: DataProfile) -> dict[str, str]:

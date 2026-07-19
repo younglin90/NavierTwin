@@ -1,0 +1,37 @@
+name: Electron package
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "electron/**"
+      - ".github/workflows/electron-package.yml"
+
+jobs:
+  package:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            command: dist:linux
+          - os: windows-latest
+            command: dist:win
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: electron
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run ${{ matrix.command }} -- --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: naviertwin-${{ matrix.os }}
+          path: electron/dist/*
+          if-no-files-found: error

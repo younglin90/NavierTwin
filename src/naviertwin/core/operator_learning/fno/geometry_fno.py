@@ -545,4 +545,160 @@ class GeometryFNO2D:
         )
 
 
-__all__ = ["GEOMETRY_FNO_BACKENDS", "GeometryFNO2D"]
+class GeometryFNONd:
+    """NeuralOperator-backed geometry FNO for 1D, 2D, or 3D grids."""
+
+    def __init__(
+        self,
+        spatial_dimension: int,
+        n_params: int,
+        out_channels: int = 1,
+        modes: int = 12,
+        width: int = 32,
+        n_layers: int = 4,
+        epochs: int = 200,
+        lr: float = 1e-3,
+        seed: int | None = 0,
+        epoch_callback: Optional[Callable[[int, float], None]] = None,
+        batch_size: int | None = None,
+    ) -> None:
+        if spatial_dimension not in (1, 2, 3):
+            raise ValueError("spatial_dimension must be 1, 2, or 3")
+        if n_params < 0:
+            raise ValueError("n_params must be non-negative")
+        self.spatial_dimension = int(spatial_dimension)
+        self.n_params = int(n_params)
+        self.out_channels = int(out_channels)
+        self.modes = int(modes)
+        self.width = int(width)
+        self.n_layers = int(n_layers)
+        self.epochs = int(epochs)
+        self.lr = float(lr)
+        self.seed = seed
+        self.epoch_callback = epoch_callback
+        self.batch_size = batch_size
+        self.backend = "neuralop"
+        self.is_fitted = False
+        self.train_losses_: list[float] = []
+        self.training_metadata: dict[str, object] = {}
+        self.input_mean_: NDArray[np.float32] | None = None
+        self.input_std_: NDArray[np.float32] | None = None
+        self.output_mean_: NDArray[np.float32] | None = None
+        self.output_std_: NDArray[np.float32] | None = None
+        self._model: Any = None
+
+    @property
+    def in_channels(self) -> int:
+        return 2 + self.n_params
+
+    @staticmethod
+    def _stats(values: NDArray[np.float32]) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
+        axes = tuple(range(values.ndim - 1))
+        mean = values.mean(axis=axes).astype(np.float32)
+        std = values.std(axis=axes).astype(np.float32)
+        return mean, np.where(std < 1e-8, np.float32(1.0), std)
+
+    @staticmethod
+    def _masked_stats(
+        values: NDArray[np.float32], mask: NDArray[np.float32]
+    ) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
+        flat = values.reshape(-1, values.shape[-1])
+        selected = flat[mask.reshape(-1) > 0.5]
+        if not len(selected):
+            return GeometryFNONd._stats(values)
+        mean = selected.mean(axis=0).astype(np.float32)
+        std = selected.std(axis=0).astype(np.float32)
+        return mean, np.where(std < 1e-8, np.float32(1.0), std)
+
+    def fit(
+        self,
+        inputs: NDArray[np.float32],
+        targets: NDArray[np.float32],
+        sample_masks: NDArray[np.float32] | None = None,
+    ) -> None:
+        x = np.asarray(inputs, dtype=np.float32)
+        y = np.asarray(targets, dtype=np.float32)
+        expected_ndim = self.spatial_dimension + 2
+        if x.ndim != expected_ndim or y.ndim != expected_ndim:
+            raise ValueError(
+                f"{self.spatial_dimension}D geometry FNO expects {expected_ndim}D tensors"
+            )
+        if x.shape[:-1] != y.shape[:-1]:
+            raise ValueError("inputs and targets spatial shapes must match")
+        if x.shape[-1] != self.in_channels or y.shape[-1] != self.out_channels:
+            raise ValueError("input or target channel count does not match the model")
+        mask = None
+        if sample_masks is not None:
+            mask = np.asarray(sample_masks, dtype=np.float32)
+            if mask.shape != x.shape[:-1]:
+                raise ValueError("sample_masks must match inputs without the channel axis")
+        self.input_mean_, self.input_std_ = self._stats(x)
+        self.output_mean_, self.output_std_ = (
+            self._masked_stats(y, mask) if mask is not None else self._stats(y)
+        )
+        x_scaled = (x - self.input_mean_) / self.input_std_
+        y_scaled = (y - self.output_mean_) / self.output_std_
+        from naviertwin.core.operator_learning.fno.neuralop_fno import NeuralOpFNO
+
+        self._model = NeuralOpFNO(
+            in_channels=self.in_channels,
+            out_channels=self.out_channels,
+            modes=self.modes,
+            width=self.width,
+            n_dim=self.spatial_dimension,
+            n_layers=self.n_layers,
+            max_epochs=self.epochs,
+            batch_size=self.batch_size or 16,
+            lr=self.lr,
+            seed=self.seed,
+            epoch_callback=self.epoch_callback,
+        )
+        self._model.fit(
+            {"inputs": x_scaled, "outputs": y_scaled, "sample_masks": mask}
+        )
+        self.train_losses_ = list(self._model.train_losses_)
+        self.is_fitted = True
+        self.training_metadata = {
+            "backend": "neuralop",
+            "spatial_dimension": self.spatial_dimension,
+            "device_used": str(getattr(self._model, "_device", "")),
+            "n_cases": int(x.shape[0]),
+            "epochs": self.epochs,
+            "masked_loss": mask is not None,
+        }
+
+    def predict(self, inputs: NDArray[np.float32]) -> NDArray[np.float32]:
+        if not self.is_fitted or self._model is None:
+            raise RuntimeError("GeometryFNONd.fit() must be called before predict()")
+        x = np.asarray(inputs, dtype=np.float32)
+        single_ndim = self.spatial_dimension + 1
+        squeeze = x.ndim == single_ndim
+        if squeeze:
+            x = x[np.newaxis, ...]
+        if x.ndim != self.spatial_dimension + 2 or x.shape[-1] != self.in_channels:
+            raise ValueError("geometry FNO prediction shape does not match the model")
+        assert self.input_mean_ is not None and self.input_std_ is not None
+        assert self.output_mean_ is not None and self.output_std_ is not None
+        scaled = (x - self.input_mean_) / self.input_std_
+        predicted = np.asarray(self._model.predict({"x": scaled}), dtype=np.float32)
+        result = predicted * self.output_std_ + self.output_mean_
+        return result[0] if squeeze else result
+
+
+class GeometryFNO1D(GeometryFNONd):
+    def __init__(self, n_params: int, **kwargs: Any) -> None:
+        super().__init__(1, n_params, **kwargs)
+
+
+class GeometryFNO3D(GeometryFNONd):
+    def __init__(self, n_params: int, **kwargs: Any) -> None:
+        super().__init__(3, n_params, **kwargs)
+
+
+__all__ = [
+    "GEOMETRY_FNO_BACKENDS",
+    "GeometryFNO1D",
+    "GeometryFNO2D",
+    "GeometryFNO3D",
+    "GeometryFNONd",
+]

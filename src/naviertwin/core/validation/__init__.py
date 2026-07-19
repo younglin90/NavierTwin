@@ -14,6 +14,12 @@ from importlib import import_module
 from typing import Any
 
 _EXPORT_MODULES = {
+    "ComparisonContext": "naviertwin.core.validation.comparison",
+    "ComparisonStatus": "naviertwin.core.validation.comparison",
+    "FieldComparison": "naviertwin.core.validation.comparison",
+    "TemporalComparison": "naviertwin.core.validation.comparison",
+    "compare_fields": "naviertwin.core.validation.comparison",
+    "compare_temporal_rollout": "naviertwin.core.validation.comparison",
     "rmse": "naviertwin.core.validation.metrics",
     "r2_score": "naviertwin.core.validation.metrics",
     "relative_l2_error": "naviertwin.core.validation.metrics",

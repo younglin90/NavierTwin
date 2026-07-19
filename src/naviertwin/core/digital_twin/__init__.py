@@ -12,6 +12,7 @@ _EXPORT_MODULES = {
     "PhysicsAITwinEngine": "naviertwin.core.digital_twin.physics_ai_engine",
     "GeometryFNOTwinEngine": "naviertwin.core.digital_twin.geometry_fno_engine",
     "DMDTwinEngine": "naviertwin.core.digital_twin.dmd_engine",
+    "TransolverTwinEngine": "naviertwin.core.digital_twin.transolver_engine",
     "StreamingDigitalTwin": "naviertwin.core.digital_twin.streaming_twin",
     "batch_predict_fields": "naviertwin.core.digital_twin.batch_predict",
     "build_manifest": "naviertwin.core.digital_twin.manifest",
@@ -20,6 +21,12 @@ _EXPORT_MODULES = {
     "validate_config": "naviertwin.core.digital_twin.pipeline_builder",
     "compare_models": "naviertwin.core.digital_twin.pipeline_compare",
     "rank_table": "naviertwin.core.digital_twin.pipeline_compare",
+    "CapabilityAxes": "naviertwin.core.digital_twin.strategy_plugins",
+    "RegisteredStrategy": "naviertwin.core.digital_twin.strategy_plugins",
+    "StrategyBackend": "naviertwin.core.digital_twin.strategy_plugins",
+    "StrategyDecision": "naviertwin.core.digital_twin.strategy_plugins",
+    "StrategyRegistry": "naviertwin.core.digital_twin.strategy_plugins",
+    "default_strategy_registry": "naviertwin.core.digital_twin.strategy_plugins",
 }
 
 __all__ = list(_EXPORT_MODULES)

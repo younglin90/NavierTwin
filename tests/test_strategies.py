@@ -26,6 +26,7 @@ def test_registry_covers_all_wired_methods() -> None:
         "mesh_gnn",
         "gino",
         "mesh_gnn_mp",
+        "transolver",
     }
 
 
@@ -116,9 +117,8 @@ def test_unsteady_sweep_rom_physics_ok_with_time_note() -> None:
     # v5.2: 비정상 스윕은 ParametricDMD 로 동역학 예보도 가능하다.
     assert report["dynamics"]["ok"]
     assert "ParametricDMD" in report["dynamics"]["reason"]
-    # GeometryFNO 는 정상 스윕 전용 — 시간축이 있으면 거절한다.
-    assert not report["operator"]["ok"]
-    assert "미지원" in report["operator"]["reason"]
+    # GeometryFNO 는 시간 snapshot을 (case, t) 학습 샘플로 확장한다.
+    assert report["operator"]["ok"]
     rec = strategies.recommend(profile)
     assert rec["method"] == "rom"
     assert "(μ, t)" in rec["reason"]

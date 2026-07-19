@@ -17,6 +17,7 @@ import json
 import os
 import sys
 import zipfile
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -102,6 +103,19 @@ def _build_parser() -> argparse.ArgumentParser:
     p_serv = sub.add_parser("server", help="FastAPI REST 서버 실행")
     p_serv.add_argument("--host", default="127.0.0.1")
     p_serv.add_argument("--port", type=int, default=8000)
+    p_serv.add_argument("--workers", type=int, default=1)
+    p_serv.add_argument("--ssl-certfile", default=None)
+    p_serv.add_argument("--ssl-keyfile", default=None)
+    p_serv.add_argument(
+        "--proxy-headers",
+        action="store_true",
+        help="신뢰된 reverse proxy 뒤에서 전달 헤더 사용",
+    )
+    p_serv.add_argument(
+        "--forwarded-allow-ips",
+        default="127.0.0.1",
+        help="proxy headers를 신뢰할 proxy IP 목록",
+    )
 
     # web
     p_web = sub.add_parser("web", help="trame 기반 웹 GUI 실행 (브라우저)")
@@ -459,6 +473,42 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_batch.add_argument("--json", dest="as_json", action="store_true", help="JSON으로 출력")
 
+    # launch-ddp
+    p_ddp = sub.add_parser(
+        "launch-ddp",
+        help="PyTorch torchrun 기반 다중 GPU 학습 entrypoint 실행",
+    )
+    p_ddp.add_argument("--entrypoint", required=True, help="DDP 학습 Python 스크립트")
+    p_ddp.add_argument(
+        "--nproc-per-node",
+        default="auto",
+        help="노드당 프로세스 수 또는 auto(CUDA 장치 수, 없으면 1)",
+    )
+    p_ddp.add_argument("--nnodes", type=int, default=1)
+    p_ddp.add_argument("--node-rank", type=int, default=0)
+    p_ddp.add_argument("--master-addr", default="127.0.0.1")
+    p_ddp.add_argument("--master-port", type=int, default=29500)
+    p_ddp.add_argument("--dry-run", action="store_true", default=False)
+    p_ddp.add_argument("entrypoint_args", nargs=argparse.REMAINDER)
+
+    # plan-scale
+    p_scale = sub.add_parser(
+        "plan-scale",
+        help="대형 CFD 케이스의 RAM/VRAM/chunk/MPI 실행 계획 계산",
+    )
+    p_scale.add_argument("--cases", type=int, required=True)
+    p_scale.add_argument("--time-steps", type=int, default=1)
+    p_scale.add_argument("--points", type=int, required=True)
+    p_scale.add_argument("--cells", type=int, required=True)
+    p_scale.add_argument("--input-components", type=int, default=5)
+    p_scale.add_argument("--target-components", type=int, default=4)
+    p_scale.add_argument("--route", choices=("route1", "route2"), default="route1")
+    p_scale.add_argument("--ram-gb", type=float, default=None)
+    p_scale.add_argument("--vram-gb", type=float, default=None)
+    p_scale.add_argument("--workers", type=int, default=1)
+    p_scale.add_argument("--reserve-fraction", type=float, default=0.2)
+    p_scale.add_argument("--json", dest="as_json", action="store_true")
+
     # doctor
     p_doctor = sub.add_parser("doctor", help="설치/런타임 환경 진단 리포트 출력")
     p_doctor.add_argument("--json", dest="as_json", action="store_true", help="JSON으로 출력")
@@ -571,7 +621,17 @@ def main() -> None:
     elif args.command == "benchmark":
         sys.exit(_run_benchmark(args.kind))
     elif args.command == "server":
-        sys.exit(_run_server(args.host, args.port))
+        sys.exit(
+            _run_server(
+                args.host,
+                args.port,
+                workers=args.workers,
+                ssl_certfile=args.ssl_certfile,
+                ssl_keyfile=args.ssl_keyfile,
+                proxy_headers=args.proxy_headers,
+                forwarded_allow_ips=args.forwarded_allow_ips,
+            )
+        )
     elif args.command == "web":
         sys.exit(_run_web_gui(args.host, args.port, not args.no_browser))
     elif args.command == "pipeline":
@@ -744,6 +804,10 @@ def main() -> None:
         sys.exit(_run_feature_pack(args))
     elif args.command == "batch-train":
         sys.exit(_run_batch_train(config=args.batch_config, as_json=args.as_json))
+    elif args.command == "launch-ddp":
+        sys.exit(_run_ddp_launch(args))
+    elif args.command == "plan-scale":
+        sys.exit(_run_scale_plan(args))
     elif args.command == "doctor":
         sys.exit(
             _run_doctor(
@@ -776,8 +840,27 @@ def _run_benchmark(kind: str) -> int:
     return 0
 
 
-def _run_server(host: str, port: int) -> int:
+def _run_server(
+    host: str,
+    port: int,
+    *,
+    workers: int = 1,
+    ssl_certfile: str | None = None,
+    ssl_keyfile: str | None = None,
+    proxy_headers: bool = False,
+    forwarded_allow_ips: str = "127.0.0.1",
+) -> int:
     """FastAPI 서버 실행 (uvicorn)."""
+    if workers < 1:
+        print("오류: workers는 1 이상이어야 합니다.", file=sys.stderr)
+        return 2
+    if bool(ssl_certfile) != bool(ssl_keyfile):
+        print("오류: --ssl-certfile과 --ssl-keyfile을 함께 지정하세요.", file=sys.stderr)
+        return 2
+    for label, value in (("certificate", ssl_certfile), ("private key", ssl_keyfile)):
+        if value and not Path(value).expanduser().is_file():
+            print(f"오류: TLS {label} 파일 없음: {value}", file=sys.stderr)
+            return 2
     try:
         import uvicorn
 
@@ -788,7 +871,17 @@ def _run_server(host: str, port: int) -> int:
     if app is None:
         print("app 생성 실패 (FastAPI 미설치)", file=sys.stderr)
         return 1
-    uvicorn.run(app, host=host, port=port)
+    application: Any = app if workers == 1 else "naviertwin.api.server:app"
+    uvicorn.run(
+        application,
+        host=host,
+        port=port,
+        workers=workers,
+        ssl_certfile=ssl_certfile,
+        ssl_keyfile=ssl_keyfile,
+        proxy_headers=proxy_headers,
+        forwarded_allow_ips=forwarded_allow_ips if proxy_headers else "",
+    )
     return 0
 
 
@@ -834,6 +927,101 @@ def _run_batch_train(*, config: str, as_json: bool) -> int:
         )
         print(f"results: {payload['results_path']}")
     return 1 if failed else 0
+
+
+def _run_ddp_launch(args: Any) -> int:
+    """Build or execute a shell-free torchrun command."""
+
+    from naviertwin.core.training import (
+        DDPLaunchSpec,
+        build_torchrun_command,
+        discover_cuda_devices,
+        launch_ddp,
+    )
+
+    try:
+        if str(args.nproc_per_node).lower() == "auto":
+            nproc = max(1, len(discover_cuda_devices()))
+        else:
+            nproc = int(args.nproc_per_node)
+        entrypoint_args = tuple(str(value) for value in args.entrypoint_args)
+        if entrypoint_args[:1] == ("--",):
+            entrypoint_args = entrypoint_args[1:]
+        spec = DDPLaunchSpec(
+            entrypoint=Path(args.entrypoint),
+            entrypoint_args=entrypoint_args,
+            nproc_per_node=nproc,
+            nnodes=int(args.nnodes),
+            node_rank=int(args.node_rank),
+            master_addr=str(args.master_addr),
+            master_port=int(args.master_port),
+        )
+        command = build_torchrun_command(spec)
+        if args.dry_run:
+            print(json.dumps({"command": command}, ensure_ascii=False))
+            return 0
+        return int(launch_ddp(spec).returncode)
+    except (FileNotFoundError, ImportError, OSError, ValueError) as exc:
+        print(f"launch-ddp error: {exc}", file=sys.stderr)
+        return 2
+
+
+def _run_scale_plan(args: Any) -> int:
+    """Print a bounded-memory plan for a large CFD workload."""
+    from naviertwin.core.training import (
+        ScaleBudget,
+        ScaleWorkload,
+        available_ram_bytes,
+        discover_cuda_devices,
+        plan_scale,
+    )
+
+    gib = 1024**3
+    try:
+        ram_bytes = (
+            available_ram_bytes()
+            if args.ram_gb is None
+            else int(float(args.ram_gb) * gib)
+        )
+        if args.vram_gb is None:
+            devices = discover_cuda_devices()
+            vram_bytes = max((item.free_bytes for item in devices), default=0)
+        else:
+            vram_bytes = int(float(args.vram_gb) * gib)
+        workload = ScaleWorkload(
+            n_cases=int(args.cases),
+            n_time_steps=int(args.time_steps),
+            n_points=int(args.points),
+            n_cells=int(args.cells),
+            input_components=int(args.input_components),
+            target_components=int(args.target_components),
+            route=str(args.route),
+        )
+        plan = plan_scale(
+            workload,
+            ScaleBudget(
+                ram_bytes=ram_bytes,
+                vram_bytes=vram_bytes,
+                workers=int(args.workers),
+                reserve_fraction=float(args.reserve_fraction),
+            ),
+        )
+    except (ImportError, OSError, RuntimeError, ValueError) as exc:
+        print(f"plan-scale error: {exc}", file=sys.stderr)
+        return 2
+    payload = {"workload": asdict(workload), "plan": plan.to_dict()}
+    if args.as_json:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    else:
+        print(
+            f"scale plan: feasible={plan.feasible}, route={plan.route}, "
+            f"point_chunk={plan.point_chunk_size:,}, "
+            f"case_batch={plan.case_batch_size}, microbatch={plan.microbatch_size}, "
+            f"accumulate={plan.gradient_accumulation_steps}, mpi_ranks={plan.mpi_ranks}"
+        )
+        for warning in plan.warnings:
+            print(f"warning: {warning}")
+    return 0 if plan.feasible else 1
 
 
 def _run_pipeline(reducer: str, n_modes: int, surrogate: str) -> int:

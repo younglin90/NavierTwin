@@ -102,7 +102,14 @@ def _json_default(value: Any) -> Any:
 def _restore_meta(meta: dict[str, Any]) -> dict[str, Any]:
     """JSON 왕복으로 list 가 된 meta 필드를 원래 tuple 규약으로 되돌린다."""
     out = dict(meta)
-    for key in ("dims", "spacing", "origin", "hw"):
+    for key in (
+        "dims",
+        "spacing",
+        "origin",
+        "hw",
+        "flat_axes",
+        "spatial_shape",
+    ):
         if key in out and isinstance(out[key], list):
             out[key] = tuple(out[key])
     return out

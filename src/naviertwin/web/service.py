@@ -181,6 +181,23 @@ def load_project(path: str | Path) -> tuple[CFDDataset, Any | None]:
     return dataset, engine
 
 
+def load_project_bundle(
+    path: str | Path,
+) -> tuple[CFDDataset, Any | None, Any | None]:
+    """Load legacy arrays/engine plus an optional canonical project manifest."""
+    dataset, engine = load_project(path)
+    target = Path(path).expanduser()
+    from naviertwin.core.export.ntwin_format import load_embedded_project_manifest
+
+    project = load_embedded_project_manifest(target)
+    manifest_path = target.with_suffix(".manifest.json")
+    if project is None and manifest_path.exists():
+        from naviertwin.core.data_model import load_project_manifest
+
+        project = load_project_manifest(manifest_path)
+    return dataset, engine, project
+
+
 def meshes_are_identical(datasets: Sequence[CFDDataset]) -> bool:
     """케이스들이 같은 메쉬(좌표/토폴로지)를 공유하는지 판정한다."""
     cases = list(datasets)
@@ -413,7 +430,12 @@ def _uniform_grid_over(bounds: Sequence[float], resolution: int) -> Any:
     )
 
 
-def estimate_coarsen(dataset: CFDDataset, resolution: int = 48) -> dict[str, Any]:
+def estimate_coarsen(
+    dataset: CFDDataset,
+    resolution: int = 48,
+    *,
+    retain_fraction: float | None = None,
+) -> dict[str, Any]:
     """재샘플을 실제로 하기 전에 결과 크기를 미리 계산한다 (저렴 — 격자만 만듦).
 
     사용자가 해상도를 고르려면 "이 숫자를 넣으면 몇 점이 되는지"를 먼저 봐야
@@ -427,13 +449,58 @@ def estimate_coarsen(dataset: CFDDataset, resolution: int = 48) -> dict[str, Any
     Raises:
         ValueError: 격자를 만들 수 없는 경우.
     """
+    if retain_fraction is not None:
+        from naviertwin.core.preprocessing.reduction import (
+            resolution_for_retain_fraction,
+        )
+
+        resolution = resolution_for_retain_fraction(
+            dataset.mesh.bounds,
+            int(getattr(dataset, "n_points", 0)),
+            retain_fraction,
+        )
     grid = _uniform_grid_over(dataset.mesh.bounds, resolution)
     dims = [int(d) for d in grid.dimensions]
     points_before = int(getattr(dataset, "n_points", 0))
     points_after = int(grid.n_points)
     n_steps = max(1, int(getattr(dataset, "n_time_steps", 1)))
     ratio = (points_before / points_after) if points_after else float("nan")
-    # 스냅샷 행렬(= 학습/POD 가 메모리에 올리는 것) 추정: 점 × 스텝 × float64.
+    components = 0
+    time_series = (getattr(dataset, "metadata", {}) or {}).get(
+        "time_series_fields", {}
+    )
+    for name in getattr(dataset, "field_names", ()):
+        try:
+            if isinstance(time_series, dict) and name in time_series:
+                raw = np.asarray(time_series[name])
+                components += int(raw.shape[-1]) if raw.ndim >= 3 else 1
+            elif name in dataset.mesh.point_data:
+                raw = np.asarray(dataset.mesh.point_data[name])
+                components += int(raw.shape[-1]) if raw.ndim >= 2 else 1
+            elif name in dataset.mesh.cell_data:
+                raw = np.asarray(dataset.mesh.cell_data[name])
+                components += int(raw.shape[-1]) if raw.ndim >= 2 else 1
+            else:
+                components += 1
+        except Exception:  # noqa: BLE001 -- preview remains best-effort
+            components += 1
+    components = max(1, components)
+    # Training estimate includes values plus typical gradients/activations.
+    from naviertwin.core.preprocessing.reduction import estimate_training_memory
+
+    memory_after = estimate_training_memory(
+        points=points_after,
+        snapshots=n_steps,
+        components=components,
+        dtype_bytes=4,
+    )
+    memory_before = estimate_training_memory(
+        points=max(1, points_before),
+        snapshots=n_steps,
+        components=components,
+        dtype_bytes=4,
+    )
+    # Preserve the public legacy contract: one scalar float64 snapshot matrix.
     bytes_after = points_after * n_steps * 8
     bytes_before = points_before * n_steps * 8
     # 목표 격자가 원본보다 촘촘할 수도 있다 — 그때 "축소"라고 하면 거짓말이다.
@@ -451,8 +518,12 @@ def estimate_coarsen(dataset: CFDDataset, resolution: int = 48) -> dict[str, Any
         "points_after": points_after,
         "ratio": float(ratio),
         "dims": dims,
+        "resolution": int(resolution),
+        "retain_fraction": float(points_after / points_before) if points_before else 0.0,
         "bytes_before": int(bytes_before),
         "bytes_after": int(bytes_after),
+        "training_bytes_before": memory_before.training_bytes,
+        "training_bytes_after": memory_after.training_bytes,
         "summary": summary,
     }
 
@@ -473,6 +544,7 @@ def coarsen_dataset(
     resolution: int = 48,
     fields: Sequence[str] | None = None,
     conservative_fields: Sequence[str] = (),
+    retain_fraction: float | None = None,
 ) -> dict[str, Any]:
     """대용량 메쉬를 성긴 균일 격자로 재샘플해 메모리·학습 비용을 줄인다.
 
@@ -521,6 +593,16 @@ def coarsen_dataset(
     if not names:
         raise ValueError("성기게 만들 원본 물리량 field 가 없습니다.")
 
+    if retain_fraction is not None:
+        from naviertwin.core.preprocessing.reduction import (
+            resolution_for_retain_fraction,
+        )
+
+        resolution = resolution_for_retain_fraction(
+            dataset.mesh.bounds,
+            int(getattr(dataset, "n_points", 0)),
+            retain_fraction,
+        )
     grid = _uniform_grid_over(dataset.mesh.bounds, resolution)
     points_before = int(getattr(dataset, "n_points", 0))
     n_steps = max(1, int(getattr(dataset, "n_time_steps", 1)))
@@ -531,11 +613,11 @@ def coarsen_dataset(
     # conservative_fields 는 점 보간이 아니라 부피 가중 평균 근사로 옮긴다
     # (기본값 = 빈 튜플이면 이 분기는 절대 타지 않아 기존 동작과 100% 동일).
     needs_conservative = {str(f) for f in conservative_fields} & set(names)
-    needs_sample = set(names) - needs_conservative
 
     # 원본 메쉬를 복사해 타임스텝별 값을 얹어가며 샘플한다 (원본 불변).
     source = dataset.mesh.copy(deep=True)
     series_out: dict[str, list[Any]] = {name: [] for name in names}
+    valid_masks: list[np.ndarray] = []
     for step in range(n_steps):
         if isinstance(series_in, dict):
             for name in names:
@@ -547,14 +629,25 @@ def coarsen_dataset(
                 location = str(locations.get(name, "point"))
                 target = source.cell_data if location == "cell" else source.point_data
                 target[name] = np.asarray(current)
-        sampled = grid.sample(source) if needs_sample else None
+        sampled = grid.sample(source)
+        raw_mask = np.asarray(
+            sampled.point_data.get(
+                "vtkValidPointMask", np.ones(grid.n_points, dtype=np.uint8)
+            ),
+            dtype=bool,
+        )
+        valid_masks.append(raw_mask)
         for name in names:
             if name in needs_conservative:
-                series_out[name].append(
-                    conservative_resample_to_grid(source, name, grid)
-                )
-            elif sampled is not None and name in sampled.point_data:
-                series_out[name].append(np.asarray(sampled.point_data[name]))
+                values = conservative_resample_to_grid(source, name, grid)
+            elif name in sampled.point_data:
+                values = np.asarray(sampled.point_data[name])
+            else:
+                continue
+            from naviertwin.core.preprocessing.reduction import apply_validity_mask
+
+            filled, _ = apply_validity_mask(np.asarray(values), raw_mask)
+            series_out[name].append(filled)
 
     stacked = {
         name: np.stack(values, axis=0) for name, values in series_out.items() if values
@@ -565,8 +658,13 @@ def coarsen_dataset(
     mesh = grid.copy(deep=True)
     for name, values in stacked.items():
         mesh.point_data[name] = np.asarray(values[0])
+    mask_stack = np.stack(valid_masks, axis=0).astype(np.uint8)
+    mesh.point_data["valid_mask"] = mask_stack[0]
+    points_after = int(mesh.n_points)
 
-    times = [float(t) for t in (getattr(dataset, "time_steps", None) or [0.0])]
+    raw_time_values = getattr(dataset, "time_steps", None)
+    raw_times = list(raw_time_values) if raw_time_values is not None else []
+    times = [float(t) for t in (raw_times or [0.0])]
     out = _CFDDataset(
         mesh=mesh,
         time_steps=times[:n_steps] if len(times) >= n_steps else times,
@@ -575,8 +673,12 @@ def coarsen_dataset(
             "source": f"{meta.get('source', 'unknown')}+coarsened",
             "coarsen_resolution": int(resolution),
             "coarsen_points_before": points_before,
+            "coarsen_retain_fraction": float(points_after / points_before)
+            if points_before
+            else 0.0,
             "time_series_fields": stacked,
             "time_series_locations": {name: "point" for name in stacked},
+            "time_series_valid_mask": mask_stack,
         },
     )
     points_after = int(out.n_points)
@@ -720,6 +822,12 @@ def load_case_set(
         source = "case_index (파라미터 CSV 없음)"
         logger.warning("파라미터 CSV 가 없어 case index 를 입력으로 사용합니다: %s", base)
 
+    # Preserve pre-remap geometry groups. Once cases are sampled onto one common
+    # grid their coordinate signatures become identical and the distinction is lost.
+    from naviertwin.core.data_model.signature import assign_geometry_ids as _geometry_ids
+
+    geometry_ids = [f"geometry-{value}" for value in _geometry_ids(datasets)]
+
     # 형상 가변 지원: 메쉬가 서로 다르면 공통 격자로 재샘플해야 스냅샷 행렬/
     # 신경장 학습이 성립한다 (근거: model-taxonomy-plan.md §15, M4a).
     identical = meshes_are_identical(datasets)
@@ -757,6 +865,7 @@ def load_case_set(
         "params": np.asarray(values, dtype=np.float64),
         "param_names": list(names),
         "case_names": [f.name for f in files],
+        "geometry_ids": geometry_ids,
         "params_source": source,
         "resampled": resampled,
         "grid_summary": grid_summary,
@@ -1057,7 +1166,10 @@ def build_geometry_fno_twin(
     from naviertwin.core.operator_learning.fno.case_tensorizer import (
         cases_to_grid_tensors,
     )
-    from naviertwin.core.operator_learning.fno.geometry_fno import GeometryFNO2D
+    from naviertwin.core.operator_learning.fno.geometry_fno import (
+        GeometryFNO2D,
+        GeometryFNONd,
+    )
     from naviertwin.core.preprocessing.group_split import (
         classify_query_split,
         group_train_val_test_split,
@@ -1069,15 +1181,6 @@ def build_geometry_fno_twin(
     cases = list(datasets)
     if len(cases) < 2:
         raise ValueError(f"트윈 학습에는 케이스가 2개 이상 필요합니다. 현재: {len(cases)}")
-    if any(max(1, int(getattr(case, "n_time_steps", 1))) > 1 for case in cases):
-        # 텐서화는 케이스당 스냅샷 1장(시간축 없음)을 전제한다 — 시계열을
-        # 조용히 마지막 스텝으로 뭉개느니 명확히 거절한다.
-        raise ValueError(
-            "비정상(시계열) 케이스 세트의 GeometryFNO 는 아직 미지원입니다 — "
-            "정상 해(스텝 1개) 케이스만 학습할 수 있습니다. 비정상 스윕은 "
-            "ROM/Physics AI/ParametricDMD 를 쓰세요."
-        )
-
     params_arr = np.asarray(params, dtype=np.float64)
     if params_arr.ndim == 1:
         params_arr = params_arr.reshape(-1, 1)
@@ -1090,6 +1193,23 @@ def build_geometry_fno_twin(
         if param_names
         else [f"param_{i}" for i in range(params_arr.shape[1])]
     )
+    from naviertwin.core.preprocessing import expand_unsteady_case_snapshots
+
+    cases, params_arr, names, has_time = expand_unsteady_case_snapshots(
+        cases,
+        params_arr,
+        names,
+        field_names=fields,
+    )
+    if has_time:
+        source_groups = [
+            int(case.metadata["source_case_index"]) for case in cases
+        ]
+        if group_ids is not None:
+            original_groups = list(group_ids)
+            group_ids = [original_groups[index] for index in source_groups]
+        else:
+            group_ids = source_groups
 
     # ML 텐서 캐시 (검토 §6½ #6, 저장 계층) — 텐서화는 케이스별 grid.sample
     # + EDT 를 도는 비싼 연산이라, 콘텐츠 주소(메쉬 시그니처 + params 바이트
@@ -1146,14 +1266,32 @@ def build_geometry_fno_twin(
         val_idx = np.zeros(0, dtype=np.int64)
         test_idx = np.zeros(0, dtype=np.int64)
 
-    operator = GeometryFNO2D(
-        n_params=params_arr.shape[1],
-        out_channels=len(target_names),
-        modes=int(modes),
-        width=int(width),
-        epochs=int(epochs),
-        backend=backend,
+    spatial_dimension = int(
+        tensors["meta"].get("spatial_dimension", tensors["inputs"].ndim - 2)
     )
+    if spatial_dimension == 2:
+        operator = GeometryFNO2D(
+            n_params=params_arr.shape[1],
+            out_channels=len(target_names),
+            modes=int(modes),
+            width=int(width),
+            epochs=int(epochs),
+            backend=backend,
+        )
+    else:
+        if backend != "neuralop":
+            raise ValueError(
+                "1D/3D GeometryFNO requires backend='neuralop'; "
+                "the builtin spectral kernel is 2D only"
+            )
+        operator = GeometryFNONd(
+            spatial_dimension=spatial_dimension,
+            n_params=params_arr.shape[1],
+            out_channels=len(target_names),
+            modes=int(modes),
+            width=int(width),
+            epochs=int(epochs),
+        )
     # 마스크 손실 (v5.6, 검토 §6½ #1) — 고체/무효 셀(0-채움)을 loss 에서 제외.
     # 0 이 물리값인지 결측인지 모델이 헷갈리지 않게 한다. builtin backend 전용.
     operator.fit(
@@ -1180,23 +1318,31 @@ def build_geometry_fno_twin(
             "resolution": int(resolution),
             "grid_summary": grid_summary,
             "remap_floor_rel_l2": remap_floor["rel_l2"],
+            "problem_type": (
+                "unsteady_sweep_operator" if has_time else "steady_sweep_operator"
+            ),
         },
     )
 
     eval_split: dict[str, Any] = {"enabled": bool(group_split)}
     if group_split:
-        height, width = tensors["meta"]["hw"]
+        spatial_shape = tuple(
+            int(value)
+            for value in tensors["meta"].get(
+                "spatial_shape", tensors["inputs"].shape[1:-1]
+            )
+        )
         train_params_used = params_arr[train_idx]
         geometry_ids_arr = np.asarray(group_ids) if group_ids is not None else None
         holdout: list[dict[str, Any]] = []
         for split_name, idx_array in (("val", val_idx), ("test", test_idx)):
             for case_idx in idx_array.tolist():
                 truth_chw = np.moveaxis(tensors["targets"][case_idx], -1, 0)
-                valid_hw = tensors["valid_mask"][case_idx].astype(bool)
-                valid_full = np.broadcast_to(valid_hw, truth_chw.shape)
+                valid_spatial = tensors["valid_mask"][case_idx].astype(bool)
+                valid_full = np.broadcast_to(valid_spatial, truth_chw.shape)
                 pred_chw = np.asarray(
                     engine.predict(params_arr[case_idx]), dtype=np.float64
-                ).reshape(len(target_names), int(height), int(width))
+                ).reshape(len(target_names), *spatial_shape)
                 if valid_full.any():
                     metrics = compute_error_field(
                         truth_chw[valid_full], pred_chw[valid_full]
@@ -1273,6 +1419,9 @@ def build_mesh_gnn_twin_from_cases(
     val_frac: float = 0.15,
     test_frac: float = 0.15,
     split_seed: int = 0,
+    _operator_factory: type[Any] | None = None,
+    _engine_factory: type[Any] | None = None,
+    _operator_kwargs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """케이스 세트에서 메쉬 네이티브 GNN(mesh_gnn) 트윈을 학습한다 (Route 2).
 
@@ -1330,15 +1479,6 @@ def build_mesh_gnn_twin_from_cases(
     cases = list(datasets)
     if len(cases) < 2:
         raise ValueError(f"트윈 학습에는 케이스가 2개 이상 필요합니다. 현재: {len(cases)}")
-    if any(max(1, int(getattr(case, "n_time_steps", 1))) > 1 for case in cases):
-        # 그래프 타깃은 케이스당 스냅샷 1장(시간축 없음)을 전제한다 — 시계열을
-        # 조용히 첫 스텝으로 뭉개느니 명확히 거절한다 (GeometryFNO 와 동일 게이트).
-        raise ValueError(
-            "비정상(시계열) 케이스 세트의 메쉬 GNN 은 아직 미지원입니다 — "
-            "정상 해(스텝 1개) 케이스만 학습할 수 있습니다. 비정상 스윕은 "
-            "ROM/Physics AI/ParametricDMD 를 쓰세요."
-        )
-
     params_arr = np.asarray(params, dtype=np.float64)
     if params_arr.ndim == 1:
         params_arr = params_arr.reshape(-1, 1)
@@ -1352,6 +1492,21 @@ def build_mesh_gnn_twin_from_cases(
         else [f"param_{i}" for i in range(params_arr.shape[1])]
     )
     inputs = [str(n) for n in input_field_names if str(n).strip()]
+    from naviertwin.core.preprocessing import expand_unsteady_case_snapshots
+
+    cases, params_arr, names, has_time = expand_unsteady_case_snapshots(
+        cases,
+        params_arr,
+        names,
+        field_names=[*fields, *inputs],
+    )
+    if has_time:
+        source_groups = [int(case.metadata["source_case_index"]) for case in cases]
+        if group_ids is not None:
+            original_groups = list(group_ids)
+            group_ids = [original_groups[index] for index in source_groups]
+        else:
+            group_ids = source_groups
 
     # 그룹 스플릿 (검토 §6½ #2) — train 케이스로만 정규화 상수를 계산하고
     # val/test 그래프에 주입한다 (train-only 원칙).
@@ -1390,13 +1545,16 @@ def build_mesh_gnn_twin_from_cases(
             )
 
     in_dim = int(graphs[0]["x"].shape[1])
-    operator = CaseSetGNN(
+    operator_type = _operator_factory or CaseSetGNN
+    engine_type = _engine_factory or MeshGNNTwinEngine
+    operator = operator_type(
         in_dim=in_dim,
         out_dim=len(target_names),
         hidden=int(hidden),
         n_layers=int(n_layers),
         max_epochs=int(max_epochs),
         device=str(device),
+        **(_operator_kwargs or {}),
     )
     operator.fit({"graphs": [graphs[i] for i in train_idx.tolist()]})
 
@@ -1415,7 +1573,7 @@ def build_mesh_gnn_twin_from_cases(
         }
         for i in train_idx.tolist()
     ]
-    engine = MeshGNNTwinEngine(
+    engine = engine_type(
         operator,
         cases=engine_cases,
         train_params=params_arr[train_idx],
@@ -1424,6 +1582,9 @@ def build_mesh_gnn_twin_from_cases(
         target_names=target_names,
         norm=norm,
         input_field_names=inputs,
+        metadata={
+            "problem_type": "unsteady_sweep" if has_time else "steady_sweep"
+        },
     )
 
     eval_split: dict[str, Any] = {"enabled": bool(group_split)}
@@ -1489,6 +1650,50 @@ def build_mesh_gnn_twin_from_cases(
             float(operator.train_losses_[-1]) if operator.train_losses_ else float("nan")
         ),
     }
+
+
+def build_transolver_twin_from_cases(
+    datasets: Sequence[CFDDataset],
+    field: str | Sequence[str],
+    params: np.ndarray,
+    *,
+    param_names: Sequence[str] | None = None,
+    hidden: int = 64,
+    n_layers: int = 4,
+    n_slices: int = 32,
+    n_heads: int = 4,
+    max_epochs: int = 200,
+    device: str = "auto",
+    input_field_names: Sequence[str] = (),
+    group_split: bool = False,
+    group_ids: Sequence[int] | None = None,
+    val_frac: float = 0.15,
+    test_frac: float = 0.15,
+    split_seed: int = 0,
+) -> dict[str, Any]:
+    """Train a variable-mesh Physics-Attention operator without remapping."""
+    from naviertwin.core.digital_twin.transolver_engine import TransolverTwinEngine
+    from naviertwin.core.gnn.transolver import CaseSetTransolver
+
+    return build_mesh_gnn_twin_from_cases(
+        datasets,
+        field,
+        params,
+        param_names=param_names,
+        hidden=hidden,
+        n_layers=n_layers,
+        max_epochs=max_epochs,
+        device=device,
+        input_field_names=input_field_names,
+        group_split=group_split,
+        group_ids=group_ids,
+        val_frac=val_frac,
+        test_frac=test_frac,
+        split_seed=split_seed,
+        _operator_factory=CaseSetTransolver,
+        _engine_factory=TransolverTwinEngine,
+        _operator_kwargs={"n_slices": int(n_slices), "n_heads": int(n_heads)},
+    )
 
 
 def build_mgn_twin_from_cases(
@@ -1569,15 +1774,6 @@ def build_mgn_twin_from_cases(
     cases = list(datasets)
     if len(cases) < 2:
         raise ValueError(f"트윈 학습에는 케이스가 2개 이상 필요합니다. 현재: {len(cases)}")
-    if any(max(1, int(getattr(case, "n_time_steps", 1))) > 1 for case in cases):
-        # 그래프 타깃은 케이스당 스냅샷 1장(시간축 없음)을 전제한다 — 시계열을
-        # 조용히 첫 스텝으로 뭉개느니 명확히 거절한다 (mesh_gnn/GeometryFNO 와 동일 게이트).
-        raise ValueError(
-            "비정상(시계열) 케이스 세트의 메쉬 GNN(메시지패싱) 은 아직 미지원입니다 — "
-            "정상 해(스텝 1개) 케이스만 학습할 수 있습니다. 비정상 스윕은 "
-            "ROM/Physics AI/ParametricDMD 를 쓰세요."
-        )
-
     params_arr = np.asarray(params, dtype=np.float64)
     if params_arr.ndim == 1:
         params_arr = params_arr.reshape(-1, 1)
@@ -1591,6 +1787,21 @@ def build_mgn_twin_from_cases(
         else [f"param_{i}" for i in range(params_arr.shape[1])]
     )
     inputs = [str(n) for n in input_field_names if str(n).strip()]
+    from naviertwin.core.preprocessing import expand_unsteady_case_snapshots
+
+    cases, params_arr, names, has_time = expand_unsteady_case_snapshots(
+        cases,
+        params_arr,
+        names,
+        field_names=[*fields, *inputs],
+    )
+    if has_time:
+        source_groups = [int(case.metadata["source_case_index"]) for case in cases]
+        if group_ids is not None:
+            original_groups = list(group_ids)
+            group_ids = [original_groups[index] for index in source_groups]
+        else:
+            group_ids = source_groups
 
     # 그룹 스플릿 (검토 §6½ #2) — train 케이스로만 정규화 상수를 계산하고
     # val/test 그래프에 주입한다 (train-only 원칙).
@@ -1666,6 +1877,9 @@ def build_mgn_twin_from_cases(
         target_names=target_names,
         norm=norm,
         input_field_names=inputs,
+        metadata={
+            "problem_type": "unsteady_sweep" if has_time else "steady_sweep"
+        },
     )
 
     eval_split: dict[str, Any] = {"enabled": bool(group_split)}
@@ -3252,6 +3466,7 @@ def save_project(
     path: str | Path,
     *,
     engine: Any = None,
+    canonical_project: Any = None,
     compression: str | None = "gzip",
 ) -> dict[str, str]:
     """데이터셋을 ``.ntwin`` (VTKHDF 기반)으로 저장하고, 엔진이 있으면 동봉한다.
@@ -3259,19 +3474,32 @@ def save_project(
     Returns:
         저장된 경로들 (``project``, 선택적으로 ``engine``).
     """
+    from naviertwin.core.data_model import TwinProject
     from naviertwin.core.export.ntwin_format import save_dataset
 
     target = _ensure_parent(path)
     if target.suffix.lower() != ".ntwin":
         target = target.with_suffix(".ntwin")
+    if canonical_project is not None and not isinstance(canonical_project, TwinProject):
+        raise TypeError("canonical_project must be a TwinProject")
     # .ntwin(VTKHDF) 은 UnstructuredGrid 토폴로지를 기대한다. ImageData/
     # StructuredGrid 등은 cast 해야 round-trip(재로드)이 보장된다.
-    save_dataset(_as_unstructured(dataset), target, compression=compression)
+    save_dataset(
+        _as_unstructured(dataset),
+        target,
+        compression=compression,
+        canonical_project=canonical_project,
+    )
     paths = {"project": str(target)}
     if engine is not None and hasattr(engine, "save"):
         engine_path = target.with_suffix(".engine.pkl")
         engine.save(engine_path)
         paths["engine"] = str(engine_path)
+    if canonical_project is not None:
+        from naviertwin.core.data_model import save_project_manifest
+        manifest_path = target.with_suffix(".manifest.json")
+        save_project_manifest(canonical_project, manifest_path)
+        paths["manifest"] = str(manifest_path)
     return paths
 
 
@@ -3344,6 +3572,7 @@ __all__ = [
     "is_derived_field",
     "load_dataset",
     "load_project",
+    "load_project_bundle",
     "make_demo_dataset",
     "pod_mode_field",
     "predict_twin",
@@ -3393,7 +3622,7 @@ def compute_error_field(truth: np.ndarray, prediction: np.ndarray) -> dict[str, 
     Raises:
         ValueError: 두 벡터의 크기가 다르거나 비어 있는 경우.
     """
-    from naviertwin.core.validation.metrics import r2_score, relative_l2_error, rmse
+    from naviertwin.core.validation.comparison import compare_fields
 
     truth_vec = np.asarray(truth, dtype=np.float64).reshape(-1)
     pred_vec = np.asarray(prediction, dtype=np.float64).reshape(-1)
@@ -3406,13 +3635,14 @@ def compute_error_field(truth: np.ndarray, prediction: np.ndarray) -> dict[str, 
             f"실제({truth_vec.size})와 예측({pred_vec.size}) 벡터 크기가 달라 "
             "오차를 계산할 수 없습니다."
         )
-    abs_error = np.abs(truth_vec - pred_vec)
+    comparison = compare_fields(truth_vec, pred_vec)
+    metrics = comparison.metrics
     return {
-        "abs_error": abs_error,
-        "rmse": float(rmse(truth_vec, pred_vec)),
-        "rel_l2": float(relative_l2_error(truth_vec, pred_vec)),
-        "max_error": float(abs_error.max()),
-        "r2": float(r2_score(truth_vec, pred_vec)),
+        "abs_error": comparison.absolute_error,
+        "rmse": metrics["rmse"],
+        "rel_l2": metrics["relative_l2"],
+        "max_error": metrics["max_error"],
+        "r2": metrics["r2"],
     }
 
 
@@ -4088,15 +4318,6 @@ def build_gino_twin_from_cases(
     cases = list(datasets)
     if len(cases) < 2:
         raise ValueError(f"트윈 학습에는 케이스가 2개 이상 필요합니다. 현재: {len(cases)}")
-    if any(max(1, int(getattr(case, "n_time_steps", 1))) > 1 for case in cases):
-        # GINO 타깃도 케이스당 스냅샷 1장(시간축 없음)을 전제한다 — mesh_gnn/
-        # GeometryFNO 와 동일 게이트.
-        raise ValueError(
-            "비정상(시계열) 케이스 세트의 GINO 는 아직 미지원입니다 — "
-            "정상 해(스텝 1개) 케이스만 학습할 수 있습니다. 비정상 스윕은 "
-            "ROM/Physics AI/ParametricDMD 를 쓰세요."
-        )
-
     params_arr = np.asarray(params, dtype=np.float64)
     if params_arr.ndim == 1:
         params_arr = params_arr.reshape(-1, 1)
@@ -4110,6 +4331,21 @@ def build_gino_twin_from_cases(
         else [f"param_{i}" for i in range(params_arr.shape[1])]
     )
     inputs = [str(n) for n in input_field_names if str(n).strip()]
+    from naviertwin.core.preprocessing import expand_unsteady_case_snapshots
+
+    cases, params_arr, names, has_time = expand_unsteady_case_snapshots(
+        cases,
+        params_arr,
+        names,
+        field_names=[*fields, *inputs],
+    )
+    if has_time:
+        source_groups = [int(case.metadata["source_case_index"]) for case in cases]
+        if group_ids is not None:
+            original_groups = list(group_ids)
+            group_ids = [original_groups[index] for index in source_groups]
+        else:
+            group_ids = source_groups
 
     # 그룹 스플릿 (검토 §6½ #2) — train 케이스로만 정규화 상수를 계산하고
     # val/test 점군에 주입한다 (train-only 원칙).
@@ -4184,6 +4420,9 @@ def build_gino_twin_from_cases(
         target_names=target_names,
         norm=norm,
         input_field_names=inputs,
+        metadata={
+            "problem_type": "unsteady_sweep" if has_time else "steady_sweep"
+        },
     )
 
     eval_split: dict[str, Any] = {"enabled": bool(group_split)}

@@ -131,18 +131,22 @@ def test_predict_rejects_wrong_param_dim(shapes_twin: dict) -> None:
         shapes_twin["engine"].predict(np.asarray([0.1, 0.2]))
 
 
-def test_unsteady_case_set_is_rejected() -> None:
-    """비정상 스윕은 명확히 거절한다 — 시계열을 조용히 뭉개지 않는다."""
-    result = service.make_demo_case_set("sweep_unsteady")
-    with pytest.raises(ValueError, match="미지원"):
-        service.build_geometry_fno_twin(
-            result["datasets"],
-            "p",
-            result["params"],
-            param_names=result["param_names"],
-            resolution=16,
-            **_TINY,
-        )
+def test_unsteady_case_set_expands_time_parameter() -> None:
+    result = service.make_demo_case_set("sweep_unsteady", n_side=8)
+    built = service.build_geometry_fno_twin(
+        result["datasets"],
+        "p",
+        result["params"],
+        param_names=result["param_names"],
+        resolution=8,
+        modes=3,
+        width=4,
+        epochs=1,
+        use_tensor_cache=False,
+    )
+
+    assert built["param_names"] == ["inlet_velocity", "t"]
+    assert built["engine"].training_metadata["problem_type"] == "unsteady_sweep_operator"
 
 
 def test_multi_field_output_specs_and_split(shapes_case_set: dict) -> None:

@@ -9,6 +9,7 @@ _EXPORT_MODULES = {
     "NTwinReader": "naviertwin.core.export.ntwin_format",
     "NTwinWriter": "naviertwin.core.export.ntwin_format",
     "load_dataset": "naviertwin.core.export.ntwin_format",
+    "load_embedded_project_manifest": "naviertwin.core.export.ntwin_format",
     "save_dataset": "naviertwin.core.export.ntwin_format",
     "export_to_onnx": "naviertwin.core.export.onnx_export",
     "verify_onnx": "naviertwin.core.export.onnx_export",

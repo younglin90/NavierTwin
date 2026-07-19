@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 
 if TYPE_CHECKING:
     from naviertwin.core.cfd_reader.base import CFDDataset
+    from naviertwin.core.data_model import TwinProject
 
 
 class ExportPanel(QWidget):
@@ -45,6 +46,7 @@ class ExportPanel(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._dataset: Optional[CFDDataset] = None
+        self._canonical_project: TwinProject | None = None
         self._engine: Optional[object] = None
         self._model_artifact: Optional[object] = None
         self._model_sample_input: Optional[object] = None
@@ -155,6 +157,10 @@ class ExportPanel(QWidget):
         self._engine = None
         self._log(f"Dataset 설정: {dataset.n_points} pts, {dataset.n_cells} cells")
         self._log("TwinEngine 상태 초기화")
+
+    def set_canonical_project(self, project: TwinProject | None) -> None:
+        """Set the canonical manifest saved beside the array container."""
+        self._canonical_project = project
 
     def set_engine(self, engine: object) -> None:
         """내보낼 TwinEngine을 설정한다."""
@@ -290,6 +296,12 @@ class ExportPanel(QWidget):
         compression = "gzip" if self._compress_cb.isChecked() else None
         save_dataset(self._dataset, path, compression=compression)
         self._log(f"✓ .ntwin 저장: {path}")
+        if self._canonical_project is not None:
+            from naviertwin.core.data_model import save_project_manifest
+
+            manifest_path = path.with_suffix(".manifest.json")
+            save_project_manifest(self._canonical_project, manifest_path)
+            self._log(f"✓ canonical manifest 저장: {manifest_path}")
         metadata = self._build_project_metadata(path)
         self._write_metadata_sidecar(path, metadata)
         self._attach_project_metadata(metadata)

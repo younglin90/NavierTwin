@@ -30,9 +30,14 @@ server
 .. code-block:: bash
 
    naviertwin server --host 0.0.0.0 --port 8000
+   naviertwin server --host 0.0.0.0 --port 8443 --workers 4 \
+     --ssl-certfile server.crt --ssl-keyfile server.key
 
 Expected: starts the FastAPI service. It exits with code 1 if ``uvicorn`` is not
-installed.
+installed. API keys, shared rate limiting, and request size limits use the
+``NAVIERTWIN_API_*`` and ``NAVIERTWIN_RATE_LIMIT_*`` environment variables in
+:doc:`api/api`. Enable ``--proxy-headers`` only for proxies listed by
+``--forwarded-allow-ips``.
 
 web
 ---
@@ -95,6 +100,32 @@ summaries, and when MPI is active rank 0 also gathers a merged
 ``batch_results.json``. MPI is initialized only on this headless path — never
 inside the desktop or web GUI event loops. The command exits 1 if any job
 fails and 2 on config or runtime errors.
+
+launch-ddp
+----------
+
+.. code-block:: bash
+
+   naviertwin launch-ddp --entrypoint train.py --nproc-per-node auto --dry-run -- --epochs 20
+
+Expected: validates the distributed launch configuration and runs the Python
+entrypoint through ``torchrun``. ``auto`` selects the visible CUDA device count,
+falling back to one process on CPU-only hosts. ``--dry-run`` prints the exact
+command without starting workers. Multi-node launches use ``--nnodes``,
+``--node-rank``, ``--master-addr``, and ``--master-port``.
+
+plan-scale
+----------
+
+.. code-block:: bash
+
+   naviertwin plan-scale --cases 12 --time-steps 40 --points 2000000 --cells 1800000 --route route2 --workers 4 --ram-gb 32 --vram-gb 12 --json
+
+Expected: estimates total CFD bytes separately from bounded host/device working
+sets, then reports point chunk size, case batch size, GPU microbatch, gradient
+accumulation, and MPI ranks. Omit ``--ram-gb``/``--vram-gb`` to inspect current
+machine resources. The command exits 1 when even the minimum point chunk cannot
+fit and 2 for invalid resource or workload values.
 
 build-twin
 ----------

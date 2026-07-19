@@ -7,6 +7,13 @@
     'NavierTwin API'
 """
 
+from naviertwin.api.operations import (
+    APIMetrics,
+    APISettings,
+    SlidingWindowRateLimiter,
+    SQLiteWindowRateLimiter,
+    api_key_sha256,
+)
 from naviertwin.api.server import (
     BayesianOptReq,
     CouetteReq,
@@ -21,16 +28,24 @@ from naviertwin.api.server import (
     TwinPackageInspectReq,
     TwinPackageVerifyReq,
     TwinPredictReq,
+    TwinStreamAlignReq,
+    TwinStreamCloseReq,
     TwinStreamInitReq,
     TwinStreamObserveBatchReq,
     TwinStreamObserveLineReq,
     TwinStreamObserveReq,
+    TwinStreamSensorReq,
     TwinStreamStepReq,
     app,
     create_app,
 )
 
 __all__ = [
+    "APIMetrics",
+    "APISettings",
+    "SlidingWindowRateLimiter",
+    "SQLiteWindowRateLimiter",
+    "api_key_sha256",
     "BayesianOptReq",
     "CouetteReq",
     "LBMReq",
@@ -45,9 +60,12 @@ __all__ = [
     "TwinPackageVerifyReq",
     "TwinPredictReq",
     "TwinStreamInitReq",
+    "TwinStreamAlignReq",
+    "TwinStreamCloseReq",
     "TwinStreamObserveBatchReq",
     "TwinStreamObserveLineReq",
     "TwinStreamObserveReq",
+    "TwinStreamSensorReq",
     "TwinStreamStepReq",
     "app",
     "create_app",

@@ -19,9 +19,11 @@ Usage:
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any, Optional
 
 from naviertwin import __version__
+from naviertwin.core.data_model import TwinWorkspace
 from naviertwin.core.preprocessing.field_semantics import flag_conserved_fields
 from naviertwin.web import bench, render, service, theme
 
@@ -56,6 +58,35 @@ class NavierTwinWebApp:
         engine: 학습된 ``TwinEngine`` (Twin 단계).
     """
 
+    @property
+    def dataset(self) -> Any | None:
+        """Current viewer dataset owned by the canonical workspace."""
+        return self.workspace.view_dataset
+
+    @dataset.setter
+    def dataset(self, value: Any) -> None:
+        self.workspace.set_view_dataset(value)
+
+    @property
+    def case_datasets(self) -> tuple[Any, ...] | None:
+        return self.workspace.case_datasets
+
+    @property
+    def case_params(self) -> Any | None:
+        return self.workspace.parameters
+
+    @property
+    def case_param_names(self) -> list[str]:
+        return list(self.workspace.parameter_names)
+
+    @property
+    def engine(self) -> Any | None:
+        return self.workspace.engine
+
+    @engine.setter
+    def engine(self, value: Any | None) -> None:
+        self.workspace.set_engine(value)
+
     def __init__(self, server: Any = None) -> None:
         from trame.app import get_server
 
@@ -63,26 +94,26 @@ class NavierTwinWebApp:
         self.state = self.server.state
         self.ctrl = self.server.controller
         self.plotter: Optional[Any] = None
+        self.workspace = TwinWorkspace()
         # 분할 뷰(v5.4) 우측 패널용 독립 Plotter — 좌측(self.plotter)은 실제
         # 필드, 우측은 트윈 예측을 보여준다. 둘 다 build_ui 시점에 미리
         # plotter_ui 로 붙여두고 v_show 로 토글한다(trame UI 는 1회만 빌드).
         self.plotter_right: Optional[Any] = None
-        self.dataset: Optional[Any] = None
-        # 케이스 세트(문제 유형 B) 로드 시에만 채워진다 — dataset 은 뷰어용
-        # 첫 케이스를 가리키고, 학습은 case_datasets 전체 + case_params 로 한다.
-        self.case_datasets: Optional[list[Any]] = None
-        self.case_params: Optional[Any] = None
-        self.case_param_names: list[str] = []
+        # Canonical project + runtime datasets/parameters/engine are owned by
+        # ``workspace``. Compatibility properties above keep existing callbacks stable.
         # 예측 격자 전환(M3) 중 원래 학습 데이터셋을 보관 — 복귀용.
         self._origin_dataset: Optional[Any] = None
         self.reducer: Optional[Any] = None
-        self.engine: Optional[Any] = None
         self._pod_result: Optional[dict[str, Any]] = None
         self._bench_dataset: Optional[dict[str, Any]] = None
         self._bench_result: Optional[dict[str, Any]] = None
+        from naviertwin.core.data_assimilation.streaming import SensorBuffer
+
+        self._sensor_buffer = SensorBuffer(max_samples_per_sensor=1024)
         self._ui_built = False
         # 비동기(executor) 실행 중에는 렌더를 메인 스레드로 미룬다 (GL 안전).
         self._executor: Optional[Any] = None
+        self._training_jobs: Optional[Any] = None
         self._defer_render = False
         self._render_pending = False
         self._reset_camera_pending = False
@@ -93,6 +124,9 @@ class NavierTwinWebApp:
         self._progress_monitor: Optional[Any] = None
 
         self._init_state()
+        self._coarsen_mode = "fraction"
+        self._last_coarsen_percent = float(self.state.nt_coarsen_percent)
+        self._last_coarsen_resolution = int(self.state.nt_coarsen_resolution)
         self._register_callbacks()
 
     # ------------------------------------------------------------------
@@ -131,6 +165,10 @@ class NavierTwinWebApp:
         st.nt_fb_entries = []
         st.nt_fb_home = ""
         st.nt_has_dataset = False
+        st.nt_project_id = ""
+        st.nt_project_name = ""
+        st.nt_project_revision = 0
+        st.nt_project_runtime_complete = False
         st.nt_info_points = 0
         st.nt_info_cells = 0
         st.nt_info_steps = 0
@@ -156,6 +194,7 @@ class NavierTwinWebApp:
         # (n_features × n_steps) 전체 행렬을 메모리에 올리므로 학습 전에 해상도를
         # 줄이는 것이 유일하게 효과적이다.
         st.nt_coarsen_resolution = 48
+        st.nt_coarsen_percent = 25
         st.nt_coarsen_summary = ""
         # 적용 전 미리보기 — 사용자가 해상도를 고르려면 "이 값이면 몇 점"인지
         # 먼저 보여야 한다. 슬라이더를 움직일 때마다 갱신된다.
@@ -241,6 +280,12 @@ class NavierTwinWebApp:
         # 학습에 실제 쓰인 디바이스 배지 (v5.6) — GPU 로 도는데 사용자가 모르는
         # 문제 해소. 학습 완료 시 엔진 metadata 에서 읽어 채운다.
         st.nt_train_device = ""
+        st.nt_training_job_id = ""
+        st.nt_training_state = "idle"
+        st.nt_training_message = ""
+        st.nt_training_cancelable = False
+        st.nt_training_checkpoint = ""
+        st.nt_training_preflight = ""
         # 실험 관리 (외부 검토 §6½ #6, 저장 계층) — MLflow 로 기록된 최근 학습
         # run 목록(최신 N개). 학습 성공 직후 :meth:`_log_training_run` 이 채운다.
         # mlflow 미설치 환경에서는 항상 빈 리스트(추적은 부가 기능일 뿐).
@@ -289,6 +334,13 @@ class NavierTwinWebApp:
         st.nt_mgn_epochs = 200
         st.nt_mgn_hidden = 64
         st.nt_mgn_msgpass = 4
+
+        # Model — Transolver Physics-Attention. 학습된 slice token 으로 전역
+        # 상호작용 비용을 mesh point 수에 선형으로 제한한다.
+        st.nt_transolver_epochs = 200
+        st.nt_transolver_hidden = 64
+        st.nt_transolver_layers = 4
+        st.nt_transolver_slices = 32
 
         # Model — 계열 Ⓓ 동역학 예보 (PyDMD). 학습 구간 밖 외삽이 가능한 유일
         # 계열. 적합도(재구성 오차)를 반드시 노출한다 — DMD 는 데이터가 안 맞으면
@@ -404,6 +456,27 @@ class NavierTwinWebApp:
         st.nt_bench_loss = 0.0
         st.nt_bench_loss_series = []
 
+        # Operation — large-case resource plan and timestamped sensor readiness.
+        st.nt_scale_route = "route2"
+        st.nt_scale_route_choices = [
+            {"title": "원본 메쉬 (Route 2)", "value": "route2"},
+            {"title": "공통 격자 (Route 1)", "value": "route1"},
+        ]
+        st.nt_scale_cases = 12
+        st.nt_scale_timesteps = 40
+        st.nt_scale_points = 2_000_000
+        st.nt_scale_cells = 1_800_000
+        st.nt_scale_workers = 4
+        st.nt_scale_ram_gb = 32.0
+        st.nt_scale_vram_gb = 12.0
+        st.nt_scale_summary = ""
+        st.nt_scale_warnings = []
+        st.nt_sensor_id = "pressure-01"
+        st.nt_sensor_timestamp = 0.0
+        st.nt_sensor_values = "0.0"
+        st.nt_sensor_ids = "pressure-01"
+        st.nt_sensor_summary = ""
+
         # Export
         import os.path as _osp
 
@@ -432,8 +505,10 @@ class NavierTwinWebApp:
         ctrl.nt_run_fft = A(self.run_fft, "FFT/PSD 계산 중…")
         ctrl.nt_run_pod = A(self.run_pod, "POD 계산 중…")
         ctrl.nt_view_pod_mode = A(self.view_pod_mode, "POD 모드 렌더 중…", render_after=True)
-        ctrl.nt_model_train = A(self.build_twin, "모델 학습 중…")
+        ctrl.nt_model_train = self._train_job_async
         ctrl.nt_build_twin = ctrl.nt_model_train  # 하위 호환 alias (비동기)
+        ctrl.nt_cancel_training = self.cancel_training
+        ctrl.nt_restore_training_checkpoint = self.restore_training_checkpoint
         # 비교/학습은 라이브 진행 전용 async(모니터 큐 push)로 — 진행바/스파크라인 스트리밍.
         ctrl.nt_run_compare = self._run_compare_async
         ctrl.nt_predict = A(self.predict, "예측 계산 중…", render_after=True)
@@ -452,6 +527,9 @@ class NavierTwinWebApp:
         ctrl.nt_bench_load = A(self.bench_load_h5, "PDEBench HDF5 로드 중…")
         ctrl.nt_bench_train = self._bench_train_async
         ctrl.nt_bench_eval = A(self.bench_evaluate, "샘플 예측 평가 중…")
+        ctrl.nt_plan_scale = self.plan_large_workload
+        ctrl.nt_sensor_push = self.push_sensor_sample
+        ctrl.nt_sensor_align = self.align_sensor_samples
         # 즉시 끝나거나 GL 을 메인 스레드에서 만져야 하는 콜백은 동기 유지.
         ctrl.nt_show_energy = self.show_energy_chart
         ctrl.nt_reset_view = self.reset_view
@@ -477,6 +555,7 @@ class NavierTwinWebApp:
         # 케이스 슬라이더 — 시간축이 없는 케이스 세트의 "타임스텝" 역할.
         self.state.change("nt_case_index")(self.select_case)
         # 해상도를 고르는 동안 결과 크기를 계속 보여준다.
+        self.state.change("nt_coarsen_percent")(self._update_coarsen_preview)
         self.state.change("nt_coarsen_resolution")(self._update_coarsen_preview)
 
     def _get_executor(self) -> Any:
@@ -486,6 +565,218 @@ class NavierTwinWebApp:
             # 단일 사용자 — max_workers=1 로 무거운 연산을 직렬화(mesh 경쟁 방지).
             self._executor = ThreadPoolExecutor(max_workers=1)
         return self._executor
+
+    def _get_training_jobs(self) -> Any:
+        if self._training_jobs is None:
+            from pathlib import Path
+
+            from naviertwin.core.training import TrainingJobManager
+
+            checkpoint_dir = Path.home() / ".naviertwin" / "checkpoints"
+            self._training_jobs = TrainingJobManager(
+                max_workers=1,
+                checkpoint_dir=checkpoint_dir,
+            )
+        return self._training_jobs
+
+    def _training_preflight_summary(self) -> str:
+        """Estimate tensor memory before starting a model job."""
+        from naviertwin.core.preprocessing import estimate_training_memory
+        from naviertwin.core.training import training_preflight
+
+        datasets = self.case_datasets or ((self.dataset,) if self.dataset is not None else ())
+        points = max((int(getattr(item, "n_points", 0)) for item in datasets), default=0)
+        snapshots = sum(
+            max(1, int(getattr(item, "n_time_steps", 1))) for item in datasets
+        )
+        components = max(1, len(self._training_fields()))
+        estimate = estimate_training_memory(
+            points=max(1, points),
+            snapshots=max(1, snapshots),
+            components=components,
+        )
+        preflight = training_preflight(estimate.training_bytes, device="auto")
+        return (
+            f"예상 학습 메모리 {estimate.training_gib:.2f} GiB · "
+            f"{preflight.device.upper()}: {preflight.reason}"
+        )
+
+    async def _train_job_async(self) -> None:
+        """Run model training as a cancellable, checkpointed background job."""
+        import asyncio
+        import json
+        import uuid
+
+        from naviertwin.core.training import JobState
+
+        if self.dataset is None:
+            self._fail("데이터 없음", RuntimeError("먼저 데이터를 로드하세요."))
+            return
+        if self.state.nt_training_cancelable:
+            self._fail("학습 진행 중", RuntimeError("현재 학습을 먼저 취소하거나 기다리세요."))
+            return
+
+        manager = self._get_training_jobs()
+        job_id = uuid.uuid4().hex
+        checkpoint_name = f"{job_id}.json"
+        previous_engine = self.engine
+        previous_flags = {
+            "nt_model_ready": bool(self.state.nt_model_ready),
+            "nt_twin_ready": bool(self.state.nt_twin_ready),
+            "nt_physics_ready": bool(self.state.nt_physics_ready),
+            "nt_dmd_ready": bool(self.state.nt_dmd_ready),
+        }
+
+        def task(context: Any) -> None:
+            context.report(0.05, "입력 검증 완료")
+            self.build_twin()
+            if self.state.nt_error:
+                raise RuntimeError(str(self.state.nt_error))
+            context.raise_if_cancelled()
+            engine = self.engine
+            if engine is not None and hasattr(engine, "save"):
+                engine_path = context.checkpoint_path.with_suffix(".engine.pkl")
+                try:
+                    engine.save(engine_path)
+                    payload = json.dumps(
+                        {
+                            "schema": "naviertwin-training-checkpoint-1.0",
+                            "job_id": context.job_id,
+                            "strategy": str(self.state.nt_model_method or "rom"),
+                            "engine_path": str(engine_path),
+                            "project_id": self.workspace.status().project_id,
+                        },
+                        sort_keys=True,
+                    ).encode("utf-8")
+                    context.write_checkpoint(payload)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("학습 체크포인트 저장 실패: %s", exc)
+            context.report(1.0, "학습 완료")
+
+        preflight = self._training_preflight_summary()
+        with self.state:
+            self.state.nt_busy = True
+            self.state.nt_error = ""
+            self.state.nt_progress = 0.0
+            self.state.nt_training_job_id = job_id
+            self.state.nt_training_state = JobState.QUEUED.value
+            self.state.nt_training_message = "학습 대기 중"
+            self.state.nt_training_cancelable = True
+            self.state.nt_training_preflight = preflight
+            self.state.nt_status = "모델 학습 대기 중…"
+        self.state.flush()
+
+        state_status = getattr(self.state, "_status", None)
+        if state_status is not None:
+            state_status.flushing = True
+        try:
+            manager.submit(
+                str(self.state.nt_model_method or "rom"),
+                task,
+                job_id=job_id,
+                checkpoint_name=checkpoint_name,
+                metadata={"project_id": self.workspace.status().project_id},
+            )
+        except Exception as exc:  # noqa: BLE001
+            if state_status is not None:
+                state_status.flushing = False
+            with self.state:
+                self.state.nt_busy = False
+                self.state.nt_training_cancelable = False
+                self.state.nt_progress = -1.0
+            self._fail("학습 작업 시작 실패", exc)
+            return
+        record = manager.record(job_id)
+        try:
+            while record.state in {JobState.QUEUED, JobState.RUNNING}:
+                with self.state:
+                    self.state.nt_training_state = record.state.value
+                    self.state.nt_training_message = record.message
+                    self.state.nt_progress = 100.0 * record.progress
+                await asyncio.sleep(0.1)
+                record = manager.record(job_id)
+        finally:
+            if state_status is not None:
+                state_status.flushing = False
+
+        if record.state is JobState.COMPLETED:
+            engine_metadata = dict(
+                getattr(self.engine, "training_metadata", {}) or {}
+            )
+            validation_metrics = engine_metadata.get("validation_metrics", {})
+            self._record_lineage(
+                "model",
+                strategy=str(self.state.nt_model_method or "rom"),
+                parameters={
+                    "fields": list(self._training_fields()),
+                    "n_modes": int(self.state.nt_n_modes or 0),
+                },
+                metrics=(
+                    validation_metrics
+                    if isinstance(validation_metrics, dict)
+                    else {}
+                ),
+                metadata={"training": engine_metadata},
+            )
+            with self.state:
+                self.state.nt_training_checkpoint = record.checkpoint_path
+                self.state.nt_status = "모델 학습 및 체크포인트 저장 완료"
+        elif record.state is JobState.CANCELLED:
+            self.engine = previous_engine
+            with self.state:
+                for key, value in previous_flags.items():
+                    setattr(self.state, key, value)
+                self.state.nt_status = "모델 학습 취소 완료"
+        else:
+            self._fail("모델 학습 실패", RuntimeError(record.error or "unknown error"))
+        with self.state:
+            self.state.nt_training_state = record.state.value
+            self.state.nt_training_message = record.message or record.error
+            self.state.nt_training_cancelable = False
+            self.state.nt_busy = False
+            self.state.nt_progress = -1.0
+        self._sync_workspace_state()
+        self.state.flush()
+
+    def cancel_training(self) -> None:
+        """Request cooperative cancellation of the active model job."""
+        job_id = str(self.state.nt_training_job_id or "")
+        if not job_id or self._training_jobs is None:
+            return
+        try:
+            if self._training_jobs.cancel(job_id):
+                with self.state:
+                    self.state.nt_training_message = "취소 요청됨 · 현재 커널 종료 대기"
+                    self.state.nt_status = "모델 학습 취소 요청됨"
+        except KeyError:
+            return
+
+    def restore_training_checkpoint(self) -> None:
+        """Restore the engine referenced by the latest successful job checkpoint."""
+        import json
+        from pathlib import Path
+
+        checkpoint = Path(str(self.state.nt_training_checkpoint or ""))
+        if not checkpoint.exists():
+            self._fail("체크포인트 없음", FileNotFoundError(str(checkpoint)))
+            return
+        try:
+            payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+            engine_path = Path(str(payload["engine_path"]))
+            from naviertwin.core.digital_twin.twin_engine import TwinEngine
+
+            try:
+                engine = TwinEngine.load(engine_path)
+            except Exception:
+                from naviertwin.core.digital_twin.physics_ai_engine import (
+                    PhysicsAITwinEngine,
+                )
+
+                engine = PhysicsAITwinEngine.load(engine_path)
+            self._restore_engine(engine)
+            self._set_status(f"학습 체크포인트 복원 완료: {engine_path}")
+        except Exception as exc:  # noqa: BLE001
+            self._fail("체크포인트 복원 실패", exc)
 
     async def _run_async(
         self,
@@ -588,8 +879,20 @@ class NavierTwinWebApp:
             self._fail("경로 필요", ValueError(".ntwin 프로젝트 경로를 입력하세요."))
             return
         try:
-            dataset, engine = service.load_project(path)
+            dataset, engine, project = service.load_project_bundle(path)
             self._set_dataset(dataset, status=f"프로젝트 로드 완료: {path}")
+            if project is not None:
+                runtime_complete = (
+                    len(project.case_sets) == 1
+                    and len(project.case_sets[0].cases) == 1
+                )
+                self.workspace.adopt_project(
+                    project,
+                    view_dataset=dataset,
+                    engine=engine,
+                    runtime_complete=runtime_complete,
+                )
+                self._sync_workspace_state()
             if engine is not None:
                 self._restore_engine(engine)
         except Exception as exc:  # noqa: BLE001
@@ -616,10 +919,17 @@ class NavierTwinWebApp:
             return
         try:
             result = service.coarsen_dataset(
-                self.dataset, resolution=int(self.state.nt_coarsen_resolution or 48)
+                self.dataset,
+                **self._coarsen_options(),
             )
             summary = str(result["summary"])
             self._set_dataset(result["dataset"], status=f"해상도 낮춤: {summary}")
+            self._record_lineage(
+                "mapping",
+                strategy="coarsen",
+                parameters=self._coarsen_options(),
+                metadata={"summary": summary},
+            )
             with self.state:
                 self.state.nt_coarsen_summary = summary
         except Exception as exc:  # noqa: BLE001
@@ -650,9 +960,23 @@ class NavierTwinWebApp:
         params = np.asarray(result["params"], dtype=float)
         # _set_dataset 이 케이스 상태를 리셋하므로 반드시 먼저 호출한다.
         self._set_dataset(datasets[0], status=f"케이스 세트 로드 완료: {path}")
-        self.case_datasets = datasets
-        self.case_params = params
-        self.case_param_names = names
+        self.workspace.load_case_set(
+            datasets,
+            params,
+            names,
+            case_names=list(result["case_names"]),
+            name=f"케이스 세트: {path}",
+            source=path,
+            geometry_ids=result.get("geometry_ids"),
+        )
+        self._sync_workspace_state()
+        if bool(result.get("resampled")):
+            self._record_lineage(
+                "mapping",
+                strategy="common_grid_resample",
+                parameters={"resolution": int(self.state.nt_case_resolution or 32)},
+                metadata={"grid_summary": str(result.get("grid_summary") or "")},
+            )
 
         mins = [float(v) for v in params.min(axis=0)]
         maxs = [float(v) for v in params.max(axis=0)]
@@ -719,6 +1043,7 @@ class NavierTwinWebApp:
         detail = labels[index] if index < len(labels) else ""
         name = names[index] if index < len(names) else f"#{index}"
         try:
+            self.workspace.select_case(index)
             self._swap_view_dataset(
                 self.case_datasets[index],
                 status=f"케이스 {index + 1}/{len(self.case_datasets)} — {name} ({detail})",
@@ -1232,6 +1557,18 @@ class NavierTwinWebApp:
                 RuntimeError(
                     "메쉬 GNN(메시지패싱) 은 케이스 세트(정상 파라미터 스윕) "
                     "전용입니다 — 케이스 폴더나 데모 케이스 세트를 로드하세요."
+                ),
+            )
+            return
+        if method == "transolver":
+            if self.state.nt_case_mode:
+                self._build_transolver_twin()
+                return
+            self._fail(
+                "Transolver",
+                RuntimeError(
+                    "Transolver 는 케이스 세트 전용입니다 — 케이스 폴더나 "
+                    "데모 케이스 세트를 로드하세요."
                 ),
             )
             return
@@ -1869,6 +2206,61 @@ class NavierTwinWebApp:
         except Exception as exc:  # noqa: BLE001
             self._fail("메쉬 GNN(메시지패싱) 학습 실패", exc)
 
+    def _build_transolver_twin(self) -> None:
+        """케이스 세트에서 Transolver Physics-Attention 트윈을 학습한다."""
+        if not self.case_datasets:
+            self._fail(
+                "케이스 없음",
+                RuntimeError("케이스 폴더를 다시 로드하세요."),
+            )
+            return
+        fields = self._training_fields()
+        try:
+            result = service.build_transolver_twin_from_cases(
+                self.case_datasets,
+                fields,
+                self.case_params,
+                param_names=self.case_param_names,
+                hidden=int(self.state.nt_transolver_hidden or 64),
+                n_layers=int(self.state.nt_transolver_layers or 4),
+                n_slices=int(self.state.nt_transolver_slices or 32),
+                max_epochs=int(self.state.nt_transolver_epochs or 200),
+            )
+            self.engine = result["engine"]
+            names = result["param_names"]
+            loss = float(result.get("train_loss", float("nan")))
+            summary = (
+                f"field(s)='{', '.join(fields)}', Transolver Physics-Attention · "
+                f"케이스 {result['n_cases']}개 · 입력 파라미터 {len(names)}개 "
+                f"({', '.join(names)}) · train loss {loss:.3g}"
+            )
+            with self.state:
+                self.state.nt_model_ready = True
+                self.state.nt_model_summary = summary
+                self.state.nt_physics_ready = False
+                self.state.nt_dmd_ready = False
+                self.state.nt_twin_ready = True
+                self.state.nt_twin_summary = summary
+            self._set_twin_param_ranges(names, result["param_mins"], result["param_maxs"])
+            self._log_training_run(
+                "transolver",
+                {
+                    "fields": fields,
+                    "n_cases": result["n_cases"],
+                    "param_names": names,
+                    "hidden": int(self.state.nt_transolver_hidden or 64),
+                    "layers": int(self.state.nt_transolver_layers or 4),
+                    "slices": int(self.state.nt_transolver_slices or 32),
+                    "epochs": int(self.state.nt_transolver_epochs or 200),
+                },
+                {"train_loss": loss},
+            )
+            self._set_status(
+                f"Transolver 학습 완료 — 케이스 {result['n_cases']}개, 재샘플 없음."
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._fail("Transolver 학습 실패", exc)
+
     @staticmethod
     def _format_holdout_summary(eval_split: dict[str, Any] | None) -> str:
         """held-out 평가 결과(``eval_split``)를 한 줄 요약 문자열로 만든다.
@@ -2237,6 +2629,12 @@ class NavierTwinWebApp:
                 # v5.4 — 형상 가변은 예측 격자가 진실 격자와 달라 오차장 생략.
                 with self.state:
                     self.state.nt_predicted = True
+                self._record_lineage(
+                    "prediction",
+                    strategy=str(self.state.nt_model_method or ""),
+                    parameters={"inputs": values},
+                    metadata={"target_mesh": "active_case", "fields": names},
+                )
                 return
             prediction = service.predict_twin(self.engine, values)
             # 다중 출력(Physics AI) 이면 필드별로 잘라 각각 twin_<name> 으로 붙인다.
@@ -2254,6 +2652,12 @@ class NavierTwinWebApp:
                 shown = service.attach_prediction(self.dataset, prediction)
                 label = f"'{shown}'"
             # v5.4 — 실제 vs 트윈: 학습 샘플 일치 시 오차장/지표, 아니면 외삽 안내.
+            self._record_lineage(
+                "prediction",
+                strategy=str(self.state.nt_model_method or ""),
+                parameters={"inputs": values},
+                metadata={"fields": [name for name, _segment in parts] if parts else [shown]},
+            )
             self._update_truth_comparison(values, prediction, parts)
             self._refresh_fields(prefer=shown)
             self._render(reset_camera=False)
@@ -2304,6 +2708,12 @@ class NavierTwinWebApp:
         # 일어났다는 것만 표시(외삽 안내 UI 가 이 플래그를 본다).
         with self.state:
             self.state.nt_predicted = True
+        self._record_lineage(
+            "prediction",
+            strategy=str(self.state.nt_model_method or ""),
+            parameters={"inputs": values},
+            metadata={"target_mesh": "common_grid", "fields": names},
+        )
 
     def predict_on_mesh(self) -> None:
         """선택한 파일의 메쉬 좌표에서 예측하고 그 메쉬를 뷰어로 전환한다 (M3).
@@ -2334,6 +2744,12 @@ class NavierTwinWebApp:
             )
             with self.state:
                 self.state.nt_predict_mesh_name = label
+            self._record_lineage(
+                "prediction",
+                strategy=str(self.state.nt_model_method or ""),
+                parameters={"inputs": values},
+                metadata={"target_mesh": str(path), "fields": attached},
+            )
         except Exception as exc:  # noqa: BLE001
             self._fail("다른 격자 예측 실패", exc)
 
@@ -2642,6 +3058,16 @@ class NavierTwinWebApp:
                     f"RMSE {result['rmse']:.3g} · rel-L2 {result['rel_l2']:.2%} · "
                     f"max {result['max_error']:.3g}"
                 )
+            self._record_lineage(
+                "validation",
+                strategy="truth_comparison",
+                metrics={
+                    "rmse": result["rmse"],
+                    "rel_l2": result["rel_l2"],
+                    "max_error": result["max_error"],
+                },
+                metadata={"field": field, "inputs": values},
+            )
         except Exception as exc:  # noqa: BLE001 — 비교는 부가 정보, 예측을 막지 않는다
             log.warning("실제 vs 트윈 비교 실패: %s", exc)
 
@@ -2744,9 +3170,14 @@ class NavierTwinWebApp:
             return
         try:
             paths = service.save_project(
-                self._snapshot(), self._export_path("project.ntwin"), engine=self.engine
+                self._snapshot(),
+                self._export_path("project.ntwin"),
+                engine=self.engine,
+                canonical_project=self.workspace.project,
             )
-            label = ".ntwin 프로젝트" + (" + engine" if "engine" in paths else "")
+            label = ".ntwin 프로젝트 + manifest" + (
+                " + engine" if "engine" in paths else ""
+            )
             self._export_done(paths["project"], label)
         except Exception as exc:  # noqa: BLE001
             self._fail("프로젝트 저장 실패", exc)
@@ -2810,14 +3241,15 @@ class NavierTwinWebApp:
         케이스 세트 로드는 :meth:`_set_case_set` 이 이 메서드를 먼저 호출해
         리셋한 뒤 케이스 상태를 다시 채운다 — 순서 의존적이다.
         """
-        self.dataset = dataset
-        self.case_datasets = None
-        self.case_params = None
-        self.case_param_names = []
+        info = service.dataset_info(dataset)
+        self.workspace.load_single_dataset(
+            dataset,
+            name=status,
+            source=str(info.get("source") or ""),
+        )
+        self._sync_workspace_state()
         self._origin_dataset = None
         self.reducer = None
-        self.engine = None
-        info = service.dataset_info(dataset)
         n_steps = int(info["time_steps"])
         with self.state:
             self.state.nt_has_dataset = True
@@ -2887,6 +3319,75 @@ class NavierTwinWebApp:
         self._set_status(status)
         self._refresh_bc_patches()
 
+    def _sync_workspace_state(self) -> None:
+        """Expose canonical identity without duplicating runtime project ownership."""
+        status = self.workspace.status()
+        with self.state:
+            self.state.nt_project_id = status.project_id
+            self.state.nt_project_name = status.project_name
+            self.state.nt_project_revision = status.revision
+            self.state.nt_project_runtime_complete = status.runtime_complete
+
+    def _record_lineage(
+        self,
+        kind: str,
+        *,
+        strategy: str = "",
+        parameters: dict[str, Any] | None = None,
+        metrics: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Append workflow provenance without allowing tracking to block the UI."""
+
+        project = self.workspace.project
+        if project is None:
+            return
+        input_ids: list[str] = []
+        if kind in {"mapping", "model"} and project.case_sets:
+            input_ids.append(project.case_sets[0].case_set_id)
+        elif kind == "prediction":
+            model = next(
+                (
+                    record
+                    for record in reversed(project.lineage)
+                    if record.kind.value == "model"
+                ),
+                None,
+            )
+            if model is not None:
+                input_ids.append(model.artifact_id)
+        elif kind == "validation":
+            prediction = next(
+                (
+                    record
+                    for record in reversed(project.lineage)
+                    if record.kind.value == "prediction"
+                ),
+                None,
+            )
+            if prediction is not None:
+                input_ids.append(prediction.artifact_id)
+        finite_metrics: dict[str, float] = {}
+        for name, value in (metrics or {}).items():
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(number):
+                finite_metrics[str(name)] = number
+        try:
+            self.workspace.record_lineage(
+                kind,
+                input_ids=input_ids,
+                strategy=strategy,
+                parameters=parameters,
+                metrics=finite_metrics,
+                metadata=metadata,
+            )
+            self._sync_workspace_state()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("lineage 기록 실패: %s", exc)
+
     def _update_device_badge(self, **_kwargs: Any) -> None:
         """학습 완료 시 실제 학습 디바이스(GPU/CPU)를 배지 상태에 채운다 (v5.6).
 
@@ -2932,7 +3433,8 @@ class NavierTwinWebApp:
         increases = False
         try:
             estimate = service.estimate_coarsen(
-                self.dataset, int(self.state.nt_coarsen_resolution or 48)
+                self.dataset,
+                **self._coarsen_options(),
             )
             preview = f"→ {estimate['summary']}"
             # 원본보다 촘촘해지면 "낮추기"가 아니라 오히려 손해다 — 경고색으로.
@@ -2943,6 +3445,26 @@ class NavierTwinWebApp:
             self.state.nt_coarsen_preview = preview
             self.state.nt_coarsen_increases = increases
             self.state.nt_coarsen_conserved_warning = conserved_warning
+
+    def _coarsen_options(self) -> dict[str, Any]:
+        """Resolve ratio-first UI state while preserving the legacy resolution API."""
+        percent = float(self.state.nt_coarsen_percent)
+        resolution = int(self.state.nt_coarsen_resolution)
+        percent_changed = percent != self._last_coarsen_percent
+        resolution_changed = resolution != self._last_coarsen_resolution
+        if percent_changed:
+            self._coarsen_mode = "fraction"
+        elif resolution_changed:
+            self._coarsen_mode = "resolution"
+        self._last_coarsen_percent = percent
+        self._last_coarsen_resolution = resolution
+        if self._coarsen_mode == "resolution":
+            if resolution < 2:
+                raise ValueError("격자 해상도는 2 이상이어야 합니다.")
+            return {"resolution": resolution}
+        if not 1.0 <= percent <= 100.0:
+            raise ValueError("포인트 유지 비율은 1~100% 사이여야 합니다.")
+        return {"retain_fraction": percent / 100.0}
 
     def _conserved_resample_warning(self) -> str:
         """보존량 의심 필드가 있으면 점 보간 재샘플 경고문을 만든다.
@@ -3340,6 +3862,102 @@ class NavierTwinWebApp:
                     update()
                 except Exception:  # noqa: BLE001 — build_ui 없이(테스트) 미등록일 수 있음
                     pass
+
+    # ------------------------------------------------------------------
+    # Operation callbacks
+    # ------------------------------------------------------------------
+
+    def plan_large_workload(self) -> None:
+        """Build a bounded-memory plan from the operation panel inputs."""
+        from naviertwin.core.training import ScaleBudget, ScaleWorkload, plan_scale
+
+        try:
+            gib = 1024**3
+            plan = plan_scale(
+                ScaleWorkload(
+                    n_cases=int(self.state.nt_scale_cases),
+                    n_time_steps=int(self.state.nt_scale_timesteps),
+                    n_points=int(self.state.nt_scale_points),
+                    n_cells=int(self.state.nt_scale_cells),
+                    input_components=4,
+                    target_components=4,
+                    route=str(self.state.nt_scale_route),
+                ),
+                ScaleBudget(
+                    ram_bytes=int(float(self.state.nt_scale_ram_gb) * gib),
+                    vram_bytes=int(float(self.state.nt_scale_vram_gb) * gib),
+                    workers=int(self.state.nt_scale_workers),
+                ),
+            )
+            summary = (
+                f"point chunk {plan.point_chunk_size:,} · "
+                f"case batch {plan.case_batch_size} · "
+                f"microbatch {plan.microbatch_size} × accumulate "
+                f"{plan.gradient_accumulation_steps} · MPI {plan.mpi_ranks}"
+            )
+            with self.state:
+                self.state.nt_scale_summary = summary
+                self.state.nt_scale_warnings = list(plan.warnings)
+            self._set_status("대형 학습 자원 계획 완료")
+        except (TypeError, ValueError) as exc:
+            self._fail("자원 계획 실패", exc)
+
+    def push_sensor_sample(self) -> None:
+        """Validate and buffer one timestamped sensor sample."""
+        from naviertwin.core.data_assimilation.streaming import SensorSample
+
+        try:
+            values = tuple(
+                float(token.strip())
+                for token in str(self.state.nt_sensor_values).split(",")
+                if token.strip()
+            )
+            sample = SensorSample(
+                sensor_id=str(self.state.nt_sensor_id),
+                timestamp=float(self.state.nt_sensor_timestamp),
+                values=values,
+            )
+            accepted = self._sensor_buffer.append(sample)
+            count = len(
+                self._sensor_buffer.samples(sample.sensor_id, include_bad=True)
+            )
+            with self.state:
+                self.state.nt_sensor_summary = (
+                    f"{sample.sensor_id} · t={sample.timestamp:g} · "
+                    f"{count} samples · {'accepted' if accepted else 'ignored'}"
+                )
+            self._set_status("센서 샘플 저장 완료")
+        except (TypeError, ValueError) as exc:
+            self._fail("센서 샘플 오류", exc)
+
+    def align_sensor_samples(self) -> None:
+        """Preview time alignment readiness for selected sensor streams."""
+        from naviertwin.core.data_assimilation.streaming import align_observations
+
+        try:
+            sensor_ids = tuple(
+                token.strip()
+                for token in str(self.state.nt_sensor_ids).split(",")
+                if token.strip()
+            )
+            aligned = align_observations(
+                self._sensor_buffer,
+                sensor_ids,
+                float(self.state.nt_sensor_timestamp),
+            )
+            if aligned.complete:
+                values = ", ".join(f"{value:g}" for value in aligned.flatten())
+                summary = f"READY · t={aligned.timestamp:g} · [{values}]"
+            else:
+                missing = ", ".join(
+                    (*aligned.missing_sensor_ids, *aligned.stale_sensor_ids)
+                )
+                summary = f"WAIT · unavailable: {missing}"
+            with self.state:
+                self.state.nt_sensor_summary = summary
+            self._set_status("센서 시간 정렬 점검 완료")
+        except (TypeError, ValueError) as exc:
+            self._fail("센서 정렬 실패", exc)
 
     # ------------------------------------------------------------------
     # Status helpers
@@ -3862,20 +4480,30 @@ class NavierTwinWebApp:
                                 "수 없습니다.",
                                 warn=True,
                             )
-                            html.Div(
-                                "긴 축 기준 {{ nt_coarsen_resolution }}분할",
-                                classes="text-caption mb-1",
-                            )
-                            v3.VSlider(
-                                v_model=("nt_coarsen_resolution",),
-                                min=8,
-                                max=128,
-                                step=4,
-                                thumb_label=True,
-                                density="compact",
-                                hide_details=True,
-                                disabled=("nt_busy",),
-                            )
+                            html.Div("원본 포인트 유지 비율", classes="text-caption mb-1")
+                            with v3.VRow(align="center", dense=True):
+                                with v3.VCol(cols=8):
+                                    v3.VSlider(
+                                        v_model=("nt_coarsen_percent",),
+                                        min=1,
+                                        max=100,
+                                        step=1,
+                                        thumb_label=True,
+                                        density="compact",
+                                        hide_details=True,
+                                        disabled=("nt_busy",),
+                                    )
+                                with v3.VCol(cols=4):
+                                    v3.VTextField(
+                                        v_model=("nt_coarsen_percent",),
+                                        type="number",
+                                        min=1,
+                                        max=100,
+                                        suffix="%",
+                                        density="compact",
+                                        hide_details=True,
+                                        disabled=("nt_busy",),
+                                    )
                             # 재샘플은 원본을 교체하므로, 적용 전에 대가를 보여준다.
                             html.Div(
                                 "{{ nt_coarsen_preview }}",
@@ -4204,6 +4832,12 @@ class NavierTwinWebApp:
                             "mdi-transit-connection-variant",
                         ),
                         (
+                            "transolver",
+                            "Transolver (Physics-Attention)",
+                            "학습 slice attention · 재샘플 없음 · 형상 가변",
+                            "mdi-vector-combine",
+                        ),
+                        (
                             "dynamics",
                             "동역학 예보 (DMD)",
                             "시간 전이 규칙 학습 · 학습 구간 밖 외삽 가능 · PyDMD",
@@ -4528,6 +5162,39 @@ class NavierTwinWebApp:
                                     classes="mt-1",
                                 )
 
+                    with html.Div(v_show=("nt_model_method === 'transolver'",)):
+                        with html.Div(v_show=("!nt_case_mode",)):
+                            self._tip_row(
+                                "케이스 세트 전용",
+                                "Transolver 는 정상 파라미터 스윕 케이스 세트에서 "
+                                "학습합니다.",
+                                warn=True,
+                            )
+                        with html.Div(v_show=("nt_case_mode",)):
+                            self._tip_row(
+                                "Physics-Attention — 원본 격자 보존",
+                                "격자점을 학습된 physics slice 로 모아 attention 을 "
+                                "계산한 뒤 원래 점으로 되돌립니다. 공통 격자 없이 "
+                                "형상 가변 케이스를 학습합니다.",
+                                warn=True,
+                            )
+                            with html.Div(classes="d-flex flex-wrap"):
+                                for model, label in (
+                                    ("nt_transolver_epochs", "Epochs"),
+                                    ("nt_transolver_hidden", "Hidden width"),
+                                    ("nt_transolver_layers", "Layers"),
+                                    ("nt_transolver_slices", "Physics slices"),
+                                ):
+                                    v3.VTextField(
+                                        v_model=(model,),
+                                        label=label,
+                                        type="number",
+                                        density="compact",
+                                        hide_details=True,
+                                        classes="mt-1 mr-2",
+                                        style="min-width: 120px; flex: 1 1 120px;",
+                                    )
+
                     # Ⓓ 동역학 예보 (PyDMD) — 학습 구간 밖 외삽이 가능한 유일 계열.
                     with html.Div(v_show=("nt_model_method === 'dynamics'",)):
                         # DMD 는 부적합해도 조용히 학습에 "성공"한다 — 못 보면
@@ -4575,7 +5242,7 @@ class NavierTwinWebApp:
 
                     # 라벨은 입력 종류에 따라 바뀐다 (t vs 운전조건). VBtn 의
                     # 첫 위치 인자는 텍스트 child 라 바인딩이 안 되므로 mustache 로.
-                    # operator/mesh_gnn/gino/mesh_gnn_mp 는 케이스 세트일 때만
+                    # 메쉬/연산자 계열은 케이스 세트일 때만
                     # 학습 버튼이 뜬다 (단일 케이스는 각 카드의 안내가 대신 뜬다).
                     with html.Div(
                         classes="d-flex align-center mt-2",
@@ -4583,7 +5250,8 @@ class NavierTwinWebApp:
                             "(nt_model_method !== 'operator' && "
                             "nt_model_method !== 'mesh_gnn' && "
                             "nt_model_method !== 'gino' && "
-                            "nt_model_method !== 'mesh_gnn_mp') || nt_case_mode",
+                            "nt_model_method !== 'mesh_gnn_mp' && "
+                            "nt_model_method !== 'transolver') || nt_case_mode",
                         ),
                     ):
                         with v3.VBtn(
@@ -4600,6 +5268,19 @@ class NavierTwinWebApp:
                                 "{{ nt_case_mode ? '모델 학습 (운전조건→필드)' "
                                 ": '모델 학습 (시간→필드)' }}"
                             )
+                        v3.VBtn(
+                            icon="mdi-stop-circle-outline",
+                            click=self.ctrl.nt_cancel_training,
+                            color="error",
+                            variant="tonal",
+                            classes="ml-2",
+                            v_show=("nt_training_cancelable",),
+                            disabled=("!nt_training_cancelable",),
+                        )
+                        self._tip(
+                            "현재 학습 취소 요청",
+                            v_show_expr="nt_training_cancelable",
+                        )
                         # 버튼이 비활성일 때가 바로 이 설명이 필요한 순간이므로,
                         # 아이콘은 버튼 밖에 둔다 (disabled 는 hover 가 죽는다).
                         self._tip(
@@ -4614,6 +5295,26 @@ class NavierTwinWebApp:
                         classes="text-caption text-disabled mt-1",
                         v_show=("nt_case_mode",),
                     )
+                    html.Div(
+                        "{{ nt_training_preflight }}",
+                        classes="text-caption text-medium-emphasis mt-1",
+                        v_show=("nt_training_preflight",),
+                    )
+                    with html.Div(
+                        classes="d-flex align-center mt-1",
+                        v_show=("nt_training_checkpoint && !nt_training_cancelable",),
+                    ):
+                        v3.VBtn(
+                            icon="mdi-backup-restore",
+                            click=self.ctrl.nt_restore_training_checkpoint,
+                            variant="text",
+                            size="small",
+                        )
+                        self._tip("최근 학습 체크포인트 복원")
+                        html.Span(
+                            "{{ nt_training_message }}",
+                            classes="text-caption text-medium-emphasis ml-1",
+                        )
                     with v3.VCard(variant="tonal", classes="mt-3", v_show=("nt_model_ready",)):
                         with v3.VCardText(classes="text-caption"):
                             with html.Div(classes="d-flex align-center mb-1"):
@@ -5231,6 +5932,109 @@ class NavierTwinWebApp:
                                 disabled=("nt_busy",),
                                 prepend_icon="mdi-chart-bell-curve",
                             )
+
+            with v3.VExpansionPanel(title="⑦ Operation (확장·센서)"):
+                with v3.VExpansionPanelText():
+                    html.Div("대형 학습 자원 계획", classes="text-subtitle-2 mb-2")
+                    v3.VSelect(
+                        v_model=("nt_scale_route",),
+                        items=("nt_scale_route_choices",),
+                        label="학습 경로",
+                        density="compact",
+                        hide_details=True,
+                    )
+                    with v3.VRow(classes="mt-2", dense=True):
+                        for model, label in (
+                            ("nt_scale_cases", "Cases"),
+                            ("nt_scale_timesteps", "Time steps"),
+                            ("nt_scale_points", "Points"),
+                            ("nt_scale_cells", "Cells"),
+                            ("nt_scale_workers", "Workers"),
+                            ("nt_scale_ram_gb", "RAM GiB"),
+                            ("nt_scale_vram_gb", "VRAM GiB"),
+                        ):
+                            with v3.VCol(cols=6):
+                                v3.VTextField(
+                                    v_model=(model,),
+                                    label=label,
+                                    type="number",
+                                    density="compact",
+                                    hide_details=True,
+                                )
+                    v3.VBtn(
+                        "자원 계획 계산",
+                        click=self.ctrl.nt_plan_scale,
+                        color="primary",
+                        block=True,
+                        classes="mt-2",
+                        prepend_icon="mdi-server",
+                    )
+                    html.Div(
+                        "{{ nt_scale_summary }}",
+                        classes="text-caption mt-2",
+                        v_show=("nt_scale_summary",),
+                    )
+                    with html.Div(v_show=("nt_scale_warnings.length",)):
+                        with html.Div(
+                            v_for="warning in nt_scale_warnings",
+                            key="warning",
+                            classes="text-caption text-warning",
+                        ):
+                            html.Span("{{ warning }}")
+
+                    v3.VDivider(classes="my-4")
+                    html.Div("센서 시간 정렬", classes="text-subtitle-2 mb-2")
+                    with v3.VRow(dense=True):
+                        with v3.VCol(cols=7):
+                            v3.VTextField(
+                                v_model=("nt_sensor_id",),
+                                label="Sensor ID",
+                                density="compact",
+                                hide_details=True,
+                            )
+                        with v3.VCol(cols=5):
+                            v3.VTextField(
+                                v_model=("nt_sensor_timestamp",),
+                                label="Timestamp",
+                                type="number",
+                                density="compact",
+                                hide_details=True,
+                            )
+                    v3.VTextField(
+                        v_model=("nt_sensor_values",),
+                        label="Values (comma separated)",
+                        density="compact",
+                        classes="mt-2",
+                        hide_details=True,
+                    )
+                    v3.VBtn(
+                        "샘플 저장",
+                        click=self.ctrl.nt_sensor_push,
+                        variant="tonal",
+                        block=True,
+                        classes="mt-2",
+                        prepend_icon="mdi-database-arrow-down-outline",
+                    )
+                    v3.VTextField(
+                        v_model=("nt_sensor_ids",),
+                        label="정렬 Sensor IDs",
+                        density="compact",
+                        classes="mt-3",
+                        hide_details=True,
+                    )
+                    v3.VBtn(
+                        "정렬 상태 점검",
+                        click=self.ctrl.nt_sensor_align,
+                        color="secondary",
+                        block=True,
+                        classes="mt-2",
+                        prepend_icon="mdi-timeline-clock-outline",
+                    )
+                    html.Div(
+                        "{{ nt_sensor_summary }}",
+                        classes="text-caption mt-2",
+                        v_show=("nt_sensor_summary",),
+                    )
 
 
 def create_web_app(*, build_ui: bool = True, server: Any = None) -> NavierTwinWebApp:

@@ -18,6 +18,10 @@
     - POST /twin/stream/observe            : StreamingDigitalTwin 관측 동화
     - POST /twin/stream/observe-batch      : StreamingDigitalTwin 관측 배치 동화
     - POST /twin/stream/observe-line       : CSV/log 라인 관측 동화
+    - POST /twin/stream/sensor             : timestamp 센서 샘플 버퍼링
+    - POST /twin/stream/align              : 센서 시간 정렬 및 조건부 동화
+    - GET  /twin/stream/metrics            : 센서 수집·정렬 운영 지표
+    - POST /twin/stream/close              : 세션 및 영속 저장소 정리
     - GET  /twin/stream/state              : StreamingDigitalTwin 현재 상태 조회
     - POST /analytic/couette              : Couette 해석해 샘플
     - POST /analytic/poiseuille_2d        : Poiseuille 2D 해석해 샘플
@@ -30,6 +34,7 @@ Usage:
 from typing import Any, List, Optional  # noqa: UP035 — pydantic v1 호환
 
 from naviertwin import __version__
+from naviertwin.api.operations import APISettings, install_operations
 
 _HAS_FASTAPI = True
 try:
@@ -106,6 +111,9 @@ if _HAS_FASTAPI:
         initial_mean: Optional[List[float]] = None  # noqa: UP006
         initial_std: float = 1.0
         initial_ensemble: Optional[List[List[float]]] = None  # noqa: UP006
+        sensor_buffer_size: int = 1024
+        assimilation_interval: float = 0.0
+        sensor_store_path: Optional[str] = None
 
     class TwinStreamStepReq(BaseModel):
         session_id: str
@@ -127,6 +135,28 @@ if _HAS_FASTAPI:
         delimiter: str = ","
         value_columns: Optional[List[int]] = None  # noqa: UP006
         advance: bool = True
+
+    class TwinStreamSensorReq(BaseModel):
+        session_id: str
+        sensor_id: str
+        timestamp: float
+        values: List[float]  # noqa: UP006
+        quality: str = "good"
+        sequence: Optional[int] = None
+
+    class TwinStreamAlignReq(BaseModel):
+        session_id: str
+        sensor_ids: List[str]  # noqa: UP006
+        timestamp: float
+        method: str = "linear"
+        tolerance: float = 0.1
+        max_interpolation_gap: float = 1.0
+        max_age: float = 5.0
+        assimilate: bool = True
+        advance: bool = True
+
+    class TwinStreamCloseReq(BaseModel):
+        session_id: str
 
     class TwinBenchmarkReq(BaseModel):
         engine_path: Optional[str] = None
@@ -180,7 +210,69 @@ if _HAS_FASTAPI:
         record_every: int = 200
 
 
-def create_app() -> Any:
+def _mount_v1_routes(app: Any) -> None:
+    """Expose every legacy business endpoint under the stable ``/api/v1`` prefix."""
+    from fastapi.routing import APIRoute
+
+    existing = {route.path for route in app.routes if hasattr(route, "path")}
+    for route in list(app.routes):
+        if not isinstance(route, APIRoute) or route.path.startswith("/api/"):
+            continue
+        target = f"/api/v1{route.path}"
+        if target in existing:
+            continue
+        app.add_api_route(
+            target,
+            route.endpoint,
+            methods=sorted(route.methods or {"GET"}),
+            name=f"v1_{route.name}",
+            tags=[*list(route.tags or []), "v1"],
+            response_model=route.response_model,
+            status_code=route.status_code,
+            summary=route.summary,
+            description=route.description,
+            response_description=route.response_description,
+            responses=route.responses,
+            deprecated=route.deprecated,
+            include_in_schema=route.include_in_schema,
+        )
+        existing.add(target)
+
+
+def _configure_openapi_security(app: Any, enabled: bool) -> None:
+    """Document both supported API-key transports without adding dependencies."""
+    if not enabled:
+        return
+    from fastapi.openapi.utils import get_openapi
+
+    def secured_openapi() -> dict[str, Any]:
+        if app.openapi_schema:
+            return app.openapi_schema
+        schema = get_openapi(
+            title=app.title,
+            version=app.version,
+            description=app.description,
+            routes=app.routes,
+        )
+        schemes = schema.setdefault("components", {}).setdefault("securitySchemes", {})
+        schemes["ApiKeyAuth"] = {"type": "apiKey", "in": "header", "name": "X-API-Key"}
+        schemes["BearerAuth"] = {"type": "http", "scheme": "bearer"}
+        public = {"/health", "/ready", "/api/v1/health", "/api/v1/ready"}
+        for path, operations in schema.get("paths", {}).items():
+            for operation in operations.values():
+                if isinstance(operation, dict):
+                    operation["security"] = (
+                        []
+                        if path in public
+                        else [{"ApiKeyAuth": []}, {"BearerAuth": []}]
+                    )
+        app.openapi_schema = schema
+        return schema
+
+    app.openapi = secured_openapi
+
+
+def create_app(settings: APISettings | None = None) -> Any:
     """FastAPI app 팩토리."""
     if not _HAS_FASTAPI:
         raise RuntimeError(
@@ -189,11 +281,43 @@ def create_app() -> Any:
     import numpy as np
 
     app = FastAPI(title="NavierTwin API", version=__version__)
+    operations_settings = settings or APISettings.from_env()
+    api_metrics = install_operations(app, operations_settings)
+    app.state.api_settings = operations_settings
+    app.state.api_metrics = api_metrics
     stream_sessions: dict[str, dict[str, Any]] = {}
 
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "service": "naviertwin"}
+
+    @app.get("/ready")
+    def ready() -> dict[str, str]:
+        return {
+            "status": "ready",
+            "service": "naviertwin",
+            "version": __version__,
+        }
+
+    @app.get("/api/v1/health")
+    def health_v1() -> dict[str, str]:
+        return {"status": "ok", "service": "naviertwin", "api_version": "1"}
+
+    @app.get("/api/v1/metrics")
+    def metrics_v1() -> dict[str, Any]:
+        if not operations_settings.expose_metrics:
+            raise fastapi.HTTPException(status_code=404, detail="metrics disabled")
+        return api_metrics.snapshot()
+
+    @app.get("/api/v1/metrics/prometheus")
+    def metrics_prometheus() -> Any:
+        from fastapi.responses import PlainTextResponse
+
+        if not operations_settings.expose_metrics:
+            raise fastapi.HTTPException(status_code=404, detail="metrics disabled")
+        return PlainTextResponse(
+            api_metrics.prometheus(), media_type="text/plain; version=0.0.4"
+        )
 
     @app.get("/doctor")
     def doctor(include_optional: bool = False) -> dict[str, Any]:
@@ -515,6 +639,10 @@ def create_app() -> Any:
                 raise ValueError("history_size must be >= 1")
             if req.initial_std < 0.0:
                 raise ValueError("initial_std must be >= 0")
+            if req.sensor_buffer_size < 2:
+                raise ValueError("sensor_buffer_size must be >= 2")
+            if req.assimilation_interval < 0.0:
+                raise ValueError("assimilation_interval must be >= 0")
 
             state_dim = int(req.state_dim)
             transition = _stream_matrix(
@@ -577,14 +705,39 @@ def create_app() -> Any:
                 rng=rng,
             )
             twin.initialize(initial_ensemble)
+            from naviertwin.core.data_assimilation.streaming import (
+                OnlineAssimilationScheduler,
+            )
+            from naviertwin.core.streaming import (
+                DurableSensorRuntime,
+                SQLiteSensorStore,
+            )
+
             session_id = (req.session_id or uuid4().hex).strip()
             if not session_id:
                 raise ValueError("session_id must not be empty")
             replaced = session_id in stream_sessions
+            if replaced:
+                stream_sessions[session_id]["sensor_runtime"].close()
+            store = (
+                SQLiteSensorStore(req.sensor_store_path)
+                if req.sensor_store_path
+                else None
+            )
+            sensor_runtime = DurableSensorRuntime(
+                max_samples_per_sensor=req.sensor_buffer_size,
+                store=store,
+            )
             stream_sessions[session_id] = {
                 "twin": twin,
                 "step_count": 0,
                 "observation_count": 0,
+                "observation_dim": obs_dim,
+                "sensor_runtime": sensor_runtime,
+                "sensor_buffer": sensor_runtime.buffer,
+                "assimilation_scheduler": OnlineAssimilationScheduler(
+                    req.assimilation_interval
+                ),
             }
         except (ImportError, RuntimeError, TypeError, ValueError) as exc:
             raise fastapi.HTTPException(status_code=400, detail=str(exc)) from exc
@@ -650,6 +803,108 @@ def create_app() -> Any:
         payload = _stream_state_payload(req.session_id, record, event="observe-line")
         payload["parsed_observation"] = observation
         return payload
+
+    @app.post("/twin/stream/sensor")
+    def twin_stream_sensor(req: TwinStreamSensorReq = Body(...)) -> dict[str, Any]:
+        from naviertwin.core.data_assimilation.streaming import SensorSample
+
+        record = _get_stream_record(req.session_id)
+        try:
+            sample = SensorSample(
+                sensor_id=req.sensor_id,
+                timestamp=req.timestamp,
+                values=tuple(req.values),
+                quality=req.quality,
+                sequence=req.sequence,
+            )
+            accepted = record["sensor_runtime"].ingest(sample)
+        except (RuntimeError, TypeError, ValueError) as exc:
+            raise fastapi.HTTPException(status_code=400, detail=str(exc)) from exc
+        sensor_samples = record["sensor_buffer"].samples(
+            sample.sensor_id, include_bad=True
+        )
+        return {
+            "status": "ok",
+            "event": "sensor",
+            "session_id": req.session_id,
+            "sensor_id": sample.sensor_id,
+            "accepted": accepted,
+            "buffered_samples": len(sensor_samples),
+            "latest_timestamp": sensor_samples[-1].timestamp,
+        }
+
+    @app.post("/twin/stream/align")
+    def twin_stream_align(req: TwinStreamAlignReq = Body(...)) -> dict[str, Any]:
+        from naviertwin.core.data_assimilation.streaming import (
+            TimeAlignmentPolicy,
+        )
+
+        record = _get_stream_record(req.session_id)
+        try:
+            aligned = record["sensor_runtime"].align(
+                req.sensor_ids,
+                req.timestamp,
+                policy=TimeAlignmentPolicy(
+                    tolerance=req.tolerance,
+                    max_interpolation_gap=req.max_interpolation_gap,
+                    max_age=req.max_age,
+                ),
+                method=req.method,
+            )
+            observation = aligned.flatten() if aligned.complete else ()
+            if observation and len(observation) != record["observation_dim"]:
+                raise ValueError(
+                    "aligned observation size must equal observation dimension: "
+                    f"{len(observation)} != {record['observation_dim']}"
+                )
+            due = bool(
+                req.assimilate
+                and aligned.complete
+                and record["assimilation_scheduler"].claim(req.timestamp)
+            )
+            if due:
+                _apply_stream_observation(record, observation, advance=req.advance)
+        except (RuntimeError, TypeError, ValueError) as exc:
+            raise fastapi.HTTPException(status_code=400, detail=str(exc)) from exc
+
+        payload = _stream_state_payload(req.session_id, record, event="sensor-align")
+        payload["alignment"] = {
+            "timestamp": aligned.timestamp,
+            "sensor_ids": list(aligned.sensor_ids),
+            "values": [list(values) if values is not None else None for values in aligned.values],
+            "ages": list(aligned.ages),
+            "missing_sensor_ids": list(aligned.missing_sensor_ids),
+            "stale_sensor_ids": list(aligned.stale_sensor_ids),
+            "complete": aligned.complete,
+        }
+        payload["assimilated"] = due
+        payload["due"] = record["assimilation_scheduler"].due(req.timestamp)
+        return payload
+
+    @app.get("/twin/stream/metrics")
+    def twin_stream_metrics(session_id: str) -> dict[str, Any]:
+        from dataclasses import asdict
+
+        record = _get_stream_record(session_id)
+        metrics = asdict(record["sensor_runtime"].metrics.snapshot())
+        return {
+            "status": "ok",
+            "event": "metrics",
+            "session_id": session_id,
+            "metrics": metrics,
+            "buffered_sensor_ids": list(record["sensor_buffer"].sensor_ids()),
+        }
+
+    @app.post("/twin/stream/close")
+    def twin_stream_close(req: TwinStreamCloseReq = Body(...)) -> dict[str, Any]:
+        record = _get_stream_record(req.session_id)
+        record["sensor_runtime"].close()
+        del stream_sessions[req.session_id]
+        return {
+            "status": "ok",
+            "event": "close",
+            "session_id": req.session_id,
+        }
 
     @app.get("/twin/stream/state")
     def twin_stream_state(session_id: str) -> dict[str, Any]:
@@ -855,6 +1110,10 @@ def create_app() -> Any:
         x_best, f_best = opt.minimize(obj)
         return {"x_best": x_best.tolist(), "f_best": f_best}
 
+    _mount_v1_routes(app)
+    _configure_openapi_security(
+        app, bool(operations_settings.api_keys or operations_settings.api_key_hashes)
+    )
     return app
 
 
@@ -866,6 +1125,7 @@ except RuntimeError:
 
 
 __all__ = [
+    "APISettings",
     "BayesianOptReq",
     "CouetteReq",
     "LBMReq",
@@ -883,6 +1143,9 @@ __all__ = [
     "TwinStreamObserveLineReq",
     "TwinStreamInitReq",
     "TwinStreamObserveReq",
+    "TwinStreamAlignReq",
+    "TwinStreamCloseReq",
+    "TwinStreamSensorReq",
     "TwinStreamStepReq",
     "app",
     "create_app",

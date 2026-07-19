@@ -335,17 +335,21 @@ def test_mgn_group_split_holdout() -> None:
     assert result["engine"].training_metadata["n_cases"] == len(train_set)
 
 
-def test_unsteady_case_set_is_rejected() -> None:
-    """비정상 스윕은 명확히 거절한다 — 시계열을 조용히 뭉개지 않는다."""
+def test_unsteady_case_set_expands_time_parameter() -> None:
     result = service.make_demo_case_set("sweep_unsteady", n_side=12)
-    with pytest.raises(ValueError, match="미지원"):
-        service.build_mgn_twin_from_cases(
-            result["datasets"],
-            "p",
-            result["params"],
-            param_names=result["param_names"],
-            **_TINY,
-        )
+    built = service.build_mgn_twin_from_cases(
+        result["datasets"],
+        "p",
+        result["params"],
+        param_names=result["param_names"],
+        hidden=8,
+        n_msgpass=1,
+        max_epochs=1,
+        device="cpu",
+    )
+
+    assert built["param_names"] == ["inlet_velocity", "t"]
+    assert built["engine"].training_metadata["problem_type"] == "unsteady_sweep"
 
 
 # ──────────────────────────────────────────────────────────────────────
