@@ -998,6 +998,53 @@ def test_unsteady_sweep_demo_end_to_end() -> None:
     assert np.isfinite(forecast).all()
 
 
+def test_unsteady_case_set_sets_case_unsteady_flag() -> None:
+    """비정상 케이스 세트 로드 시 nt_case_unsteady 가 켜져야 GUI 요약 배지가 뜬다.
+
+    ``nt_method_hint`` 는 전략 선택과 무관하게 한 줄만 뜨는 기존 힌트라
+    카드마다 비정상 지원 여부를 알 수 없었다 — ``nt_case_unsteady`` 는 그
+    보완으로 추가된 상태값이다(케이스당 타임스텝이 2개 이상이면 True).
+    """
+    app = _make_app("nt-test-case-unsteady-flag")
+    st = app.server.state
+    st.nt_demo_kind = "sweep_unsteady"
+    app.load_demo()
+    assert st.nt_error == ""
+    assert st.nt_case_mode is True
+    assert st.nt_case_unsteady is True
+    # strategy_report() 가 실어 나르는 새 필드 — 8개 전략 전부 비정상(시간축)
+    # 케이스 세트에서도 학습 가능함을 카드가 데이터로부터 읽을 수 있어야 한다.
+    status = st.nt_strategy_status
+    for key in ("rom", "physics", "dynamics", "operator", "mesh_gnn", "gino",
+                "mesh_gnn_mp", "transolver"):
+        assert status[key]["supports_time_in_sweep"] is True
+
+
+def test_steady_case_set_leaves_case_unsteady_flag_false() -> None:
+    """정상(steady) 케이스 세트는 시간축이 없으니 nt_case_unsteady 가 False 여야 한다."""
+    app = _make_app("nt-test-case-steady-flag")
+    st = app.server.state
+    st.nt_demo_kind = "sweep"
+    app.load_demo()
+    assert st.nt_error == ""
+    assert st.nt_case_mode is True
+    assert st.nt_case_unsteady is False
+
+
+def test_case_unsteady_flag_resets_on_plain_time_series_load() -> None:
+    """비정상 케이스 세트 다음에 단일 시계열을 로드하면 플래그가 꺼져야 한다."""
+    app = _make_app("nt-test-case-unsteady-reset")
+    st = app.server.state
+    st.nt_demo_kind = "sweep_unsteady"
+    app.load_demo()
+    assert st.nt_case_unsteady is True
+
+    st.nt_demo_kind = "filament"
+    app.load_demo()
+    assert st.nt_case_mode is False
+    assert st.nt_case_unsteady is False
+
+
 def test_support_status_ood_levels_in_app() -> None:
     """③Twin OOD 3단계(v5.6): 학습 범위 내부/밖 예측이 상태에 반영된다."""
     app = _make_app("nt-test-support")

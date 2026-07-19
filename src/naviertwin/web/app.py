@@ -259,10 +259,15 @@ class NavierTwinWebApp:
         # .omc/plans/model-taxonomy-plan.md 참조.
         st.nt_model_method = "rom"
         st.nt_method_hint = ""  # 데이터 로드 시 service.recommend_method 결과
-        # 능력 기반 전략 판정 (v5.0) — {key: {ok, reason, name}}. 카드가 이걸로
-        # 가능/불가 + 이유를 데이터 로드 시점에 보여준다 (학습 버튼 눌러야 아는
-        # 대신).
+        # 능력 기반 전략 판정 (v5.0) — {key: {ok, reason, name, tier, tier_label,
+        # supports_time_in_sweep, supports_case_sets}}. 카드가 이걸로 가능/불가
+        # + 이유 + 비정상(시간축) 지원 여부를 데이터 로드 시점에 보여준다
+        # (학습 버튼 눌러야 아는 대신).
         st.nt_strategy_status = {}
+        # 로드된 케이스 세트가 비정상(케이스당 타임스텝 2개 이상)인가 — 전략
+        # 카드와 무관하게 하나만 뜨던 nt_method_hint 를 보완해, "8개 전략
+        # 전부 (μ, t) 로 함께 학습됩니다" 요약 배지를 띄우는 데 쓴다.
+        st.nt_case_unsteady = False
         st.nt_reducer = "pod"
         st.nt_reducer_choices = [
             {"title": "POD (snapshot)", "value": "pod"},
@@ -1006,10 +1011,12 @@ class NavierTwinWebApp:
             steps_per_case = max(
                 (max(1, int(getattr(d, "n_time_steps", 1))) for d in datasets), default=1
             )
+            unsteady = steps_per_case > 1
+            self.state.nt_case_unsteady = unsteady
             time_note = (
                 f" 케이스당 타임스텝 {steps_per_case}개 — 시간(t)도 입력 파라미터로 "
                 "함께 학습됩니다 (비정상 스윕)."
-                if steps_per_case > 1
+                if unsteady
                 else " 정상 파라미터 스윕입니다."
             )
             self.state.nt_method_hint = (
@@ -3271,6 +3278,7 @@ class NavierTwinWebApp:
             self.state.nt_case_labels = []
             self.state.nt_case_resampled = False
             self.state.nt_case_grid_summary = ""
+            self.state.nt_case_unsteady = False
             self.state.nt_coarsen_summary = ""
             self.state.nt_twin_params = []
             self.state.nt_twin_mins = []
@@ -4877,6 +4885,25 @@ class NavierTwinWebApp:
                                         v_show=(infeasible,),
                                         classes="text-caption text-warning",
                                     )
+                                    # 정상/비정상 지원 캡션 — 케이스 세트가
+                                    # 비정상(시간축 포함)이어도 "이 전략도
+                                    # 되는가"를 카드만 보고 알 수 있어야 한다
+                                    # (전략 선택과 무관하게 nt_method_hint
+                                    # 하나만 뜨던 문제 보완). 8개 전략 spec
+                                    # 모두 supports_time_in_sweep=True 라
+                                    # 지금은 전부 뜨지만, 판정은 데이터
+                                    # (strategy_report) 기반이라 향후 새
+                                    # 전략이 미지원을 선언하면 자동으로
+                                    # 안 뜬다.
+                                    html.Div(
+                                        "정상 + 비정상(시간축) 모두 지원",
+                                        v_show=(
+                                            f"nt_strategy_status['{key}'] && "
+                                            f"nt_strategy_status['{key}']"
+                                            ".supports_time_in_sweep",
+                                        ),
+                                        classes="text-caption text-success",
+                                    )
                                 # 모델 등급 뱃지 (리뷰 #8) — production 은 기본
                                 # 회색, experimental 은 warning 색으로 성숙도를
                                 # 학습 전에 알린다. 판정 상태가 없으면 숨긴다.
@@ -4899,6 +4926,22 @@ class NavierTwinWebApp:
                         "{{ nt_method_hint }}",
                         v_show=("nt_method_hint",),
                         classes="text-caption text-info mt-1 mb-2",
+                    )
+                    # 비정상 케이스 세트 요약 배지 — nt_method_hint 는 전략
+                    # 선택과 무관하게 한 줄만 뜨므로, "위 8개 카드 전부 이
+                    # 데이터를 (μ, t) 로 학습할 수 있다"는 걸 카드 목록
+                    # 바로 아래에서 한 번 더, 눈에 띄게 못박는다 (기존
+                    # nt_method_hint 는 그대로 두고 보완).
+                    v3.VAlert(
+                        "비정상(시간축) 케이스 세트가 로드되었습니다 — 위 8개 "
+                        "전략 전부 케이스 파라미터(μ)와 시간(t)을 함께 "
+                        "입력으로 학습합니다.",
+                        v_show=("nt_case_mode && nt_case_unsteady",),
+                        type="success",
+                        variant="tonal",
+                        density="compact",
+                        icon="mdi-clock-outline",
+                        classes="text-caption mb-2",
                     )
 
                     # Ⓐ ROM: reducer × 계수 회귀

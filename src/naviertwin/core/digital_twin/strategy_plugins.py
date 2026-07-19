@@ -32,13 +32,23 @@ class CapabilityAxes:
 
 @dataclass(frozen=True)
 class StrategyDecision:
-    """Pre-training eligibility decision rendered directly by the UI."""
+    """Pre-training eligibility decision rendered directly by the UI.
+
+    ``supports_time_in_sweep``/``supports_case_sets`` let the UI show, per
+    strategy card, whether *this* strategy can train on a parameter-sweep
+    case set that also varies in time (t) — independent of whether the
+    currently loaded data happens to be feasible right now (``ok``). They
+    are derived from :attr:`RegisteredStrategy.capability` in
+    :meth:`RegisteredStrategy.inspect`, not re-judged here.
+    """
 
     ok: bool
     reason: str
     name: str
     tier: str
     tier_label: str
+    supports_time_in_sweep: bool
+    supports_case_sets: bool
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -47,6 +57,8 @@ class StrategyDecision:
             "name": self.name,
             "tier": self.tier,
             "tier_label": self.tier_label,
+            "supports_time_in_sweep": self.supports_time_in_sweep,
+            "supports_case_sets": self.supports_case_sets,
         }
 
 
@@ -86,12 +98,22 @@ class RegisteredStrategy:
 
     def inspect(self, profile: Any) -> StrategyDecision:
         ok, reason = self.checker(profile)
+        # 케이스 세트에서 시간(t)까지 파라미터로 지원하려면 애초에 케이스
+        # 세트(파라미터 스윕)와 비정상(unsteady) 둘 다 지원해야 한다 — 둘
+        # 다 CapabilityAxes 에 이미 선언돼 있으므로 새로 판정하지 않고
+        # 그대로 옮긴다 (strategies.py 의 StrategySpec.supports_time_in_sweep
+        # 과 8개 전략 전부 동일한 값을 낸다).
+        supports_time_in_sweep = bool(
+            self.capability.supports_case_sets and self.capability.supports_unsteady
+        )
         return StrategyDecision(
             ok=bool(ok),
             reason=str(reason),
             name=self.name,
             tier=self.tier,
             tier_label=self.tier_label,
+            supports_time_in_sweep=supports_time_in_sweep,
+            supports_case_sets=bool(self.capability.supports_case_sets),
         )
 
 
