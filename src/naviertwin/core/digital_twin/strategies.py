@@ -437,6 +437,11 @@ def _check(spec: StrategySpec, p: DataProfile) -> tuple[bool, str]:
                 "메쉬 GNN(메시지패싱) 은 케이스 세트(정상 파라미터 스윕) "
                 "전용입니다 — 케이스 폴더나 데모 케이스 세트를 로드하세요."
             )
+        if spec.key == "transolver":
+            return False, (
+                "Transolver 는 케이스 세트(정상 파라미터 스윕) 전용입니다 — "
+                "케이스 폴더나 데모 케이스 세트를 로드하세요."
+            )
 
     if spec.needs_uniform_grid and not p.uniform_grid:
         return False, "균일 격자(ImageData)가 필요합니다."
