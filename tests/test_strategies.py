@@ -27,6 +27,7 @@ def test_registry_covers_all_wired_methods() -> None:
         "gino",
         "mesh_gnn_mp",
         "transolver",
+        "deeponet",
     }
 
 

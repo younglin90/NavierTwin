@@ -166,6 +166,9 @@ _CAPABILITIES: dict[str, CapabilityAxes] = {
     "transolver": CapabilityAxes(
         (2, 3), True, True, True, True, True, False, "physics-slices", "torch",
     ),
+    "deeponet": CapabilityAxes(
+        (2, 3), True, True, True, True, True, False, "branch-trunk", "torch",
+    ),
 }
 
 
