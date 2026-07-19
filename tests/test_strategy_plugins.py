@@ -40,6 +40,8 @@ def test_default_registry_covers_current_public_methods() -> None:
         "gino",
         "mesh_gnn_mp",
         "transolver",
+        "deeponet",
+        "mesh_gnn_rollout",
     }
     assert registry.get("operator").capability.spatial_dims == (1, 2, 3)
     assert registry.get("gino").capability.supports_varying_geometry

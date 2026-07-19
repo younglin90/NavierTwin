@@ -42,8 +42,10 @@ def test_matrix_assesses_all_registered_strategies() -> None:
         "gino",
         "mesh_gnn_mp",
         "transolver",
+        "deeponet",
+        "mesh_gnn_rollout",
     }
-    assert all(len(row["strategies"]) == 8 for row in report["scenarios"])
+    assert all(len(row["strategies"]) == 10 for row in report["scenarios"])
 
 
 def test_unsteady_varying_geometry_keeps_honest_strategy_limits() -> None:
