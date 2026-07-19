@@ -183,6 +183,45 @@ def test_service_strategy_status_carries_tier_to_app_state() -> None:
 
 
 # ---------------------------------------------------------------------------
+# supports_time_in_sweep / supports_case_sets 노출 (GUI: 카드마다 비정상
+# 지원 여부를 일관되게 보여주기 위해 strategy_report() 가 실어야 하는 필드).
+# ---------------------------------------------------------------------------
+
+
+def test_strategy_report_exposes_supports_time_in_sweep_for_all_strategies() -> None:
+    """8개 전략 spec 이 전부 supports_time_in_sweep=True 를 선언하므로,
+    strategy_report() 의 dict 도 그 값을 그대로(누락 없이) 실어 날라야
+    카드가 정상/비정상 지원 캡션을 데이터로부터 정확히 그릴 수 있다.
+    """
+    ds = service.make_demo_dataset(nx=8, ny=8, n_steps=4)
+    report = strategies.strategy_report(strategies.profile_data(ds))
+    specs_by_key = {spec.key: spec for spec in strategies.STRATEGIES}
+    assert set(report) == set(specs_by_key)
+    for key, entry in report.items():
+        spec = specs_by_key[key]
+        assert entry["supports_time_in_sweep"] is spec.supports_time_in_sweep
+        assert entry["supports_case_sets"] is spec.supports_case_sets
+    # 현재 배선된 8개 전략은 전부 케이스 세트에서 시간축(t)까지 지원한다 —
+    # 이 회귀가 깨지면 GUI 가 "비정상은 일부 전략만 된다"고 잘못 보여준다.
+    assert all(entry["supports_time_in_sweep"] for entry in report.values())
+
+    # 기존 키(ok/reason/name/tier/tier_label)는 그대로 유지되는 추가 전용
+    # 확장이어야 하위 호환이 성립한다.
+    for entry in report.values():
+        assert {"ok", "reason", "name", "tier", "tier_label"} <= set(entry)
+
+
+def test_service_strategy_status_also_carries_time_in_sweep_flag() -> None:
+    """웹 카드가 실제로 읽는 경로(service.strategy_status)에도 필드가 실린다."""
+    ds = service.make_demo_dataset(nx=8, ny=8, n_steps=4)
+    status = service.strategy_status(ds)
+    for key in ("rom", "physics", "dynamics", "operator", "mesh_gnn", "gino",
+                "mesh_gnn_mp", "transolver"):
+        assert status[key]["supports_time_in_sweep"] is True
+        assert status[key]["supports_case_sets"] is True
+
+
+# ---------------------------------------------------------------------------
 # topological vs embedding 차원 분리 (리뷰 #10).
 # ---------------------------------------------------------------------------
 

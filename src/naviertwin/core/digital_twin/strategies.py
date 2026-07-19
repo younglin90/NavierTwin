@@ -150,7 +150,9 @@ STRATEGIES: tuple[StrategySpec, ...] = (
         # 여전히 미배선(⑥연산자 랩 전용) — _check 가 먼저 거절한다.
         needs_identical_mesh=False,
         needs_uniform_grid=False,
-        supports_case_sets=True,  # 정상 스윕 전용 — GeometryFNO(FNO+SDF, v5.2)
+        # 케이스 세트(파라미터 스윕) 전용 — 단일 케이스 직접 학습은 미지원.
+        # 정상/비정상 모두 지원 — GeometryFNO(FNO+SDF, v5.2).
+        supports_case_sets=True,
         supports_time_in_sweep=True,
         single_case_needs_steps=2,
         min_snapshots=100,  # 문헌 기준 규모 — 케이스 세트 분기는 별도 판정
@@ -168,7 +170,9 @@ STRATEGIES: tuple[StrategySpec, ...] = (
         # 격자 제약이 없고, 재샘플도 없다.
         needs_identical_mesh=False,
         needs_uniform_grid=False,
-        supports_case_sets=True,  # 정상 스윕 전용 — CaseSetGNN (v5.7)
+        # 케이스 세트(파라미터 스윕) 전용 — 단일 케이스 직접 학습은 미지원.
+        # 정상/비정상 모두 지원 — CaseSetGNN (v5.7).
+        supports_case_sets=True,
         supports_time_in_sweep=True,
         single_case_needs_steps=2,
         min_snapshots=3,
@@ -184,7 +188,9 @@ STRATEGIES: tuple[StrategySpec, ...] = (
         # 동일/균일 격자 제약이 없고, 재샘플도 없다.
         needs_identical_mesh=False,
         needs_uniform_grid=False,
-        supports_case_sets=True,  # 정상 스윕 전용 — GINOCaseSetOperator
+        # 케이스 세트(파라미터 스윕) 전용 — 단일 케이스 직접 학습은 미지원.
+        # 정상/비정상 모두 지원 — GINOCaseSetOperator.
+        supports_case_sets=True,
         supports_time_in_sweep=True,
         single_case_needs_steps=2,
         min_snapshots=3,
@@ -202,7 +208,9 @@ STRATEGIES: tuple[StrategySpec, ...] = (
         # 없고, 재샘플도 없다.
         needs_identical_mesh=False,
         needs_uniform_grid=False,
-        supports_case_sets=True,  # 정상 스윕 전용 — CaseSetMGN
+        # 케이스 세트(파라미터 스윕) 전용 — 단일 케이스 직접 학습은 미지원.
+        # 정상/비정상 모두 지원 — CaseSetMGN.
+        supports_case_sets=True,
         supports_time_in_sweep=True,
         single_case_needs_steps=2,
         min_snapshots=3,
@@ -481,23 +489,25 @@ def _check(spec: StrategySpec, p: DataProfile) -> tuple[bool, str]:
             )
         if spec.key == "mesh_gnn":
             return False, (
-                "메쉬 GNN 은 케이스 세트(정상 파라미터 스윕) 전용입니다 — "
-                "케이스 폴더나 데모 케이스 세트를 로드하세요."
+                "메쉬 GNN 은 케이스 세트(파라미터 스윕, 정상/비정상 모두 가능) "
+                "전용입니다 — 케이스 폴더나 데모 케이스 세트를 로드하세요."
             )
         if spec.key == "gino":
             return False, (
-                "GINO 는 케이스 세트(정상 파라미터 스윕) 전용입니다 — "
-                "케이스 폴더나 데모 케이스 세트를 로드하세요."
+                "GINO 는 케이스 세트(파라미터 스윕, 정상/비정상 모두 가능) "
+                "전용입니다 — 케이스 폴더나 데모 케이스 세트를 로드하세요."
             )
         if spec.key == "mesh_gnn_mp":
             return False, (
-                "메쉬 GNN(메시지패싱) 은 케이스 세트(정상 파라미터 스윕) "
-                "전용입니다 — 케이스 폴더나 데모 케이스 세트를 로드하세요."
+                "메쉬 GNN(메시지패싱) 은 케이스 세트(파라미터 스윕, 정상/비정상 "
+                "모두 가능) 전용입니다 — 케이스 폴더나 데모 케이스 세트를 "
+                "로드하세요."
             )
         if spec.key == "transolver":
             return False, (
-                "Transolver 는 케이스 세트(정상 파라미터 스윕) 전용입니다 — "
-                "케이스 폴더나 데모 케이스 세트를 로드하세요."
+                "Transolver 는 케이스 세트(파라미터 스윕, 정상/비정상 모두 "
+                "가능) 전용입니다 — 케이스 폴더나 데모 케이스 세트를 "
+                "로드하세요."
             )
         if spec.key == "deeponet":
             return False, (
@@ -519,8 +529,18 @@ def strategy_report(profile: DataProfile) -> dict[str, dict[str, Any]]:
 
     Returns:
         ``{key: {"ok": bool, "reason": str, "name": str, "tier": str,
-        "tier_label": str}}`` — tier 는 모델 등급(리뷰 #8), tier_label 은
-        한국어 뱃지 텍스트.
+        "tier_label": str, "supports_time_in_sweep": bool,
+        "supports_case_sets": bool}}`` — tier 는 모델 등급(리뷰 #8),
+        tier_label 은 한국어 뱃지 텍스트. ``supports_time_in_sweep`` 은 이
+        전략이 케이스 세트에서 시간축(t 파라미터)까지 지원하는가 — 8개
+        전략 전부 backend 는 이미 지원한다(§ strategies.py 상단 spec의
+        ``supports_time_in_sweep=True`` 참조). UI 카드가 정상/비정상을
+        구분 없이 명시할 때 이 필드를 쓴다. ``supports_case_sets`` 는
+        파라미터 스윕(케이스 세트) 학습 지원 여부다. 두 필드는
+        :class:`~naviertwin.core.digital_twin.strategy_plugins.RegisteredStrategy`
+        의 ``capability`` (CapabilityAxes) 에서 그대로 옮겨진다 — 기존 키
+        (``ok``/``reason``/``name``/``tier``/``tier_label``)는 그대로
+        유지되는 **추가 전용** 확장이라 하위 호환이다.
     """
     from naviertwin.core.digital_twin.strategy_plugins import (
         default_strategy_registry,
